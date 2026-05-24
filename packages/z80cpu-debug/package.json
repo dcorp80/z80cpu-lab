@@ -1,0 +1,36 @@
+{
+  "name": "@dcorp80/z80cpu-debug",
+  "version": "0.0.0",
+  "description": "Instruction tracing / debug context for @dcorp80/z80cpu",
+  "keywords": [
+    "z80",
+    "zilog",
+    "cpu",
+    "emulator",
+    "debug",
+    "tracing",
+    "instruction-trace"
+  ],
+  "homepage": "https://github.com/dcorp80/z80cpu-lab#readme",
+  "bugs": {
+    "url": "https://github.com/dcorp80/z80cpu-lab/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dcorp80/z80cpu-lab.git",
+    "directory": "packages/z80cpu-debug"
+  },
+  "license": "MIT",
+  "author": "dcorp80",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "test": "node --test src/*.test.ts"
+  },
+  "dependencies": {
+    "@dcorp80/z80cpu": "^0.1.0"
+  }
+}

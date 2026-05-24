@@ -1,0 +1,28 @@
+{
+  "name": "z80cpu-lab",
+  "version": "0.0.0",
+  "description": "Companion toolkit for @dcorp80/z80cpu: debugger, disassembler, REPL, benchmarks.",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "clean": "npm run clean --workspaces --if-present",
+    "lint": "biome check",
+    "lint:fix": "biome check --write",
+    "repl:mixer": "npm run build -w @dcorp80/z80cpu-cli && node packages/z80cpu-cli/dist/repl.js packages/z80cpu-bench/src/mixer.bin",
+    "bench": "npm test -w @dcorp80/z80cpu-bench"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.15",
+    "@types/node": "^25.9.1",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.3"
+  }
+}

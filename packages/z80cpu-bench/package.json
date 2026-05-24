@@ -1,0 +1,16 @@
+{
+  "name": "@dcorp80/z80cpu-bench",
+  "version": "0.0.0",
+  "description": "Benchmarks for @dcorp80/z80cpu and @dcorp80/z80cpu-debug (dbg-on vs dbg-off overhead on a real Z80 program).",
+  "license": "MIT",
+  "author": "dcorp80",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test src/*.test.ts"
+  },
+  "dependencies": {
+    "@dcorp80/z80cpu": "^0.1.0",
+    "@dcorp80/z80cpu-debug": "*"
+  }
+}

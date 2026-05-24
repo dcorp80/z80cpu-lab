@@ -1,0 +1,22 @@
+{
+  "name": "@dcorp80/z80cpu-cli",
+  "version": "0.0.0",
+  "description": "REPL / CLI tools for @dcorp80/z80cpu",
+  "license": "MIT",
+  "author": "dcorp80",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "z80cpu-repl": "./dist/repl.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "clean": "rm -rf dist",
+    "repl": "node dist/repl.js"
+  },
+  "dependencies": {
+    "@dcorp80/z80cpu": "^0.1.0",
+    "@dcorp80/z80cpu-debug": "*",
+    "@dcorp80/z80cpu-disasm": "*"
+  }
+}
