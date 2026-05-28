@@ -49,7 +49,11 @@ export interface BreakHandle {
 
 export class InstructionTrace {
   startAddr = 0;
-  readonly bytes = new Array(8); // prefixes + opcode + operands
+  readonly bytes = new Array(4); // prefixes + opcode + operands; longest
+  //   real Z80 instruction is 4 bytes (DDCB d op, DD 36 d n, ED nn nn,
+  //   DD 21 nn nn). DD/FD followed by another prefix is split into
+  //   separate traces by the wasted-prefix logic below, so no 5+ byte
+  //   sequence reaches this buffer.
   length = 0;
   m1Type: M1Type = "normal";
   /**
@@ -323,7 +327,7 @@ export class Z80DebugContext {
             const split =
               (prevByte === 0xdd || prevByte === 0xfd) &&
               (b === 0xdd || b === 0xfd || b === 0xed);
-            if (!split && currIsPfxChain && this.curr.length < 8) {
+            if (!split && currIsPfxChain && this.curr.length < 4) {
               this.curr.bytes[this.curr.length++] = b;
               break;
             }
@@ -335,7 +339,7 @@ export class Z80DebugContext {
           this._inOpRd = true;
           break;
         case StepId.RD_T3_1:
-          if (this._inOpRd && this.curr.length > 0 && this.curr.length < 8) {
+          if (this._inOpRd && this.curr.length > 0 && this.curr.length < 4) {
             this.curr.bytes[this.curr.length++] = cpu.bus.data;
             this._inOpRd = false;
           }
