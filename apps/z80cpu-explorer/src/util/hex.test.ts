@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatHex, parseHex } from "./hex.ts";
+import { formatHex, parseAddr16, parseHex } from "./hex.ts";
 
 describe("formatHex", () => {
   it("renders bare uppercase hex", () => {
@@ -44,5 +44,23 @@ describe("parseHex", () => {
     expect(parseHex("")).toBeNull();
     expect(parseHex("80 00")).toBeNull();
     expect(parseHex("$$8000")).toBeNull();
+  });
+});
+
+describe("parseAddr16", () => {
+  it("accepts values in 0..FFFF", () => {
+    expect(parseAddr16("0")).toBe(0);
+    expect(parseAddr16("ffff")).toBe(0xffff);
+    expect(parseAddr16("$8000")).toBe(0x8000);
+  });
+
+  it("rejects values above FFFF", () => {
+    expect(parseAddr16("10000")).toBeNull();
+    expect(parseAddr16("$FFFFF")).toBeNull();
+  });
+
+  it("rejects invalid hex", () => {
+    expect(parseAddr16("xyz")).toBeNull();
+    expect(parseAddr16("")).toBeNull();
   });
 });

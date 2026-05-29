@@ -1,0 +1,230 @@
+/* Minimal scaffold styles for milestone 1.
+   Real theming lands in milestone 11 via the token module. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --muted: #6b7280;
+  --border: #d1d5db;
+  --accent: #2563eb;
+  --dragging-bg: #f3f4f6;
+  --drop-line: #2563eb;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1115;
+    --fg: #e5e7eb;
+    --muted: #9ca3af;
+    --border: #2a2f3a;
+    --accent: #60a5fa;
+    --dragging-bg: #1c2028;
+    --drop-line: #60a5fa;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+/* Belt-and-suspenders: section bodies may contain wide hex grids or
+   trace rows later — let those scroll inside their own container rather
+   than blow out the page width. */
+body {
+  overflow-x: hidden;
+}
+
+.app {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 12px;
+}
+
+/* Narrow viewports (split panes, devtools open, tablets). MVP is not
+   mobile-first per REQ §2, but we want layout that doesn't visibly break
+   when the window shrinks. */
+@media (max-width: 600px) {
+  .app {
+    padding: 8px;
+  }
+}
+
+.app-header h1 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 4px 0 12px;
+}
+
+.section-column {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.section-frame {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  position: relative;
+}
+
+.section-frame.is-dragging {
+  opacity: 0.5;
+  background: var(--dragging-bg);
+}
+.section-frame.drop-above::before,
+.section-frame.drop-below::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--drop-line);
+}
+.section-frame.drop-above::before {
+  top: -1px;
+}
+.section-frame.drop-below::after {
+  bottom: -1px;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+.section-frame.is-folded .section-header {
+  border-bottom: none;
+}
+
+.fold-chevron {
+  background: none;
+  border: none;
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 4px;
+  line-height: 1;
+}
+.fold-chevron:hover {
+  color: var(--accent);
+}
+
+.drag-handle {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: grab;
+  user-select: none;
+  font-size: 14px;
+  letter-spacing: -2px;
+  padding: 0 2px;
+}
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+.section-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+.folded-summary {
+  flex: 1 1 120px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.section-header-controls {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  flex: 1 1 auto;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.bp-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  order: 2;
+}
+.bp-controls button {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.bp-controls button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.bp-controls button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.step-n-input {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  width: 4ch;
+}
+.bp-status {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  color: var(--muted);
+  flex: 1 1 180px;
+  min-width: 0;
+  order: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-right: 8px;
+}
+
+.section-body {
+  padding: 10px;
+  overflow-x: auto;
+}
+
+.placeholder {
+  color: var(--muted);
+  font-style: italic;
+}
+.muted {
+  color: var(--muted);
+}

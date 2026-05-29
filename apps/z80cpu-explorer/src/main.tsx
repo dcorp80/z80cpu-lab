@@ -1,6 +1,17 @@
 import { render } from "solid-js/web";
-import { App } from "./app.tsx";
+import { bootApp } from "./boot.tsx";
+import "./styles.css";
 
-const root = document.getElementById("root");
-if (!root) throw new Error("#root not found");
-render(() => <App />, root);
+// In production the page never unmounts, so there is no useful tear-down
+// to run on `beforeunload` — the OS reclaims everything. The proper
+// pre-close guard (REQ §7.4: warn on non-empty snapshot log + save-or-
+// skip modal for destructive ops) lands in milestone 9. Browser tests
+// drive `dispose` themselves through their own boot path.
+async function main() {
+  const { ui } = await bootApp();
+  const root = document.getElementById("root");
+  if (!root) throw new Error("#root not found");
+  render(ui, root);
+}
+
+void main();
