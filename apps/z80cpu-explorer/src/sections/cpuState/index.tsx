@@ -79,9 +79,9 @@ function diffKeys(curr: CpuState, prev: CpuState): Set<string> {
     s.add("hl");
   }
   // IX/IY split halves
-  if ((curr.ix >> 8) !== (prev.ix >> 8)) s.add("ixh");
+  if (curr.ix >> 8 !== prev.ix >> 8) s.add("ixh");
   if ((curr.ix & 0xff) !== (prev.ix & 0xff)) s.add("ixl");
-  if ((curr.iy >> 8) !== (prev.iy >> 8)) s.add("iyh");
+  if (curr.iy >> 8 !== prev.iy >> 8) s.add("iyh");
   if ((curr.iy & 0xff) !== (prev.iy & 0xff)) s.add("iyl");
   // Shadow regs — single key per pair (we render them combined only).
   if (af(curr.alt) !== af(prev.alt)) s.add("af'");
@@ -203,7 +203,12 @@ const Body = () => {
         </div>
         <div class="cpuState-row">
           <Cell label="IX" value={s().ix} width={4} changed={has("ix")} />
-          <Cell label="IXH" value={s().ix >> 8} width={2} changed={has("ixh")} />
+          <Cell
+            label="IXH"
+            value={s().ix >> 8}
+            width={2}
+            changed={has("ixh")}
+          />
           <Cell
             label="IXL"
             value={s().ix & 0xff}
@@ -213,7 +218,12 @@ const Body = () => {
         </div>
         <div class="cpuState-row">
           <Cell label="IY" value={s().iy} width={4} changed={has("iy")} />
-          <Cell label="IYH" value={s().iy >> 8} width={2} changed={has("iyh")} />
+          <Cell
+            label="IYH"
+            value={s().iy >> 8}
+            width={2}
+            changed={has("iyh")}
+          />
           <Cell
             label="IYL"
             value={s().iy & 0xff}

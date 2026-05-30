@@ -62,8 +62,7 @@ export const STR = {
     fileDeleteTooltip: "Remove this file",
     fileDirtyTooltip:
       "Address changed since last load — click Load to re-write",
-    fileTruncatedTooltip: (n: number) =>
-      `Truncated — ${n} bytes past FFFF`,
+    fileTruncatedTooltip: (n: number) => `Truncated — ${n} bytes past FFFF`,
   },
   cpuState: {
     title: "CPU state",

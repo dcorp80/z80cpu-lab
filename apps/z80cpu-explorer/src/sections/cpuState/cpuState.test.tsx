@@ -117,8 +117,12 @@ describe("cpuState section — body", () => {
     expect(harness.container.querySelector('[data-key="ixh"]')).not.toBeNull();
     expect(harness.container.querySelector('[data-key="r"]')).not.toBeNull();
     // Shadow bank
-    expect(harness.container.querySelector('[data-key="af-shadow"]')).not.toBeNull();
-    expect(harness.container.querySelector('[data-key="hl-shadow"]')).not.toBeNull();
+    expect(
+      harness.container.querySelector('[data-key="af-shadow"]'),
+    ).not.toBeNull();
+    expect(
+      harness.container.querySelector('[data-key="hl-shadow"]'),
+    ).not.toBeNull();
     // Flag cells — one per labeled bit (S Z Y5 H X3 P/V N C = 8)
     const flagCells = harness.container.querySelectorAll(".cpuState-flag-cell");
     expect(flagCells.length).toBe(8);
@@ -167,18 +171,28 @@ describe("cpuState section — body", () => {
   it("propagates changes to combined AF when only F changes", async () => {
     harness = await mount();
     // First boundary establishes baseline.
-    emitBoundary(harness, { main: { a: 0x12, b: 0, c: 0, d: 0, e: 0, h: 0, l: 0, f: 0x00 } });
+    emitBoundary(harness, {
+      main: { a: 0x12, b: 0, c: 0, d: 0, e: 0, h: 0, l: 0, f: 0x00 },
+    });
     // Second boundary: flip a flag bit.
-    emitBoundary(harness, { main: { a: 0x12, b: 0, c: 0, d: 0, e: 0, h: 0, l: 0, f: 0x80 } });
+    emitBoundary(harness, {
+      main: { a: 0x12, b: 0, c: 0, d: 0, e: 0, h: 0, l: 0, f: 0x80 },
+    });
     expect(
-      harness.container.querySelector('[data-key="f"]')?.classList.contains("is-changed"),
+      harness.container
+        .querySelector('[data-key="f"]')
+        ?.classList.contains("is-changed"),
     ).toBe(true);
     expect(
-      harness.container.querySelector('[data-key="af"]')?.classList.contains("is-changed"),
+      harness.container
+        .querySelector('[data-key="af"]')
+        ?.classList.contains("is-changed"),
     ).toBe(true);
     // A didn't change.
     expect(
-      harness.container.querySelector('[data-key="a"]')?.classList.contains("is-changed"),
+      harness.container
+        .querySelector('[data-key="a"]')
+        ?.classList.contains("is-changed"),
     ).toBe(false);
   });
 
@@ -191,7 +205,9 @@ describe("cpuState section — body", () => {
     const cells = Array.from(
       harness.container.querySelectorAll<HTMLElement>(".cpuState-flag-cell"),
     );
-    const bits = cells.map((c) => c.querySelector(".cpuState-flag-bit")?.textContent);
+    const bits = cells.map(
+      (c) => c.querySelector(".cpuState-flag-bit")?.textContent,
+    );
     expect(bits).toEqual(["1", "0", "1", "0", "0", "1", "0", "1"]);
   });
 });
