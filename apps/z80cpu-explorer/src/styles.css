@@ -13,11 +13,11 @@
   /* Semantic accents — referenced by sections so the M11 theme token
      module has a single surface to retheme. Never hex-literal in
      section CSS. */
-  --warning: #b45309;       /* dirty-input border, etc. */
+  --warning: #b45309; /* dirty-input border, etc. */
   --warning-bg: rgba(180, 83, 9, 0.08);
-  --danger: #b91c1c;        /* delete-hover, invalid-input border */
-  --highlight: #2563eb;     /* diff highlight (cpuState changed cell) */
-  --highlight-bg: rgba(37, 99, 235, 0.10);
+  --danger: #b91c1c; /* delete-hover, invalid-input border */
+  --highlight: #2563eb; /* diff highlight (cpuState changed cell) */
+  --highlight-bg: rgba(37, 99, 235, 0.1);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -30,7 +30,7 @@
     --dragging-bg: #1c2028;
     --drop-line: #60a5fa;
     --warning: #fbbf24;
-    --warning-bg: rgba(251, 191, 36, 0.10);
+    --warning-bg: rgba(251, 191, 36, 0.1);
     --danger: #f87171;
     --highlight: #60a5fa;
     --highlight-bg: rgba(96, 165, 250, 0.15);
@@ -485,7 +485,9 @@ body {
 .cpuState-body.is-mid-instruction .cpuState-flags-grid.is-changed {
   background: transparent;
 }
-.cpuState-body.is-mid-instruction .cpuState-flag-cell.is-set .cpuState-flag-bit {
+.cpuState-body.is-mid-instruction
+  .cpuState-flag-cell.is-set
+  .cpuState-flag-bit {
   color: var(--muted);
   font-weight: 400;
 }
