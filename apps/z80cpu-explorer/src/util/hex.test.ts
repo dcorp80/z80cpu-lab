@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatHex, parseAddr16, parseHex } from "./hex.ts";
+import { filterHexInput, formatHex, parseAddr16, parseHex } from "./hex.ts";
 
 describe("formatHex", () => {
   it("renders bare uppercase hex", () => {
@@ -44,6 +44,24 @@ describe("parseHex", () => {
     expect(parseHex("")).toBeNull();
     expect(parseHex("80 00")).toBeNull();
     expect(parseHex("$$8000")).toBeNull();
+  });
+
+  it("rejects mixed prefix+suffix forms", () => {
+    expect(parseHex("$FFh")).toBeNull();
+    expect(parseHex("0xFFh")).toBeNull();
+  });
+});
+
+describe("filterHexInput", () => {
+  it("strips characters that can't appear in any hex notation", () => {
+    expect(filterHexInput("ff00")).toBe("ff00");
+    expect(filterHexInput("$8000")).toBe("$8000");
+    expect(filterHexInput("0xABCD")).toBe("0xABCD");
+    expect(filterHexInput("FFh")).toBe("FFh");
+    // 'e' and 'd' are hex digits; 'h' survives as a possible suffix.
+    expect(filterHexInput("hello world 0x4000!")).toBe("hed0x4000");
+    expect(filterHexInput("  ff 00  ")).toBe("ff00");
+    expect(filterHexInput("g1!@#z")).toBe("1");
   });
 });
 

@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 import { defaultSectionIds } from "../sections/sectionRegistry.ts";
 import { MemoryBackend } from "../storage/memory.ts";
 import { createAppStore } from "./index.ts";
+import { makeStubDbg } from "./testStubDbg.ts";
 import { makeStubLoop } from "./testStubLoop.ts";
 
 function makeStubBus() {
   let v = 0xff;
+  const mem = new Uint8Array(0x10000).fill(0xff);
   return {
+    mem,
     intVector: () => v,
     setIntVector: (b: number) => {
       v = b & 0xff;
@@ -18,8 +21,9 @@ async function freshStore() {
   const backend = new MemoryBackend();
   const loop = makeStubLoop();
   const bus = makeStubBus();
-  const store = await createAppStore({ backend, loop, bus });
-  return { backend, store, loop, bus };
+  const dbg = makeStubDbg();
+  const store = await createAppStore({ backend, loop, bus, dbg });
+  return { backend, store, loop, bus, dbg };
 }
 
 // Persistence is fire-and-forget; await a microtask to let saveUiState settle.
@@ -44,6 +48,7 @@ describe("createAppStore", () => {
       backend,
       loop: makeStubLoop(),
       bus: makeStubBus(),
+      dbg: makeStubDbg(),
     });
     // Stored ids come first in their stored order; remaining registry ids
     // fill in afterward with defaults.
@@ -216,6 +221,321 @@ describe("createAppStore", () => {
       store.pause();
       store.stepHC(2);
       expect(store.lastPauseReason()).toBeNull();
+    });
+  });
+
+  describe("program files", () => {
+    it("starts with no files when storage is empty", async () => {
+      const { store } = await freshStore();
+      expect(store.files.length).toBe(0);
+    });
+
+    it("addFile appends, copies bytes, persists", async () => {
+      const { backend, store } = await freshStore();
+      const src = new Uint8Array([1, 2, 3, 4]);
+      store.addFile({ name: "rom.bin", bytes: src, loadAddr: 0x8000 });
+      expect(store.files.length).toBe(1);
+      const f = store.files[0];
+      expect(f.name).toBe("rom.bin");
+      expect(f.loadAddr).toBe(0x8000);
+      expect(f.autoload).toBe(false);
+      // Mutating the caller's source must not change the stored copy.
+      src[0] = 0xff;
+      expect(f.bytes[0]).toBe(1);
+      await flush();
+      const stored = await backend.listFiles();
+      expect(stored).toHaveLength(1);
+      expect(stored[0].name).toBe("rom.bin");
+    });
+
+    it("addFile writes nothing to memory by itself", async () => {
+      const { store, bus } = await freshStore();
+      store.addFile({
+        name: "a",
+        bytes: new Uint8Array([0xaa, 0xbb]),
+        loadAddr: 0,
+      });
+      // addFile does not load — that's the section's call (REQ §6.1).
+      expect(bus.mem[0]).toBe(0xff);
+      expect(bus.mem[1]).toBe(0xff);
+    });
+
+    it("writeFileToMemory copies bytes and marks the session loaded", async () => {
+      const { store, bus } = await freshStore();
+      store.addFile({
+        name: "a",
+        bytes: new Uint8Array([0xaa, 0xbb, 0xcc]),
+        loadAddr: 0x100,
+      });
+      const id = store.files[0].id;
+      store.writeFileToMemory(id);
+      expect(bus.mem[0x100]).toBe(0xaa);
+      expect(bus.mem[0x101]).toBe(0xbb);
+      expect(bus.mem[0x102]).toBe(0xcc);
+      expect(store.fileSessions[id]?.lastLoadedAddr).toBe(0x100);
+    });
+
+    it("writeFileToMemory truncates at the end of address space", async () => {
+      const { store, bus } = await freshStore();
+      // 4 bytes starting at FFFE → only 2 fit (FFFE, FFFF).
+      store.addFile({
+        name: "tail",
+        bytes: new Uint8Array([1, 2, 3, 4]),
+        loadAddr: 0xfffe,
+      });
+      store.writeFileToMemory(store.files[0].id);
+      expect(bus.mem[0xfffe]).toBe(1);
+      expect(bus.mem[0xffff]).toBe(2);
+    });
+
+    it("setFileLoadAddr updates the file and persists", async () => {
+      const { backend, store } = await freshStore();
+      store.addFile({
+        name: "a",
+        bytes: new Uint8Array([0]),
+        loadAddr: 0,
+      });
+      const id = store.files[0].id;
+      store.setFileLoadAddr(id, 0x8000);
+      expect(store.files[0].loadAddr).toBe(0x8000);
+      await flush();
+      const stored = await backend.listFiles();
+      expect(stored[0].loadAddr).toBe(0x8000);
+    });
+
+    it("setFileAutoload toggles and persists", async () => {
+      const { backend, store } = await freshStore();
+      store.addFile({ name: "a", bytes: new Uint8Array([0]), loadAddr: 0 });
+      const id = store.files[0].id;
+      store.setFileAutoload(id, true);
+      expect(store.files[0].autoload).toBe(true);
+      await flush();
+      const stored = await backend.listFiles();
+      expect(stored[0].autoload).toBe(true);
+    });
+
+    it("removeFile drops the file, session, and backend record", async () => {
+      const { backend, store } = await freshStore();
+      store.addFile({ name: "a", bytes: new Uint8Array([0]), loadAddr: 0 });
+      const id = store.files[0].id;
+      store.writeFileToMemory(id);
+      expect(store.fileSessions[id]).toBeDefined();
+      store.removeFile(id);
+      expect(store.files.length).toBe(0);
+      expect(store.fileSessions[id]).toBeUndefined();
+      await flush();
+      expect(await backend.listFiles()).toHaveLength(0);
+    });
+
+    it("reorderFiles puts named ids first, preserves the rest", async () => {
+      const { store } = await freshStore();
+      store.addFile({ name: "a", bytes: new Uint8Array(), loadAddr: 0 });
+      store.addFile({ name: "b", bytes: new Uint8Array(), loadAddr: 0 });
+      store.addFile({ name: "c", bytes: new Uint8Array(), loadAddr: 0 });
+      const ids = store.files.map((f) => f.id);
+      store.reorderFiles([ids[2], ids[0]]);
+      expect(store.files.map((f) => f.id)).toEqual([ids[2], ids[0], ids[1]]);
+    });
+
+    it("loadAutoloadFiles writes only autoload-flagged files", async () => {
+      const { store, bus } = await freshStore();
+      store.addFile({
+        name: "a",
+        bytes: new Uint8Array([0xaa]),
+        loadAddr: 0x100,
+        autoload: true,
+      });
+      store.addFile({
+        name: "b",
+        bytes: new Uint8Array([0xbb]),
+        loadAddr: 0x200,
+        autoload: false,
+      });
+      bus.mem.fill(0); // clear so we can see what's written
+      store.loadAutoloadFiles();
+      expect(bus.mem[0x100]).toBe(0xaa);
+      expect(bus.mem[0x200]).toBe(0);
+    });
+
+    it("reloadAllFiles writes every file regardless of autoload flag", async () => {
+      const { store, bus } = await freshStore();
+      store.addFile({
+        name: "a",
+        bytes: new Uint8Array([0xaa]),
+        loadAddr: 0x100,
+        autoload: true,
+      });
+      store.addFile({
+        name: "b",
+        bytes: new Uint8Array([0xbb]),
+        loadAddr: 0x200,
+        autoload: false,
+      });
+      bus.mem.fill(0);
+      store.reloadAllFiles();
+      expect(bus.mem[0x100]).toBe(0xaa);
+      expect(bus.mem[0x200]).toBe(0xbb);
+    });
+
+    it("reloadAllFiles last-write-wins for overlapping ranges", async () => {
+      const { store, bus } = await freshStore();
+      store.addFile({
+        name: "first",
+        bytes: new Uint8Array([0xaa, 0xaa]),
+        loadAddr: 0x100,
+      });
+      store.addFile({
+        name: "second",
+        bytes: new Uint8Array([0xbb]),
+        loadAddr: 0x100,
+      });
+      store.reloadAllFiles();
+      // The second file lands last (display order), overwriting.
+      expect(bus.mem[0x100]).toBe(0xbb);
+      expect(bus.mem[0x101]).toBe(0xaa);
+    });
+
+    it("addFile and setFileLoadAddr reject out-of-range addresses", async () => {
+      const { store } = await freshStore();
+      expect(() =>
+        store.addFile({ name: "x", bytes: new Uint8Array(), loadAddr: -1 }),
+      ).toThrow(RangeError);
+      expect(() =>
+        store.addFile({
+          name: "x",
+          bytes: new Uint8Array(),
+          loadAddr: 0x10000,
+        }),
+      ).toThrow(RangeError);
+      store.addFile({ name: "ok", bytes: new Uint8Array(), loadAddr: 0 });
+      const id = store.files[0].id;
+      expect(() => store.setFileLoadAddr(id, -1)).toThrow(RangeError);
+      expect(() => store.setFileLoadAddr(id, 0x10000)).toThrow(RangeError);
+      expect(() => store.setFileLoadAddr(id, 1.5)).toThrow(RangeError);
+    });
+
+    it("addFile rejects bytes exceeding the 128KB storage cap (REQ §6.1)", async () => {
+      const { store } = await freshStore();
+      const over = new Uint8Array(128 * 1024 + 1);
+      expect(() =>
+        store.addFile({ name: "big", bytes: over, loadAddr: 0 }),
+      ).toThrow(RangeError);
+      // At the cap exactly: accepted.
+      const atCap = new Uint8Array(128 * 1024);
+      expect(() =>
+        store.addFile({ name: "ok", bytes: atCap, loadAddr: 0 }),
+      ).not.toThrow();
+    });
+
+    it("file order persists in UiState and restores on boot", async () => {
+      const { backend, store } = await freshStore();
+      store.addFile({ name: "a", bytes: new Uint8Array(), loadAddr: 0 });
+      store.addFile({ name: "b", bytes: new Uint8Array(), loadAddr: 0 });
+      store.addFile({ name: "c", bytes: new Uint8Array(), loadAddr: 0 });
+      const ids = store.files.map((f) => f.id);
+      store.reorderFiles([ids[2], ids[0]]);
+      await flush();
+      // Restart with the same backend.
+      const store2 = await createAppStore({
+        backend,
+        loop: makeStubLoop(),
+        bus: makeStubBus(),
+        dbg: makeStubDbg(),
+      });
+      expect(store2.files.map((f) => f.id)).toEqual([ids[2], ids[0], ids[1]]);
+    });
+
+    it("boot autoload primes memory when files exist with autoload=true", async () => {
+      const backend = new MemoryBackend();
+      await backend.putFile({
+        id: "boot1",
+        name: "boot.bin",
+        bytes: new Uint8Array([0xc3, 0x00, 0x80]),
+        loadAddr: 0x0000,
+        autoload: true,
+      });
+      const bus = makeStubBus();
+      const store = await createAppStore({
+        backend,
+        loop: makeStubLoop(),
+        bus,
+        dbg: makeStubDbg(),
+      });
+      expect(bus.mem[0x0000]).toBe(0xc3);
+      expect(bus.mem[0x0001]).toBe(0x00);
+      expect(bus.mem[0x0002]).toBe(0x80);
+      // Session marker should reflect the boot autoload.
+      expect(store.fileSessions.boot1?.lastLoadedAddr).toBe(0);
+    });
+  });
+
+  describe("cpuState (REQ §6.5)", () => {
+    it("samples dbg.state() at boot so the section has a value to render", async () => {
+      const { store, dbg } = await freshStore();
+      dbg.setNext({ pc: 0x1234 });
+      // Boot already happened; current snapshot reflects pre-setNext state.
+      expect(store.cpuState().pc).toBe(0);
+      // atInstructionBoundary starts false — boot is not a real boundary.
+      expect(store.atInstructionBoundary()).toBe(false);
+    });
+
+    it("refreshes cpuState on every pause (boundary or not)", async () => {
+      const { store, loop, dbg } = await freshStore();
+      dbg.setNext({ pc: 0x1234 });
+      loop.emitPause({ kind: "user" });
+      expect(store.cpuState().pc).toBe(0x1234);
+      dbg.setNext({ pc: 0x5678 });
+      loop.emitPause({ kind: "user" });
+      expect(store.cpuState().pc).toBe(0x5678);
+    });
+
+    it("sets atInstructionBoundary=true only when step-complete follows an onInstruction", async () => {
+      const { store, loop, dbg } = await freshStore();
+      // step-complete WITHOUT prior onInstruction (e.g. stepHC that didn't
+      // land on M1_T3_1) → not a boundary.
+      dbg.setNext({ pc: 0x100 });
+      loop.emitPause({ kind: "step-complete" });
+      expect(store.atInstructionBoundary()).toBe(false);
+
+      // onInstruction then step-complete → boundary.
+      dbg.setNext({ pc: 0x200 });
+      loop.emitInstruction({} as never);
+      loop.emitPause({ kind: "step-complete" });
+      expect(store.atInstructionBoundary()).toBe(true);
+
+      // user-pause AFTER an instruction is NOT a boundary — reason kind
+      // gates it (user clicking pause mid-run is arbitrary timing).
+      dbg.setNext({ pc: 0x300 });
+      loop.emitInstruction({} as never);
+      loop.emitPause({ kind: "user" });
+      expect(store.atInstructionBoundary()).toBe(false);
+    });
+
+    it("advances prevCpuStateAtBoundary only at boundary pauses", async () => {
+      const { store, loop, dbg } = await freshStore();
+      // Boundary pause #1 — first real boundary; baseline = boot snapshot (pc=0).
+      dbg.setNext({ pc: 0x100 });
+      loop.emitInstruction({} as never);
+      loop.emitPause({ kind: "step-complete" });
+      expect(store.prevCpuStateAtBoundary().pc).toBe(0);
+      expect(store.cpuState().pc).toBe(0x100);
+
+      // Non-boundary pause in between (user-pause, or unaligned stepHC).
+      // Baseline must NOT update — otherwise the next boundary would
+      // diff against a mid-instruction snapshot and falsely paint
+      // every changed-since-then cell.
+      dbg.setNext({ pc: 0x150 });
+      loop.emitPause({ kind: "user" });
+      expect(store.prevCpuStateAtBoundary().pc).toBe(0);
+      expect(store.cpuState().pc).toBe(0x150); // values still refresh
+
+      // Boundary pause #2 — baseline advances to the *previous boundary*
+      // snapshot (0x100), not the intermediate user-pause snapshot.
+      dbg.setNext({ pc: 0x200 });
+      loop.emitInstruction({} as never);
+      loop.emitPause({ kind: "step-complete" });
+      expect(store.prevCpuStateAtBoundary().pc).toBe(0x100);
+      expect(store.cpuState().pc).toBe(0x200);
     });
   });
 });

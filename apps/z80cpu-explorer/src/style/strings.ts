@@ -42,12 +42,42 @@ export const STR = {
   program: {
     title: "Program",
     foldedEmpty: "no files loaded",
-    bodyPlaceholder: "Program section — milestone 3.",
+    foldedSummary: (count: number, headline: string) =>
+      `${count} ${count === 1 ? "file" : "files"} · ${headline}`,
+    foldedSummaryCount: (count: number) =>
+      `${count} ${count === 1 ? "file" : "files"} loaded`,
+    addFile: "Add",
+    addFileTooltip: "Pick a file and write it at the address shown",
+    reloadAll: "Reload all",
+    reloadAllTooltip: "Re-write every file at its load address",
+    reinit: "Reinit",
+    reinitTooltip:
+      "Reload the page — fresh CPU, mem, IO; files and layout survive, autoload re-fires",
+    fileNameLabel: "File name",
+    fileAddrLabel: "Load address (hex)",
+    fileAutoloadLabel: "Autoload",
+    fileLoadButton: "Load",
+    fileDeleteButton: "Delete",
+    fileLoadTooltip: "Write this file at its load address",
+    fileDeleteTooltip: "Remove this file",
+    fileDirtyTooltip:
+      "Address changed since last load — click Load to re-write",
+    fileTruncatedTooltip: (n: number) =>
+      `Truncated — ${n} bytes past FFFF`,
   },
   cpuState: {
     title: "CPU state",
     foldedEmpty: "CPU idle",
-    bodyPlaceholder: "CPU state section — milestone 4.",
+    flagsLabel: "Flags",
+    // Bit labels for `F`. Order matches MSB→LSB (S Z Y5 H X3 P/V N C),
+    // per REQ §6.5. Style mod will let users override these in M11.
+    flagBits: ["S", "Z", "Y5", "H", "X3", "P/V", "N", "C"] as const,
+    iff1: "IFF1",
+    iff2: "IFF2",
+    im: "IM",
+    shadowMark: "'",
+    midInstructionTitle:
+      "Mid-instruction — values are transitional; highlights paused",
   },
   memory: {
     title: "Memory",

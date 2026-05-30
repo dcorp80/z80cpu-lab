@@ -46,7 +46,18 @@ export async function bootApp(opts: BootOptions = {}): Promise<BootedApp> {
     config: { ...DEFAULT_LOOP_CONFIG },
   });
 
-  const store = await createAppStore({ backend, loop, bus });
+  const store = await createAppStore({
+    backend,
+    loop,
+    // Store closes over bus.mem for `writeFileToMemory` (file load) and
+    // over `setIntVector`/`intVector` for the INT-vector UI mirror.
+    // Not on the public Store interface — sections see only signals
+    // and verbs (DESIGN §4 "Layering rule").
+    bus,
+    // dbg is the snapshot source for the cpuState section's reactive
+    // accessors (REQ §6.5); store calls `dbg.state()` on each pause.
+    dbg,
+  });
 
   const registry = createHotkeyRegistry();
   registerDefaultHotkeys(registry, store);

@@ -10,6 +10,14 @@
   --accent: #2563eb;
   --dragging-bg: #f3f4f6;
   --drop-line: #2563eb;
+  /* Semantic accents — referenced by sections so the M11 theme token
+     module has a single surface to retheme. Never hex-literal in
+     section CSS. */
+  --warning: #b45309;       /* dirty-input border, etc. */
+  --warning-bg: rgba(180, 83, 9, 0.08);
+  --danger: #b91c1c;        /* delete-hover, invalid-input border */
+  --highlight: #2563eb;     /* diff highlight (cpuState changed cell) */
+  --highlight-bg: rgba(37, 99, 235, 0.10);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -21,6 +29,11 @@
     --accent: #60a5fa;
     --dragging-bg: #1c2028;
     --drop-line: #60a5fa;
+    --warning: #fbbf24;
+    --warning-bg: rgba(251, 191, 36, 0.10);
+    --danger: #f87171;
+    --highlight: #60a5fa;
+    --highlight-bg: rgba(96, 165, 250, 0.15);
   }
 }
 
@@ -227,4 +240,252 @@ body {
 }
 .muted {
   color: var(--muted);
+}
+
+/* Program section */
+.program-controls {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.program-controls button {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.program-controls button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.program-controls button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.program-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.program-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.program-file-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+}
+.program-file-name {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.program-file-addr {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  width: 6ch;
+  text-transform: uppercase;
+}
+.program-file-row.is-dirty .program-file-addr {
+  border-color: var(--warning);
+  background: var(--warning-bg);
+}
+.program-file-addr.is-invalid {
+  border-color: var(--danger);
+}
+.program-file-row button {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.program-file-row button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.program-file-autoload {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  user-select: none;
+}
+.program-file-row button.program-file-delete {
+  color: var(--muted);
+  border-color: transparent;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 6px;
+}
+.program-file-row button.program-file-delete:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* Persistent "add file" stub at the bottom of the list. Muted border
+   and name slot to read as different from a real file row. */
+.program-file-row.program-add-stub {
+  border-style: dashed;
+  border-color: var(--border);
+  background: transparent;
+}
+.program-add-stub-name {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* CPU state section. Monospaced grid of labeled hex cells; flag bits
+   in a tight row; interrupt state inline. `.is-mid-instruction` on the
+   body wrapper desaturates everything and suppresses .is-changed
+   highlights — values keep updating (REQ §6.5) but the dim cue tells
+   the user the register file is transitional. */
+.cpuState-folded {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  display: inline-flex;
+  gap: 8px;
+  color: var(--muted);
+}
+.cpuState-body {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--fg);
+}
+.cpuState-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cpuState-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.cpuState-cell {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  /* Transparent base so .is-changed can paint a bg without layout shift. */
+  background: transparent;
+}
+.cpuState-label {
+  color: var(--muted);
+  font-weight: 500;
+}
+.cpuState-value {
+  color: var(--fg);
+}
+.cpuState-cell.is-changed {
+  color: var(--highlight);
+  background: var(--highlight-bg);
+}
+.cpuState-cell.is-changed .cpuState-label,
+.cpuState-cell.is-changed .cpuState-value {
+  color: var(--highlight);
+}
+
+.cpuState-shadow {
+  display: flex;
+  gap: 12px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border);
+  flex-wrap: wrap;
+}
+
+.cpuState-flags-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border);
+}
+.cpuState-flags-grid {
+  display: inline-flex;
+  gap: 6px;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.cpuState-flags-grid.is-changed {
+  background: var(--highlight-bg);
+}
+.cpuState-flag-cell {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 18px;
+  line-height: 1.1;
+}
+.cpuState-flag-label {
+  font-size: 10px;
+  color: var(--muted);
+}
+.cpuState-flag-bit {
+  color: var(--muted);
+}
+.cpuState-flag-cell.is-set .cpuState-flag-bit {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.cpuState-irq {
+  display: flex;
+  gap: 12px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border);
+  align-items: center;
+}
+.cpuState-nmi-pending {
+  color: var(--warning);
+  font-weight: 600;
+  font-size: 11px;
+}
+
+/* Mid-instruction: drop saturation and kill highlight backgrounds. The
+   .is-changed rule still fires (DOM stays consistent) but loses its
+   visual weight so the dim signal dominates. */
+.cpuState-body.is-mid-instruction {
+  color: var(--muted);
+}
+.cpuState-body.is-mid-instruction .cpuState-value {
+  color: var(--muted);
+}
+.cpuState-body.is-mid-instruction .cpuState-cell.is-changed {
+  background: transparent;
+  color: var(--muted);
+}
+.cpuState-body.is-mid-instruction .cpuState-cell.is-changed .cpuState-label,
+.cpuState-body.is-mid-instruction .cpuState-cell.is-changed .cpuState-value {
+  color: var(--muted);
+}
+.cpuState-body.is-mid-instruction .cpuState-flags-grid.is-changed {
+  background: transparent;
+}
+.cpuState-body.is-mid-instruction .cpuState-flag-cell.is-set .cpuState-flag-bit {
+  color: var(--muted);
+  font-weight: 400;
 }
