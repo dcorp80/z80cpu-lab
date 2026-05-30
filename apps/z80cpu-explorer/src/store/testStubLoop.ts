@@ -1,5 +1,5 @@
+import type { InstructionTrace } from "@dcorp80/z80cpu-debug";
 import type {
-  InstructionTrace,
   PauseReason,
   RunLoop,
   RunStatus,

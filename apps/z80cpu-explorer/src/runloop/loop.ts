@@ -142,7 +142,11 @@ export function createRunLoop(deps: RunLoopDeps): RunLoop {
     if (status === "paused") return;
     const t0 = now();
     let edgeBudgetCheck = 0;
-    while (status !== "paused") {
+    // Both exit paths use explicit `break` (step-complete via firePause,
+    // and the frame-budget cutoff). A `while (status !== "paused")` guard
+    // would be dead defensive code — and TS narrows `status` past the
+    // early-return above so the comparison reads as unreachable.
+    while (true) {
       // Per-edge work: bus resolution + CPU clock edge + hc bookkeeping.
       busTick();
       dbg.clockEdge();

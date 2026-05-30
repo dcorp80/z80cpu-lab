@@ -1,5 +1,5 @@
 import type { CpuState, RegBank } from "@dcorp80/z80cpu";
-import { createMemo, For, Show } from "solid-js";
+import { type Component, createMemo, For, Show } from "solid-js";
 import { useStore } from "../../store/index.ts";
 import { STR } from "../../style/strings.ts";
 import { formatHex } from "../../util/hex.ts";
@@ -95,7 +95,7 @@ function diffKeys(curr: CpuState, prev: CpuState): Set<string> {
   return s;
 }
 
-const Header = () => null;
+const Header: Component = () => null;
 
 const FoldedSummary = () => {
   const store = useStore();
