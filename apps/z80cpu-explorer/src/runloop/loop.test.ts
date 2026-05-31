@@ -129,6 +129,66 @@ describe("RunLoop", () => {
     expect(count).toBe(2);
   });
 
+  it("HC-count BP fires through the loop and clears step counters", () => {
+    const { loop, pauses } = buildLoop();
+    loop.setBreakpoints([
+      { id: "hc1", kind: "hc-count", target: 5, enabled: true },
+    ]);
+    // Ask for 1000 HC of stepping — BP fires at 5, step state should
+    // not be honored on a subsequent run().
+    loop.stepHC(1000);
+    sync(loop);
+    expect(loop.hc()).toBe(5);
+    expect(pauses).toEqual([{ kind: "hc-target", target: 5 }]);
+    // Verify step state was cleared by the BP fire: a follow-up run()
+    // shouldn't stop until we ask it to.
+    loop.run();
+    expect(loop.status()).toBe("running");
+    loop.pause();
+  });
+
+  it("PC-range BP fires when the CPU enters the range", () => {
+    // memInit=0 so the program is all NOPs from $0000. A NOP at $0000
+    // advances PC to $0001, the next M1 fetches at $0001, and our BP
+    // at $0001 catches it.
+    const { loop, pauses, cpu } = buildLoop();
+    loop.setBreakpoints([
+      { id: "pc1", kind: "pc-range", lo: 0x0001, hi: 0x0001, enabled: true },
+    ]);
+    loop.run();
+    sync(loop);
+    expect(loop.status()).toBe("paused");
+    expect(pauses[0]?.kind).toBe("pc-breakpoint");
+    expect(cpu.regs.pc).toBe(0x0001);
+  });
+
+  it("zeroHC re-arms a fired HC-count BP", () => {
+    const { loop, pauses } = buildLoop();
+    loop.setBreakpoints([
+      { id: "hc1", kind: "hc-count", target: 3, enabled: true },
+    ]);
+    loop.run();
+    sync(loop);
+    expect(pauses.length).toBe(1);
+    loop.zeroHC();
+    loop.run();
+    sync(loop);
+    // BP re-armed by zeroHC, fired again at hc=3 from the new zero.
+    expect(pauses.length).toBe(2);
+    expect(loop.hc()).toBe(3);
+  });
+
+  it("BP fire takes precedence over a coincident step-complete", () => {
+    const { loop, pauses } = buildLoop();
+    loop.setBreakpoints([
+      { id: "hc1", kind: "hc-count", target: 5, enabled: true },
+    ]);
+    loop.stepHC(5);
+    sync(loop);
+    // Both would land on edge 5; BP check runs first.
+    expect(pauses).toEqual([{ kind: "hc-target", target: 5 }]);
+  });
+
   it("warns when a second RunLoop is built against the same dbg", () => {
     const cpu = new Z80Cpu();
     const dbg = new Z80DebugContext(cpu);

@@ -5,6 +5,7 @@ import type {
   RunStatus,
   Unsubscribe,
 } from "../runloop/loop.ts";
+import type { Breakpoint } from "./types.ts";
 
 // Minimal in-memory RunLoop double for store tests. Tracks the latest
 // command but doesn't drive any CPU; subscribers can be invoked manually.
@@ -18,6 +19,10 @@ export interface StubLoop extends RunLoop {
   setStatus(s: RunStatus): void;
   lastCmd: string | null;
   lastStepN: number;
+  lastBreakpoints: ReadonlyArray<Breakpoint>;
+  /** Number of times `setBreakpoints` was called. Lets tests distinguish
+   *  "list still matches" from "list was actually re-pushed." */
+  setBreakpointsCalls: number;
 }
 
 export function makeStubLoop(): StubLoop {
@@ -56,6 +61,16 @@ export function makeStubLoop(): StubLoop {
       stub.lastCmd = "zeroHC";
       hc = 0;
     },
+    setBreakpoints(bps) {
+      // Snapshot rather than alias. The store passes `unwrap(breakpoints)`
+      // — a reference to a SolidStore-backed array that mutates in place
+      // — so capturing the reference would let test assertions on
+      // `loop.lastBreakpoints` pass by coincidence (current state) even
+      // when `setBreakpoints` was never called. A shallow copy of the
+      // BPs is enough to prove the call happened with the expected list.
+      stub.lastBreakpoints = bps.map((b) => ({ ...b }));
+      stub.setBreakpointsCalls++;
+    },
     onPause(cb): Unsubscribe {
       pauseSubs.add(cb);
       return () => pauseSubs.delete(cb);
@@ -87,6 +102,8 @@ export function makeStubLoop(): StubLoop {
     },
     lastCmd: null,
     lastStepN: 0,
+    lastBreakpoints: [],
+    setBreakpointsCalls: 0,
   };
   return stub;
 }

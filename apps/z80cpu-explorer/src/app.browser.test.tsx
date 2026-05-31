@@ -79,7 +79,12 @@ describe("z80cpu-explorer (browser smoke)", () => {
     // character should land in the input value, NOT trigger another
     // step instruction.
     const insnsBefore = booted.store.insnCount();
-    const stepInput = page.getByRole("textbox", { name: "Step count" });
+    // `exact: true` disambiguates from "Half-cycle step count" (the
+    // step-N HC input added in M5 — same role, prefix-overlapping name).
+    const stepInput = page.getByRole("textbox", {
+      name: "Step count",
+      exact: true,
+    });
     await stepInput.click();
     await userEvent.keyboard("s");
     await sleep(20);

@@ -150,9 +150,6 @@ describe("Program section — happy-dom", () => {
       (b) => b.textContent === STR.program.reloadAll,
     );
     expect(reloadBtn?.disabled).toBe(true);
-    // Reinit button present (always enabled).
-    const reinitBtn = buttons.find((b) => b.textContent === STR.program.reinit);
-    expect(reinitBtn?.disabled).toBe(false);
     // The Header no longer carries its own "Add file" button — the stub
     // row's Add is the only entry point.
     expect(buttons.some((b) => b.textContent === STR.program.addFile)).toBe(
@@ -498,10 +495,6 @@ describe("Program section — happy-dom", () => {
     expect(harness.bus.mem[0x100]).toBe(0xaa);
     expect(harness.bus.mem[0x200]).toBe(0xbb);
   });
-
-  // Reinit's implementation is `window.location.reload()` — a one-line
-  // browser primitive that's not meaningfully testable here. We just
-  // verify the button is present (covered by the empty-state test above).
 });
 
 describe("Program section — folded summary", () => {

@@ -91,19 +91,6 @@ const Header = () => {
     <div class="program-controls">
       <button
         type="button"
-        onClick={() => {
-          // Reinit = page reload. Cleanest equivalent to "everything new":
-          // CPU instance, dbg state, bus mem/io, all loop counters, all
-          // section signals. Files/breakpoints/layout survive because they
-          // round-trip through the backend on boot; autoload re-fires.
-          window.location.reload();
-        }}
-        title={STR.program.reinitTooltip}
-      >
-        {STR.program.reinit}
-      </button>
-      <button
-        type="button"
         onClick={() => store.reloadAllFiles()}
         title={STR.program.reloadAllTooltip}
         disabled={store.files.length === 0}

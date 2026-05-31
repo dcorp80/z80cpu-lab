@@ -229,6 +229,91 @@ body {
   padding-right: 8px;
 }
 
+/* Breakpoint list (body) */
+.bp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.bp-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+.bp-row.is-disabled {
+  opacity: 0.55;
+}
+.bp-row.bp-add-stub {
+  border-top: 1px dashed var(--border);
+  padding-top: 6px;
+  margin-top: 2px;
+}
+.bp-kind {
+  color: var(--muted);
+  min-width: 1.5em;
+}
+.bp-range-sep {
+  color: var(--muted);
+}
+.bp-hex-input,
+.bp-dec-input {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+.bp-hex-input {
+  width: 6ch;
+  text-transform: uppercase;
+}
+.bp-dec-input {
+  width: 12ch;
+}
+.bp-hex-input.is-invalid,
+.bp-dec-input.is-invalid {
+  border-color: var(--danger);
+}
+.bp-delete {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.bp-delete:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.bp-add-stub button {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.bp-add-stub button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.bp-add-stub select {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-size: 12px;
+}
+
 .section-body {
   padding: 10px;
   overflow-x: auto;

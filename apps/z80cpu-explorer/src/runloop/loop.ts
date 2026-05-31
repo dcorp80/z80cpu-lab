@@ -1,5 +1,7 @@
 import type { Z80Cpu } from "@dcorp80/z80cpu";
 import type { InstructionTrace, Z80DebugContext } from "@dcorp80/z80cpu-debug";
+import type { Breakpoint } from "../store/types.ts";
+import { createBreakpointEvaluator } from "./breakpoints.ts";
 import type { LoopConfig } from "./defaults.ts";
 
 export type RunStatus = "paused" | "running" | "stepping";
@@ -7,7 +9,6 @@ export type RunStatus = "paused" | "running" | "stepping";
 export type PauseReason =
   | { kind: "user" }
   | { kind: "step-complete" }
-  // PC/HC kinds reserved for milestone 5.
   | { kind: "pc-breakpoint"; pc: number; lo: number; hi: number }
   | { kind: "hc-target"; target: number };
 
@@ -21,6 +22,12 @@ export interface RunLoop {
   stepInstructions(n: number): void;
   stepHC(n: number): void;
   zeroHC(): void;
+  /**
+   * Replace the active breakpoint set. Called by the store on every
+   * add / remove / toggle / edit. Disabled BPs are filtered inside
+   * the evaluator; pass the full list straight through.
+   */
+  setBreakpoints(bps: ReadonlyArray<Breakpoint>): void;
   onPause(cb: (reason: PauseReason) => void): Unsubscribe;
   onInstruction(
     cb: (trace: InstructionTrace, hcAtComplete: number) => void,
@@ -38,10 +45,10 @@ export type FrameScheduler = (cb: () => void) => void;
 
 export interface RunLoopDeps {
   /**
-   * The CPU is not used directly by the loop (the dbg owns clock-edge
-   * dispatch and the bus resolver closes over `cpu.bus`). Kept on the
-   * deps surface so callers wire the same triple in one shape; lets the
-   * loop reach for `cpu` later without a breaking change.
+   * Read once per edge by the breakpoint evaluator (`cpu.nextStep` to
+   * gate PC-range checks on M1 entry; `cpu.regs.pc` for the fetch
+   * address). The dbg still owns clock-edge dispatch — the loop never
+   * mutates the CPU.
    */
   cpu: Z80Cpu;
   dbg: Z80DebugContext;
@@ -76,9 +83,10 @@ const defaultNow = (): number =>
 const CLAIMED_DBGS = new WeakSet<Z80DebugContext>();
 
 export function createRunLoop(deps: RunLoopDeps): RunLoop {
-  const { dbg, busTick, config } = deps;
+  const { cpu, dbg, busTick, config } = deps;
   const now = deps.now ?? defaultNow;
   const schedule = deps.schedule ?? defaultSchedule;
+  const breakpoints = createBreakpointEvaluator();
 
   let status: RunStatus = "paused";
   let hc = 0;
@@ -127,6 +135,14 @@ export function createRunLoop(deps: RunLoopDeps): RunLoop {
 
   function firePause(reason: PauseReason): void {
     status = "paused";
+    // Clear step counters on any pause path. A BP firing mid-step would
+    // otherwise leave `stepInstructionsRemaining`/`stepHcRemaining`
+    // non-zero — and a subsequent `run()` already clears them, but
+    // `stepInstructions()` after a BP pause would clobber them safely too.
+    // The redundancy is cheap and makes "pause for any reason zeros the
+    // step state" a single-place invariant.
+    stepInstructionsRemaining = 0;
+    stepHcRemaining = 0;
     for (const cb of pauseSubs) cb(reason);
   }
 
@@ -152,6 +168,17 @@ export function createRunLoop(deps: RunLoopDeps): RunLoop {
       dbg.clockEdge();
       hc++;
       if (stepHcRemaining > 0) stepHcRemaining--;
+      // Breakpoints take precedence over step-complete: when a user
+      // steps N instructions and a BP fires at instruction M<N, the
+      // BP pause reason is more informative than a generic
+      // step-complete. HC-target also wins over a coincident step-N
+      // landing on the same edge — same rationale, the explicit BP
+      // intent beats the implicit step boundary.
+      const bp = breakpoints.checkAfterEdge(cpu, hc);
+      if (bp) {
+        firePause(bp);
+        break;
+      }
       // Step completion is checked after every edge so sub-frame stops
       // (DESIGN §2.1 responsibility 6) land precisely on the target edge.
       const stop = shouldStopForStep();
@@ -179,8 +206,6 @@ export function createRunLoop(deps: RunLoopDeps): RunLoop {
     },
     pause(reason: PauseReason = { kind: "user" }) {
       if (status === "paused") return;
-      stepInstructionsRemaining = 0;
-      stepHcRemaining = 0;
       firePause(reason);
     },
     stepInstructions(n: number) {
@@ -201,7 +226,14 @@ export function createRunLoop(deps: RunLoopDeps): RunLoop {
       // Counter resets; CPU/dbg state untouched (REQ §7.3). Time-stamped
       // buffer clearing is the store's job — the loop just zeros its own.
       hc = 0;
+      // Re-arm HC-count BPs so any target > 0 fires again post-zero. A
+      // target ≤ 0 would refire on the next edge — not a special case,
+      // just the natural fallout of "everything > -1 is eligible again".
+      breakpoints.resetHcCutoff();
       // dbg's totalHc is independent (DESIGN §2.6) so we leave it alone.
+    },
+    setBreakpoints(bps) {
+      breakpoints.setBreakpoints(bps);
     },
     onPause(cb) {
       pauseSubs.add(cb);

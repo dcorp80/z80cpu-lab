@@ -7,6 +7,7 @@ import { MEM_SIZE } from "../runloop/bus.ts";
 import type { PauseReason, RunLoop, RunStatus } from "../runloop/loop.ts";
 import { defaultSectionIds } from "../sections/sectionRegistry.ts";
 import {
+  type Breakpoint,
   MAX_FILE_BYTES,
   type ProgramFile,
   type ProgramFileSession,
@@ -16,7 +17,13 @@ import {
 } from "../storage/types.ts";
 import { formatHex } from "../util/hex.ts";
 import { shortId } from "../util/id.ts";
-import type { InputPinsState, NewProgramFile, Store } from "./types.ts";
+import type {
+  BreakpointPatch,
+  InputPinsState,
+  NewBreakpoint,
+  NewProgramFile,
+  Store,
+} from "./types.ts";
 
 export type { Store } from "./types.ts";
 
@@ -92,6 +99,13 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
   const storedFiles = await backend.listFiles();
   const initialFiles = reconcileFiles(storedFiles, loaded?.fileOrder);
   const [files, setFiles] = createStore<ProgramFile[]>(initialFiles);
+
+  const initialBreakpoints = await backend.loadBreakpoints();
+  const [breakpoints, setBreakpoints] =
+    createStore<Breakpoint[]>(initialBreakpoints);
+  // Loop is armed at the very end of boot (after autoload), so persisted
+  // BPs are live before the user does anything but only after mem reflects
+  // the autoloaded files.
 
   // Sessions start fresh each boot — autoload writes set them below.
   const initialSessions: Record<string, ProgramFileSession> = {};
@@ -366,9 +380,129 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     for (const f of files) writeAndWarn(f);
   }
 
+  // ── breakpoint actions ────────────────────────────────────────────
+
+  /**
+   * HC targets are unsigned, finite, and capped at `Number.MAX_SAFE_INTEGER`
+   * because the global HC counter is itself a JS number (REQ §7.3). A
+   * target past safe-int could never match — better to reject at the
+   * boundary than silently store a never-firing BP.
+   */
+  function assertHcTarget(n: number, label: string): void {
+    if (!Number.isInteger(n) || n < 0 || n > Number.MAX_SAFE_INTEGER) {
+      throw new RangeError(
+        `${label}: non-negative integer ≤ Number.MAX_SAFE_INTEGER required: ${n}`,
+      );
+    }
+  }
+
+  // Push the current full list to the loop and persist. Single helper
+  // so every mutation site has the same side-effect tail and we keep
+  // store ↔ loop ↔ backend in sync.
+  function syncBreakpoints(): void {
+    const snapshot = unwrap(breakpoints);
+    loop.setBreakpoints(snapshot);
+    void backend.saveBreakpoints(snapshot.map((b) => ({ ...b })));
+  }
+
+  function addBreakpoint(input: NewBreakpoint): void {
+    if (input.kind === "pc-range") {
+      assertAddr16(input.lo, "addBreakpoint lo");
+      assertAddr16(input.hi, "addBreakpoint hi");
+      if (input.lo > input.hi) {
+        throw new RangeError(
+          `addBreakpoint: lo (${input.lo}) must be ≤ hi (${input.hi})`,
+        );
+      }
+    } else {
+      assertHcTarget(input.target, "addBreakpoint target");
+    }
+    const id = shortId();
+    const bp: Breakpoint =
+      input.kind === "pc-range"
+        ? {
+            id,
+            kind: "pc-range",
+            lo: input.lo,
+            hi: input.hi,
+            enabled: input.enabled !== false,
+          }
+        : {
+            id,
+            kind: "hc-count",
+            target: input.target,
+            enabled: input.enabled !== false,
+          };
+    setBreakpoints(produce((arr) => arr.push(bp)));
+    syncBreakpoints();
+  }
+
+  function removeBreakpoint(id: string): void {
+    const idx = breakpoints.findIndex((b) => b.id === id);
+    if (idx < 0) return;
+    setBreakpoints(produce((arr) => arr.splice(idx, 1)));
+    syncBreakpoints();
+  }
+
+  function toggleBreakpoint(id: string): void {
+    const idx = breakpoints.findIndex((b) => b.id === id);
+    if (idx < 0) return;
+    setBreakpoints(idx, "enabled", (e) => !e);
+    syncBreakpoints();
+  }
+
+  function editBreakpoint(id: string, patch: BreakpointPatch): void {
+    const idx = breakpoints.findIndex((b) => b.id === id);
+    if (idx < 0) return;
+    const current = breakpoints[idx];
+    let changed = false;
+    if (current.kind === "pc-range") {
+      // Only lo/hi apply; target is silently ignored if passed.
+      let nextLo = current.lo;
+      let nextHi = current.hi;
+      if (patch.lo !== undefined) {
+        assertAddr16(patch.lo, "editBreakpoint lo");
+        nextLo = patch.lo;
+      }
+      if (patch.hi !== undefined) {
+        assertAddr16(patch.hi, "editBreakpoint hi");
+        nextHi = patch.hi;
+      }
+      if (nextLo > nextHi) {
+        throw new RangeError(
+          `editBreakpoint: lo (${nextLo}) must be ≤ hi (${nextHi})`,
+        );
+      }
+      if (nextLo !== current.lo || nextHi !== current.hi) {
+        setBreakpoints(idx, { lo: nextLo, hi: nextHi });
+        changed = true;
+      }
+    } else {
+      if (patch.target !== undefined && patch.target !== current.target) {
+        assertHcTarget(patch.target, "editBreakpoint target");
+        // Object-form setter sidesteps the discriminated-union narrowing
+        // limitation Solid's path setter hits on per-key writes.
+        setBreakpoints(idx, { target: patch.target });
+        changed = true;
+      } else if (patch.target !== undefined) {
+        // Validate even when equal so callers get a consistent error
+        // surface — but skip the write + sync.
+        assertHcTarget(patch.target, "editBreakpoint target");
+      }
+    }
+    // Skip the loop push + backend write when nothing actually changed.
+    // With IndexedDB (M10) this avoids a round-trip on every blur.
+    if (changed) syncBreakpoints();
+  }
+
   // Boot autoload — once the store is built, fire any autoload-flagged
   // files into memory so the user lands on a primed system at boot.
   loadAutoloadFiles();
+  // Then arm BPs against the freshly-prepared system. Order matters
+  // only logically: the CPU is paused at hc=0 through boot, so no BP
+  // could have fired during autoload anyway — but doing it after
+  // autoload reads cleanly as "system is ready, now subscribe."
+  loop.setBreakpoints(unwrap(breakpoints));
 
   return {
     sections,
@@ -426,6 +560,11 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     writeFileToMemory,
     loadAutoloadFiles,
     reloadAllFiles,
+    breakpoints,
+    addBreakpoint,
+    removeBreakpoint,
+    toggleBreakpoint,
+    editBreakpoint,
   };
 }
 

@@ -1,7 +1,7 @@
-import { createSignal } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import { useStore } from "../../store/index.ts";
 import { STR } from "../../style/strings.ts";
-import { formatHex } from "../../util/hex.ts";
+import { filterHexInput, formatHex, parseAddr16 } from "../../util/hex.ts";
 import type { SectionModule } from "../types.ts";
 
 // Compact decimal formatter for HC + instruction counts. Thousands
@@ -40,14 +40,22 @@ function reasonToText(
 
 const Header = () => {
   const store = useStore();
+  // Two separate N inputs — instruction vs HC. Same input shared
+  // between Step N and Step N HC would be confusing because the
+  // typical magnitudes differ wildly (5 insns vs 5000 HC).
   const [stepN, setStepN] = createSignal("1");
-  // Step / Step N / Zero HC are paused-only — clicking mid-step would
-  // clobber the in-flight step counter. Only Run/Pause stays active
-  // across run states (the button itself toggles its label).
+  const [stepHcN, setStepHcN] = createSignal("1");
+  // Step / Step N / Step HC / Step N HC / Zero HC / Reinit are
+  // paused-only. Reinit reloads the page; doing that mid-run would be
+  // surprising. Only Run/Pause stays active across run states.
   const isPaused = () => store.status() === "paused";
   const onStepN = () => {
     const n = Number.parseInt(stepN(), 10);
     if (Number.isFinite(n) && n > 0) store.stepInstructions(n);
+  };
+  const onStepHcN = () => {
+    const n = Number.parseInt(stepHcN(), 10);
+    if (Number.isFinite(n) && n > 0) store.stepHC(n);
   };
   return (
     <>
@@ -80,11 +88,50 @@ const Header = () => {
         </button>
         <button
           type="button"
+          onClick={() => store.stepHC(1)}
+          disabled={!isPaused()}
+          title={STR.breakpoints.stepHcTooltip}
+        >
+          {STR.breakpoints.stepHc}
+        </button>
+        <input
+          class="step-n-input"
+          type="text"
+          inputmode="numeric"
+          value={stepHcN()}
+          onInput={(e) => setStepHcN(e.currentTarget.value)}
+          aria-label={STR.breakpoints.stepHcCountLabel}
+          size={6}
+        />
+        <button
+          type="button"
+          onClick={onStepHcN}
+          disabled={!isPaused()}
+          title={STR.breakpoints.stepNHcTooltip}
+        >
+          {STR.breakpoints.stepNHc}
+        </button>
+        <button
+          type="button"
           onClick={() => store.zeroHC()}
           disabled={!isPaused()}
           title={STR.breakpoints.zeroHcTooltip}
         >
           {STR.breakpoints.zeroHc}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            // TODO(REQ §7.4): surface save-or-skip modal once snapshot /
+            // HW-trace buffers exist (M8c / M9). For now Reinit goes
+            // straight through — there's nothing in-memory worth saving
+            // at this milestone.
+            window.location.reload();
+          }}
+          disabled={!isPaused()}
+          title={STR.breakpoints.reinitTooltip}
+        >
+          {STR.breakpoints.reinit}
         </button>
       </div>
       <div class="bp-status">
@@ -99,16 +146,381 @@ const Header = () => {
   );
 };
 
-// Breakpoints' Header is always visible and carries the status line +
-// controls (REQ §6.2). FoldedSummary is omitted so the frame skips its
-// wrapper entirely — no empty flex slot when folded.
-const Body = () => (
-  <div class="placeholder">{STR.breakpoints.bodyPlaceholder}</div>
-);
+const FoldedSummary = () => {
+  const store = useStore();
+  const enabled = createMemo(
+    () => store.breakpoints.filter((b) => b.enabled).length,
+  );
+  return (
+    <Show
+      when={store.breakpoints.length > 0}
+      fallback={<span class="muted">{STR.breakpoints.foldedEmpty}</span>}
+    >
+      <span class="muted">
+        {STR.breakpoints.foldedSummary(store.breakpoints.length, enabled())}
+      </span>
+    </Show>
+  );
+};
+
+interface PcRowProps {
+  bp: { id: string; lo: number; hi: number; enabled: boolean };
+}
+
+const PcRow = (props: PcRowProps) => {
+  const store = useStore();
+  // Edit buffer per field. `null` = "show canonical hex of the stored
+  // value". Same pattern as Program section's address input.
+  const [loEdit, setLoEdit] = createSignal<string | null>(null);
+  const [hiEdit, setHiEdit] = createSignal<string | null>(null);
+  const [loInvalid, setLoInvalid] = createSignal(false);
+  const [hiInvalid, setHiInvalid] = createSignal(false);
+
+  const loText = () => loEdit() ?? formatHex(props.bp.lo, 4);
+  const hiText = () => hiEdit() ?? formatHex(props.bp.hi, 4);
+
+  const commitLo = () => {
+    const v = parseAddr16(loText());
+    if (v === null) {
+      setLoInvalid(true);
+      return;
+    }
+    setLoInvalid(false);
+    setLoEdit(null);
+    if (v !== props.bp.lo) {
+      try {
+        store.editBreakpoint(props.bp.id, { lo: v });
+      } catch {
+        // Cross-field violation (lo > hi). Surface the same invalid cue.
+        setLoInvalid(true);
+      }
+    }
+  };
+  const commitHi = () => {
+    const v = parseAddr16(hiText());
+    if (v === null) {
+      setHiInvalid(true);
+      return;
+    }
+    setHiInvalid(false);
+    setHiEdit(null);
+    if (v !== props.bp.hi) {
+      try {
+        store.editBreakpoint(props.bp.id, { hi: v });
+      } catch {
+        setHiInvalid(true);
+      }
+    }
+  };
+
+  return (
+    <div class="bp-row" classList={{ "is-disabled": !props.bp.enabled }}>
+      <input
+        type="checkbox"
+        checked={props.bp.enabled}
+        onChange={() => store.toggleBreakpoint(props.bp.id)}
+        aria-label={STR.breakpoints.bpEnabledLabel}
+      />
+      <span class="bp-kind">{STR.breakpoints.bpKindPc}</span>
+      <input
+        class="bp-hex-input"
+        classList={{ "is-invalid": loInvalid() }}
+        type="text"
+        value={loText()}
+        size={5}
+        aria-label={STR.breakpoints.bpPcLoLabel}
+        onInput={(e) => {
+          const filtered = filterHexInput(e.currentTarget.value);
+          if (filtered !== e.currentTarget.value)
+            e.currentTarget.value = filtered;
+          setLoEdit(filtered);
+          setLoInvalid(false);
+        }}
+        onBlur={commitLo}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            commitLo();
+            (e.currentTarget as HTMLInputElement).blur();
+          }
+          if (e.key === "Escape") {
+            setLoEdit(null);
+            setLoInvalid(false);
+            (e.currentTarget as HTMLInputElement).blur();
+          }
+        }}
+      />
+      <span class="bp-range-sep">{STR.breakpoints.bpRangeSeparator}</span>
+      <input
+        class="bp-hex-input"
+        classList={{ "is-invalid": hiInvalid() }}
+        type="text"
+        value={hiText()}
+        size={5}
+        aria-label={STR.breakpoints.bpPcHiLabel}
+        onInput={(e) => {
+          const filtered = filterHexInput(e.currentTarget.value);
+          if (filtered !== e.currentTarget.value)
+            e.currentTarget.value = filtered;
+          setHiEdit(filtered);
+          setHiInvalid(false);
+        }}
+        onBlur={commitHi}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            commitHi();
+            (e.currentTarget as HTMLInputElement).blur();
+          }
+          if (e.key === "Escape") {
+            setHiEdit(null);
+            setHiInvalid(false);
+            (e.currentTarget as HTMLInputElement).blur();
+          }
+        }}
+      />
+      <button
+        type="button"
+        class="bp-delete"
+        onClick={() => store.removeBreakpoint(props.bp.id)}
+        title={STR.breakpoints.bpDeleteTooltip}
+      >
+        {STR.breakpoints.bpDelete}
+      </button>
+    </div>
+  );
+};
+
+interface HcRowProps {
+  bp: { id: string; target: number; enabled: boolean };
+}
+
+// Decimal target — HC counts are big numbers humans read as decimal.
+const filterDecInput = (s: string): string => s.replace(/[^0-9]/g, "");
+// Clamped at Number.MAX_SAFE_INTEGER because the HC counter is itself a
+// JS number (REQ §7.3). A target past safe-int could never match — reject
+// at the parse boundary so the store assertion never sees one.
+const parseHcTarget = (s: string): number | null => {
+  const v = Number.parseInt(s.trim(), 10);
+  if (!Number.isInteger(v) || v < 0 || v > Number.MAX_SAFE_INTEGER) return null;
+  return v;
+};
+
+const HcRow = (props: HcRowProps) => {
+  const store = useStore();
+  const [tEdit, setTEdit] = createSignal<string | null>(null);
+  const [tInvalid, setTInvalid] = createSignal(false);
+  const tText = () => tEdit() ?? String(props.bp.target);
+  const commitT = () => {
+    const v = parseHcTarget(tText());
+    if (v === null) {
+      setTInvalid(true);
+      return;
+    }
+    setTInvalid(false);
+    setTEdit(null);
+    if (v !== props.bp.target) {
+      store.editBreakpoint(props.bp.id, { target: v });
+    }
+  };
+  return (
+    <div class="bp-row" classList={{ "is-disabled": !props.bp.enabled }}>
+      <input
+        type="checkbox"
+        checked={props.bp.enabled}
+        onChange={() => store.toggleBreakpoint(props.bp.id)}
+        aria-label={STR.breakpoints.bpEnabledLabel}
+      />
+      <span class="bp-kind">{STR.breakpoints.bpKindHc}</span>
+      <input
+        class="bp-dec-input"
+        classList={{ "is-invalid": tInvalid() }}
+        type="text"
+        inputmode="numeric"
+        value={tText()}
+        size={10}
+        aria-label={STR.breakpoints.bpHcTargetLabel}
+        onInput={(e) => {
+          const filtered = filterDecInput(e.currentTarget.value);
+          if (filtered !== e.currentTarget.value)
+            e.currentTarget.value = filtered;
+          setTEdit(filtered);
+          setTInvalid(false);
+        }}
+        onBlur={commitT}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            commitT();
+            (e.currentTarget as HTMLInputElement).blur();
+          }
+          if (e.key === "Escape") {
+            setTEdit(null);
+            setTInvalid(false);
+            (e.currentTarget as HTMLInputElement).blur();
+          }
+        }}
+      />
+      <button
+        type="button"
+        class="bp-delete"
+        onClick={() => store.removeBreakpoint(props.bp.id)}
+        title={STR.breakpoints.bpDeleteTooltip}
+      >
+        {STR.breakpoints.bpDelete}
+      </button>
+    </div>
+  );
+};
+
+const AddStub = () => {
+  const store = useStore();
+  const [kind, setKind] = createSignal<"pc-range" | "hc-count">("pc-range");
+  const [loStr, setLoStr] = createSignal("");
+  const [hiStr, setHiStr] = createSignal("");
+  const [hcStr, setHcStr] = createSignal("");
+  // Per-field invalid flags — matches the in-row edit pattern so a
+  // bad value in one field doesn't paint the others red. lo > hi is a
+  // cross-field violation; we mark both bounds invalid in that case.
+  const [loInvalid, setLoInvalid] = createSignal(false);
+  const [hiInvalid, setHiInvalid] = createSignal(false);
+  const [hcInvalid, setHcInvalid] = createSignal(false);
+
+  const onAdd = () => {
+    if (kind() === "pc-range") {
+      const lo = parseAddr16(loStr());
+      // Empty hi defaults to lo (single-address BP) — matches the
+      // common workflow of "pause when PC hits this address".
+      const hi = hiStr().trim() === "" ? lo : parseAddr16(hiStr());
+      const loBad = lo === null;
+      const hiBad = hi === null;
+      const crossBad = !loBad && !hiBad && (lo as number) > (hi as number);
+      setLoInvalid(loBad || crossBad);
+      setHiInvalid(hiBad || crossBad);
+      if (loBad || hiBad || crossBad) return;
+      store.addBreakpoint({
+        kind: "pc-range",
+        lo: lo as number,
+        hi: hi as number,
+      });
+      setLoStr("");
+      setHiStr("");
+    } else {
+      const target = parseHcTarget(hcStr());
+      if (target === null) {
+        setHcInvalid(true);
+        return;
+      }
+      setHcInvalid(false);
+      store.addBreakpoint({ kind: "hc-count", target });
+      setHcStr("");
+    }
+  };
+
+  return (
+    <div class="bp-row bp-add-stub">
+      <select
+        value={kind()}
+        onChange={(e) => {
+          setKind(e.currentTarget.value as "pc-range" | "hc-count");
+          setLoInvalid(false);
+          setHiInvalid(false);
+          setHcInvalid(false);
+        }}
+        aria-label={STR.breakpoints.addBpKindLabel}
+      >
+        <option value="pc-range">{STR.breakpoints.addBpKindOptions.pc}</option>
+        <option value="hc-count">{STR.breakpoints.addBpKindOptions.hc}</option>
+      </select>
+      <Show
+        when={kind() === "pc-range"}
+        fallback={
+          <input
+            class="bp-dec-input"
+            classList={{ "is-invalid": hcInvalid() }}
+            type="text"
+            inputmode="numeric"
+            value={hcStr()}
+            size={10}
+            aria-label={STR.breakpoints.bpHcTargetLabel}
+            placeholder="0"
+            onInput={(e) => {
+              const filtered = filterDecInput(e.currentTarget.value);
+              if (filtered !== e.currentTarget.value)
+                e.currentTarget.value = filtered;
+              setHcStr(filtered);
+              setHcInvalid(false);
+            }}
+            onKeyDown={(e) => e.key === "Enter" && onAdd()}
+          />
+        }
+      >
+        <input
+          class="bp-hex-input"
+          classList={{ "is-invalid": loInvalid() }}
+          type="text"
+          value={loStr()}
+          size={5}
+          aria-label={STR.breakpoints.bpPcLoLabel}
+          placeholder="0000"
+          onInput={(e) => {
+            const filtered = filterHexInput(e.currentTarget.value);
+            if (filtered !== e.currentTarget.value)
+              e.currentTarget.value = filtered;
+            setLoStr(filtered);
+            setLoInvalid(false);
+          }}
+          onKeyDown={(e) => e.key === "Enter" && onAdd()}
+        />
+        <span class="bp-range-sep">{STR.breakpoints.bpRangeSeparator}</span>
+        <input
+          class="bp-hex-input"
+          classList={{ "is-invalid": hiInvalid() }}
+          type="text"
+          value={hiStr()}
+          size={5}
+          aria-label={STR.breakpoints.bpPcHiLabel}
+          placeholder={loStr() || "0000"}
+          onInput={(e) => {
+            const filtered = filterHexInput(e.currentTarget.value);
+            if (filtered !== e.currentTarget.value)
+              e.currentTarget.value = filtered;
+            setHiStr(filtered);
+            setHiInvalid(false);
+          }}
+          onKeyDown={(e) => e.key === "Enter" && onAdd()}
+        />
+      </Show>
+      <button
+        type="button"
+        onClick={onAdd}
+        title={STR.breakpoints.addBpTooltip}
+      >
+        {STR.breakpoints.addBp}
+      </button>
+    </div>
+  );
+};
+
+const Body = () => {
+  const store = useStore();
+  return (
+    <div class="bp-list">
+      <For each={store.breakpoints}>
+        {(bp) =>
+          // `bp.kind` is immutable per BreakpointPatch contract (a kind
+          // change would be delete + add of a different BP). The row
+          // component is therefore stable for a given BP id and we
+          // don't need a Switch-on-kind that remounts on kind change.
+          bp.kind === "pc-range" ? <PcRow bp={bp} /> : <HcRow bp={bp} />
+        }
+      </For>
+      <AddStub />
+    </div>
+  );
+};
 
 export const breakpoints: SectionModule = {
   id: "breakpoints",
   title: STR.breakpoints.title,
   Header,
+  FoldedSummary,
   Body,
 };

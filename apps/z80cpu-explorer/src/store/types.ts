@@ -3,10 +3,15 @@ import type { Accessor } from "solid-js";
 import type { Store as SolidStore } from "solid-js/store";
 import type { PauseReason, RunStatus } from "../runloop/loop.ts";
 import type {
+  Breakpoint,
   ProgramFile,
   ProgramFileSession,
   SectionUiState,
 } from "../storage/types.ts";
+
+// Re-export so loop / sections can import BP-related types from a single
+// hub (the store) without reaching into storage internals.
+export type { Breakpoint } from "../storage/types.ts";
 
 export interface InputPinsState {
   /** Byte placed on `cpu.bus.data` during INT-acknowledge cycles (REQ §6.4). */
@@ -20,6 +25,27 @@ export interface NewProgramFile {
   loadAddr: number;
   autoload?: boolean;
 }
+
+/**
+ * Input to `addBreakpoint` — id is store-assigned, `enabled` defaults
+ * to true. Splitting by `kind` keeps the per-kind required fields
+ * type-checked.
+ */
+export type NewBreakpoint =
+  | { kind: "pc-range"; lo: number; hi: number; enabled?: boolean }
+  | { kind: "hc-count"; target: number; enabled?: boolean };
+
+/**
+ * Patch shape for `editBreakpoint`. Fields not relevant to the BP's
+ * kind are ignored at the store boundary. Kind itself cannot change
+ * via edit — that would be a different BP entirely; users delete + add.
+ * `enabled` flips via `toggleBreakpoint`, never through this patch.
+ */
+export type BreakpointPatch = Partial<{
+  lo: number;
+  hi: number;
+  target: number;
+}>;
 
 export interface Store {
   // ── UI state
@@ -66,4 +92,13 @@ export interface Store {
   loadAutoloadFiles(): void;
   /** Writes every file at its loadAddr (REQ §6.1 "reload all"). */
   reloadAllFiles(): void;
+
+  // ── breakpoints (REQ §6.2; DESIGN §3.5). Each mutation calls
+  // loop.setBreakpoints with the current full list and persists via
+  // the backend (fire-and-forget — store updates synchronously).
+  readonly breakpoints: SolidStore<Breakpoint[]>;
+  addBreakpoint(b: NewBreakpoint): void;
+  removeBreakpoint(id: string): void;
+  toggleBreakpoint(id: string): void;
+  editBreakpoint(id: string, patch: BreakpointPatch): void;
 }

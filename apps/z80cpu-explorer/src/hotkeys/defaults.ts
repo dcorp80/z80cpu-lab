@@ -9,6 +9,14 @@ export function registerDefaultHotkeys(
   registry: HotkeyRegistry,
   store: Store,
 ): void {
+  // Step / Zero HC / Reinit are paused-only, matching the equivalent
+  // buttons in the Breakpoints header. The buttons set `disabled` on
+  // !paused; the hotkeys silently no-op so a held key during a run
+  // doesn't queue up actions that would surprise the user mid-frame.
+  const ifPaused = (fn: () => void) => () => {
+    if (store.status() === "paused") fn();
+  };
+
   registry.register({
     key: " ",
     scope: "global",
@@ -30,8 +38,40 @@ export function registerDefaultHotkeys(
   registry.register({
     key: "s",
     scope: "global",
-    action: () => store.stepInstructions(1),
+    action: ifPaused(() => store.stepInstructions(1)),
     description: "Step one instruction",
     category: "execution",
+  });
+  registry.register({
+    key: "s",
+    shift: true,
+    scope: "global",
+    action: ifPaused(() => store.stepHC(1)),
+    description: "Step one half-cycle",
+    category: "execution",
+  });
+  registry.register({
+    key: "z",
+    shift: true,
+    scope: "global",
+    // TODO(REQ §7.4): gate behind save-or-skip modal once snapshot /
+    // HW-trace buffers exist (M8c / M9). Direct call for now matches
+    // the Zero HC button.
+    action: ifPaused(() => store.zeroHC()),
+    description: "Zero the HC counter",
+    category: "destructive",
+  });
+  registry.register({
+    key: "r",
+    shift: true,
+    scope: "global",
+    // TODO(REQ §7.4): gate behind save-or-skip modal once buffers exist
+    // (M8c / M9). For now Reinit goes straight through.
+    action: ifPaused(() => {
+      window.location.reload();
+    }),
+    description:
+      "Reinit (page reload — files / breakpoints / layout survive; autoload re-fires)",
+    category: "destructive",
   });
 }

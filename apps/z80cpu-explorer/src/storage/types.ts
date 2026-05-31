@@ -52,6 +52,20 @@ export interface ProgramFileSession {
   lastLoadedAddr: number | null;
 }
 
+/**
+ * Two breakpoint kinds in MVP (REQ §6.2; DESIGN §3.5). Memory / IO /
+ * flag-conditional kinds are post-MVP. `id` is store-assigned; UI never
+ * sees a BP without one. Lives here (storage/types) because BPs
+ * round-trip through the backend; re-exported from store/types for
+ * loop and section consumers.
+ *
+ * - `pc-range`: fires when an M1 entry (regular, NMI, or INT) lands at
+ *   `lo <= cpu.regs.pc <= hi` (inclusive both ends; `lo === hi` is the
+ *   single-address case).
+ * - `hc-count`: fires once when the global HC counter first reaches
+ *   `target` from below. Inserting a target ≤ current HC fires on the
+ *   next edge; refire requires zeroHC or disable+re-enable.
+ */
 export type Breakpoint =
   | { id: string; kind: "pc-range"; lo: number; hi: number; enabled: boolean }
   | { id: string; kind: "hc-count"; target: number; enabled: boolean };

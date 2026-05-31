@@ -538,4 +538,198 @@ describe("createAppStore", () => {
       expect(store.cpuState().pc).toBe(0x200);
     });
   });
+
+  describe("breakpoints (REQ §6.2)", () => {
+    it("starts with no breakpoints when storage is empty", async () => {
+      const { store } = await freshStore();
+      expect(store.breakpoints.length).toBe(0);
+    });
+
+    it("addBreakpoint appends, persists, and pushes the full list to the loop", async () => {
+      const { backend, store, loop } = await freshStore();
+      store.addBreakpoint({ kind: "pc-range", lo: 0x8000, hi: 0x80ff });
+      await flush();
+      expect(store.breakpoints.length).toBe(1);
+      const bp = store.breakpoints[0];
+      expect(bp).toMatchObject({
+        kind: "pc-range",
+        lo: 0x8000,
+        hi: 0x80ff,
+        enabled: true,
+      });
+      expect(bp.id).toBeTruthy();
+      // Loop received the same list it would evaluate against.
+      expect(loop.lastBreakpoints.length).toBe(1);
+      expect(loop.lastBreakpoints[0].id).toBe(bp.id);
+      // Backend round-trips.
+      const stored = await backend.loadBreakpoints();
+      expect(stored.length).toBe(1);
+      expect(stored[0]).toMatchObject({ lo: 0x8000, hi: 0x80ff });
+    });
+
+    it("addBreakpoint with hc-count target works", async () => {
+      const { store, loop } = await freshStore();
+      store.addBreakpoint({ kind: "hc-count", target: 1234 });
+      expect(store.breakpoints[0]).toMatchObject({
+        kind: "hc-count",
+        target: 1234,
+        enabled: true,
+      });
+      expect(loop.lastBreakpoints[0]).toMatchObject({ target: 1234 });
+    });
+
+    it("addBreakpoint honors enabled=false", async () => {
+      const { store } = await freshStore();
+      store.addBreakpoint({
+        kind: "pc-range",
+        lo: 0,
+        hi: 0,
+        enabled: false,
+      });
+      expect(store.breakpoints[0].enabled).toBe(false);
+    });
+
+    it("removeBreakpoint drops the entry, persists, and re-syncs the loop", async () => {
+      const { backend, store, loop } = await freshStore();
+      store.addBreakpoint({ kind: "pc-range", lo: 0, hi: 0xff });
+      const id = store.breakpoints[0].id;
+      store.removeBreakpoint(id);
+      await flush();
+      expect(store.breakpoints.length).toBe(0);
+      expect(loop.lastBreakpoints.length).toBe(0);
+      expect((await backend.loadBreakpoints()).length).toBe(0);
+    });
+
+    it("removeBreakpoint ignores unknown id", async () => {
+      const { store } = await freshStore();
+      store.removeBreakpoint("nonexistent");
+      expect(store.breakpoints.length).toBe(0);
+    });
+
+    it("toggleBreakpoint flips enabled and re-syncs the loop", async () => {
+      const { store, loop } = await freshStore();
+      store.addBreakpoint({ kind: "hc-count", target: 100 });
+      const id = store.breakpoints[0].id;
+      expect(store.breakpoints[0].enabled).toBe(true);
+      store.toggleBreakpoint(id);
+      expect(store.breakpoints[0].enabled).toBe(false);
+      expect(loop.lastBreakpoints[0].enabled).toBe(false);
+      store.toggleBreakpoint(id);
+      expect(store.breakpoints[0].enabled).toBe(true);
+    });
+
+    it("editBreakpoint patches lo/hi for pc-range", async () => {
+      const { store, loop } = await freshStore();
+      store.addBreakpoint({ kind: "pc-range", lo: 0x100, hi: 0x1ff });
+      const id = store.breakpoints[0].id;
+      store.editBreakpoint(id, { lo: 0x200, hi: 0x2ff });
+      expect(store.breakpoints[0]).toMatchObject({ lo: 0x200, hi: 0x2ff });
+      expect(loop.lastBreakpoints[0]).toMatchObject({ lo: 0x200, hi: 0x2ff });
+    });
+
+    it("editBreakpoint with unchanged values skips the loop re-push", async () => {
+      const { store, loop } = await freshStore();
+      store.addBreakpoint({ kind: "pc-range", lo: 0x100, hi: 0x200 });
+      const id = store.breakpoints[0].id;
+      const callsBefore = loop.setBreakpointsCalls;
+      // Patch with the same values that are already set.
+      store.editBreakpoint(id, { lo: 0x100, hi: 0x200 });
+      // No write, no sync — matters for IndexedDB (M10) so blur on an
+      // unchanged input doesn't burn a round-trip.
+      expect(loop.setBreakpointsCalls).toBe(callsBefore);
+      // Now make a real change and confirm sync DID fire.
+      store.editBreakpoint(id, { lo: 0x101 });
+      expect(loop.setBreakpointsCalls).toBe(callsBefore + 1);
+    });
+
+    it("editBreakpoint patches target for hc-count", async () => {
+      const { store } = await freshStore();
+      store.addBreakpoint({ kind: "hc-count", target: 100 });
+      const id = store.breakpoints[0].id;
+      store.editBreakpoint(id, { target: 9999 });
+      expect(store.breakpoints[0]).toMatchObject({ target: 9999 });
+    });
+
+    it("editBreakpoint silently ignores patch fields not relevant to the kind", async () => {
+      const { store } = await freshStore();
+      store.addBreakpoint({ kind: "hc-count", target: 100 });
+      const id = store.breakpoints[0].id;
+      // `lo`/`hi` belong to pc-range. Passing them to an hc-count BP
+      // is a programmatic mistake we tolerate (no throw) but don't
+      // act on — saves the UI from having to inspect kind before
+      // building a patch.
+      store.editBreakpoint(id, { lo: 0x100, target: 200 });
+      expect(store.breakpoints[0]).toMatchObject({
+        kind: "hc-count",
+        target: 200,
+      });
+    });
+
+    it("addBreakpoint rejects out-of-range addresses and bad ranges", async () => {
+      const { store } = await freshStore();
+      expect(() =>
+        store.addBreakpoint({ kind: "pc-range", lo: -1, hi: 0 }),
+      ).toThrow(RangeError);
+      expect(() =>
+        store.addBreakpoint({ kind: "pc-range", lo: 0, hi: 0x10000 }),
+      ).toThrow(RangeError);
+      expect(() =>
+        store.addBreakpoint({ kind: "pc-range", lo: 0x200, hi: 0x100 }),
+      ).toThrow(/lo .* must be ≤ hi/);
+      expect(() =>
+        store.addBreakpoint({ kind: "hc-count", target: -1 }),
+      ).toThrow(RangeError);
+      expect(() =>
+        store.addBreakpoint({ kind: "hc-count", target: 1.5 }),
+      ).toThrow(RangeError);
+      // None of the rejections leaked a BP into the store.
+      expect(store.breakpoints.length).toBe(0);
+    });
+
+    it("editBreakpoint rejects out-of-range patches", async () => {
+      const { store } = await freshStore();
+      store.addBreakpoint({ kind: "pc-range", lo: 0x100, hi: 0x200 });
+      const id = store.breakpoints[0].id;
+      expect(() => store.editBreakpoint(id, { lo: -1 })).toThrow(RangeError);
+      expect(() => store.editBreakpoint(id, { hi: 0x10000 })).toThrow(
+        RangeError,
+      );
+      // Cross-field violation: lo > hi after applying the patch.
+      expect(() => store.editBreakpoint(id, { lo: 0x300 })).toThrow(
+        /lo .* must be ≤ hi/,
+      );
+      // BP unchanged after each failed edit.
+      expect(store.breakpoints[0]).toMatchObject({ lo: 0x100, hi: 0x200 });
+    });
+
+    it("restores stored breakpoints on boot and pushes them to the loop", async () => {
+      const backend = new MemoryBackend();
+      await backend.saveBreakpoints([
+        {
+          id: "preserved",
+          kind: "pc-range",
+          lo: 0x8000,
+          hi: 0x80ff,
+          enabled: true,
+        },
+        {
+          id: "disabled",
+          kind: "hc-count",
+          target: 5000,
+          enabled: false,
+        },
+      ]);
+      const loop = makeStubLoop();
+      const store = await createAppStore({
+        backend,
+        loop,
+        bus: makeStubBus(),
+        dbg: makeStubDbg(),
+      });
+      expect(store.breakpoints.length).toBe(2);
+      expect(store.breakpoints[0].id).toBe("preserved");
+      // Loop got the persisted set before any user action.
+      expect(loop.lastBreakpoints.length).toBe(2);
+    });
+  });
 });
