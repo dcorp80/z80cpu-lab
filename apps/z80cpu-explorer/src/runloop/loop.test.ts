@@ -1,8 +1,8 @@
 import { Z80Cpu } from "@dcorp80/z80cpu";
 import { Z80DebugContext } from "@dcorp80/z80cpu-debug";
 import { describe, expect, it, vi } from "vitest";
+import { DEFAULT_BUS_CONFIG } from "../config/defaults.ts";
 import { makeBus64k } from "./bus.ts";
-import { DEFAULT_BUS_CONFIG } from "./defaults.ts";
 import { createRunLoop, type PauseReason, type RunLoop } from "./loop.ts";
 
 // Build a real CPU + dbg + bus. Force memInit=0 so the code path is

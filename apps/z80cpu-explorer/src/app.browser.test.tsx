@@ -97,12 +97,15 @@ describe("z80cpu-explorer (browser smoke)", () => {
 
   it("drag-to-reorder: dragging Program onto Memory's lower half moves it below", async () => {
     const initialOrder = booted.store.sections.map((s) => s.id);
-    expect(initialOrder.slice(0, 4)).toEqual([
-      "program",
-      "breakpoints",
-      "cpuState",
-      "memory",
-    ]);
+    // Shipped order is set in `sections/sectionRegistry.ts`. Anchor on
+    // the few ids that matter to this test (program above memory at
+    // boot) — if the shipped order is re-tuned, only the assertion of
+    // the post-drop relationship below needs to stay true.
+    expect(initialOrder).toContain("program");
+    expect(initialOrder).toContain("memory");
+    expect(initialOrder.indexOf("program")).toBeLessThan(
+      initialOrder.indexOf("memory"),
+    );
 
     // Dispatch real HTML5 DragEvents with a constructed DataTransfer.
     // DataTransfer is constructable in real browsers (but not in happy-

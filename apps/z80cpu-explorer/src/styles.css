@@ -576,3 +576,116 @@ body {
   color: var(--muted);
   font-weight: 400;
 }
+
+/* Instruction trace section. Monospaced rows; executed log scrolls
+   above a fixed preview block. The seam carries the current PC label
+   so the eye can connect history → next. */
+.itrace-header-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.itrace-detached-badge {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--warning);
+  color: var(--warning);
+  background: var(--warning-bg);
+}
+.itrace-snap {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.itrace-snap:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.itrace-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+.itrace-section-label {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.itrace-executed {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
+  background: var(--bg);
+}
+.itrace-seam {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border);
+}
+.itrace-seam .itrace-pc {
+  color: var(--accent);
+  font-weight: 600;
+}
+.itrace-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+}
+.itrace-row {
+  display: grid;
+  grid-template-columns: minmax(6ch, auto) 5ch 13ch 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  padding: 1px 0;
+  white-space: pre;
+}
+.itrace-row.is-preview {
+  /* No HC column in preview — drop the first track. */
+  grid-template-columns: 5ch 13ch 1fr;
+  color: var(--muted);
+}
+.itrace-hc {
+  color: var(--muted);
+  text-align: right;
+}
+.itrace-addr {
+  color: var(--fg);
+}
+.itrace-bytes {
+  color: var(--muted);
+}
+.itrace-disasm {
+  color: var(--fg);
+}
+.itrace-row.is-preview .itrace-disasm {
+  color: var(--muted);
+}
+.itrace-tag {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px solid var(--warning);
+  color: var(--warning);
+  background: var(--warning-bg);
+}

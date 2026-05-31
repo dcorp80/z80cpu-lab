@@ -1,9 +1,34 @@
+import { InstructionTrace } from "@dcorp80/z80cpu-debug";
 import { describe, expect, it } from "vitest";
 import { defaultSectionIds } from "../sections/sectionRegistry.ts";
 import { MemoryBackend } from "../storage/memory.ts";
 import { createAppStore } from "./index.ts";
 import { makeStubDbg } from "./testStubDbg.ts";
 import { makeStubLoop } from "./testStubLoop.ts";
+
+// Minimal valid InstructionTrace builder. Tests that only care that an
+// instruction event fired can pass {}; tests that exercise the ring
+// fill the fields that matter.
+function mkTrace(
+  opts: Partial<{
+    startAddr: number;
+    bytes: number[];
+    length: number;
+    m1Type: InstructionTrace["m1Type"];
+    hc: number;
+    nextPc: number;
+  }> = {},
+): InstructionTrace {
+  const t = new InstructionTrace();
+  t.startAddr = opts.startAddr ?? 0;
+  const src = opts.bytes ?? [];
+  for (let i = 0; i < src.length; i++) t.bytes[i] = src[i];
+  t.length = opts.length ?? src.length;
+  t.m1Type = opts.m1Type ?? "normal";
+  t.hc = opts.hc ?? 0;
+  t.nextPc = opts.nextPc ?? 0;
+  return t;
+}
 
 function makeStubBus() {
   let v = 0xff;
@@ -175,21 +200,149 @@ describe("createAppStore", () => {
 
     it("insnCount accessor follows loop instruction events", async () => {
       const { store, loop } = await freshStore();
-      loop.emitInstruction({} as never);
-      loop.emitInstruction({} as never);
+      loop.emitInstruction(mkTrace());
+      loop.emitInstruction(mkTrace());
       expect(store.insnCount()).toBe(2);
     });
 
     it("zeroHC zeros the displayed hc and instruction count", async () => {
       const { store, loop } = await freshStore();
       loop.emitTick(100);
-      loop.emitInstruction({} as never);
+      loop.emitInstruction(mkTrace());
       expect(store.hc()).toBe(100);
       expect(store.insnCount()).toBe(1);
       store.zeroHC();
       expect(loop.lastCmd).toBe("zeroHC");
       expect(store.hc()).toBe(0);
       expect(store.insnCount()).toBe(0);
+    });
+
+    it("instruction trace ring captures emitted instructions", async () => {
+      const { store, loop } = await freshStore();
+      const v0 = store.traceRingVersion();
+      loop.setHc(50);
+      loop.emitInstruction(
+        mkTrace({
+          startAddr: 0x100,
+          bytes: [0x3e, 0x42],
+          length: 2,
+          hc: 8,
+          nextPc: 0x102,
+        }),
+      );
+      expect(store.traceRing.size()).toBe(1);
+      const rec = store.traceRing.at(0);
+      expect(rec?.startAddr).toBe(0x100);
+      expect(rec?.bytes.slice(0, rec.length)).toEqual([0x3e, 0x42]);
+      expect(rec?.nextPc).toBe(0x102);
+      // hcAtComplete = loop.hc() at callback time.
+      expect(rec?.hc).toBe(50);
+      // Version bumped so consumers re-render.
+      expect(store.traceRingVersion()).toBeGreaterThan(v0);
+    });
+
+    it("zeroHC clears the trace ring and bumps its version", async () => {
+      const { store, loop } = await freshStore();
+      loop.emitInstruction(mkTrace({ startAddr: 0x100 }));
+      loop.emitInstruction(mkTrace({ startAddr: 0x101 }));
+      expect(store.traceRing.size()).toBe(2);
+      const vBefore = store.traceRingVersion();
+      store.zeroHC();
+      expect(store.traceRing.size()).toBe(0);
+      expect(store.traceRingVersion()).toBeGreaterThan(vBefore);
+    });
+
+    it("instruction-trace cursor: detach + snap actions update the slice", async () => {
+      const { store } = await freshStore();
+      expect(store.cursors.instructionTrace).toEqual({ mode: "live" });
+      store.detachInstructionTraceCursor(1234);
+      expect(store.cursors.instructionTrace).toEqual({
+        mode: "detached",
+        anchorHc: 1234,
+      });
+      store.snapInstructionTraceCursorToLive();
+      expect(store.cursors.instructionTrace).toEqual({ mode: "live" });
+    });
+
+    it("zeroHC snaps the instruction-trace cursor back to live", async () => {
+      const { store } = await freshStore();
+      store.detachInstructionTraceCursor(999);
+      store.zeroHC();
+      expect(store.cursors.instructionTrace).toEqual({ mode: "live" });
+    });
+
+    it("throttled trace-ring version fires synchronously when loop is paused", async () => {
+      const { store, loop } = await freshStore();
+      // Stub loop starts paused → throttle bypass kicks in.
+      expect(loop.status()).toBe("paused");
+      const v0 = store.traceRingVersionThrottled();
+      loop.emitInstruction(mkTrace({ startAddr: 0x100 }));
+      expect(store.traceRingVersionThrottled()).toBeGreaterThan(v0);
+    });
+
+    it("throttled version coalesces pushes during run, flushes on pause", async () => {
+      // Replace rAF with a controllable scheduler so we can pin down
+      // "the throttle hasn't fired yet" deterministically.
+      const queued: Array<FrameRequestCallback> = [];
+      const origRaf = globalThis.requestAnimationFrame;
+      globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) => {
+        queued.push(cb);
+        return queued.length;
+      }) as typeof requestAnimationFrame;
+      try {
+        const { store, loop } = await freshStore();
+        // Move into running; subsequent pushes should NOT bump
+        // throttled until rAF fires.
+        loop.setStatus("running");
+        const v0 = store.traceRingVersionThrottled();
+        loop.emitInstruction(mkTrace({ startAddr: 0x100 }));
+        loop.emitInstruction(mkTrace({ startAddr: 0x101 }));
+        loop.emitInstruction(mkTrace({ startAddr: 0x102 }));
+        // Raw version moved by 3; throttled still pinned.
+        expect(store.traceRingVersion()).toBeGreaterThanOrEqual(v0 + 3);
+        expect(store.traceRingVersionThrottled()).toBe(v0);
+        // One rAF frame "elapses" — single throttle fire regardless of
+        // how many pushes accumulated.
+        expect(queued.length).toBe(1);
+        queued.shift()?.(0);
+        expect(store.traceRingVersionThrottled()).toBeGreaterThan(v0);
+        const vAfterRaf = store.traceRingVersionThrottled();
+        // Another push during run → schedules a fresh rAF.
+        loop.emitInstruction(mkTrace({ startAddr: 0x103 }));
+        expect(store.traceRingVersionThrottled()).toBe(vAfterRaf);
+        expect(queued.length).toBe(1);
+        // Pause flushes the throttle synchronously without waiting for
+        // the queued rAF.
+        loop.emitPause({ kind: "user" });
+        expect(store.traceRingVersionThrottled()).toBeGreaterThan(vAfterRaf);
+      } finally {
+        globalThis.requestAnimationFrame = origRaf;
+      }
+    });
+  });
+
+  describe("memory read accessor (M6 read path)", () => {
+    it("memByte reads from the bus mem array, masked to 16 bits", async () => {
+      const { store, bus } = await freshStore();
+      bus.mem[0x1234] = 0xab;
+      expect(store.memByte(0x1234)).toBe(0xab);
+      // Mask: 0x10005 → 0x0005
+      bus.mem[0x0005] = 0xcd;
+      expect(store.memByte(0x10005)).toBe(0xcd);
+    });
+
+    it("memVersion bumps on file write", async () => {
+      const { store } = await freshStore();
+      const v0 = store.memVersion();
+      store.addFile({
+        name: "rom.bin",
+        bytes: new Uint8Array([0xde, 0xad]),
+        loadAddr: 0x0000,
+      });
+      store.writeFileToMemory(store.files[0].id);
+      expect(store.memVersion()).toBeGreaterThan(v0);
+      expect(store.memByte(0x0000)).toBe(0xde);
+      expect(store.memByte(0x0001)).toBe(0xad);
     });
 
     it("setIntVector masks to 8 bits and pushes through to the bus", async () => {
@@ -499,14 +652,14 @@ describe("createAppStore", () => {
 
       // onInstruction then step-complete → boundary.
       dbg.setNext({ pc: 0x200 });
-      loop.emitInstruction({} as never);
+      loop.emitInstruction(mkTrace());
       loop.emitPause({ kind: "step-complete" });
       expect(store.atInstructionBoundary()).toBe(true);
 
       // user-pause AFTER an instruction is NOT a boundary — reason kind
       // gates it (user clicking pause mid-run is arbitrary timing).
       dbg.setNext({ pc: 0x300 });
-      loop.emitInstruction({} as never);
+      loop.emitInstruction(mkTrace());
       loop.emitPause({ kind: "user" });
       expect(store.atInstructionBoundary()).toBe(false);
     });
@@ -515,7 +668,7 @@ describe("createAppStore", () => {
       const { store, loop, dbg } = await freshStore();
       // Boundary pause #1 — first real boundary; baseline = boot snapshot (pc=0).
       dbg.setNext({ pc: 0x100 });
-      loop.emitInstruction({} as never);
+      loop.emitInstruction(mkTrace());
       loop.emitPause({ kind: "step-complete" });
       expect(store.prevCpuStateAtBoundary().pc).toBe(0);
       expect(store.cpuState().pc).toBe(0x100);
@@ -532,7 +685,7 @@ describe("createAppStore", () => {
       // Boundary pause #2 — baseline advances to the *previous boundary*
       // snapshot (0x100), not the intermediate user-pause snapshot.
       dbg.setNext({ pc: 0x200 });
-      loop.emitInstruction({} as never);
+      loop.emitInstruction(mkTrace());
       loop.emitPause({ kind: "step-complete" });
       expect(store.prevCpuStateAtBoundary().pc).toBe(0x100);
       expect(store.cpuState().pc).toBe(0x200);

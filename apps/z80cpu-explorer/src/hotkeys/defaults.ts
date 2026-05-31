@@ -74,4 +74,16 @@ export function registerDefaultHotkeys(
       "Reinit (page reload — files / breakpoints / layout survive; autoload re-fires)",
     category: "destructive",
   });
+  registry.register({
+    key: "g",
+    scope: "global",
+    // M8 extends this to also snap the hw-trace cursor. For M6 there's
+    // only one detachable cursor, so single-call is the whole job.
+    // Runnable regardless of pause state — a detached cursor can pile
+    // up history during a long run, snapping to live must work without
+    // requiring the user to pause first.
+    action: () => store.snapInstructionTraceCursorToLive(),
+    description: "Snap detached trace cursor(s) to live",
+    category: "navigation",
+  });
 }

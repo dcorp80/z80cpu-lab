@@ -1,3 +1,12 @@
+// Section module registry + shipped order.
+//
+// Section order belongs to shipped config (alongside `DEFAULT_LOOP_CONFIG`
+// in `config/defaults.ts`), but it imports the section modules which
+// transitively import the store — moving the array to config/defaults.ts
+// creates a circular import that's already been tried. It stays here;
+// a future Settings UI binds against `DEFAULT_SECTION_ORDER` from this
+// module.
+
 import { breakpoints } from "./breakpoints/index.tsx";
 import { cpuState } from "./cpuState/index.tsx";
 import { hwTrace } from "./hwTrace/index.tsx";
@@ -7,13 +16,16 @@ import { memory } from "./memory/index.tsx";
 import { program } from "./program/index.tsx";
 import type { SectionModule } from "./types.ts";
 
-// Shipped default order, top → bottom (REQUIREMENTS §6).
+/** Top-to-bottom order new users see on first boot (REQ §6). Per-user
+ *  reorder via drag persists through `StorageBackend`; the store's
+ *  `reconcileSections` keeps stored order for known ids and appends
+ *  any new ids at the end. */
 export const DEFAULT_SECTION_ORDER: SectionModule[] = [
-  program,
-  breakpoints,
   cpuState,
-  memory,
   instructionTrace,
+  breakpoints,
+  program,
+  memory,
   io,
   hwTrace,
 ];

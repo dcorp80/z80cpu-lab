@@ -4,6 +4,7 @@
 // stub dbg so we can drive the reactive `cpuState`, `prevCpuStateAtBoundary`,
 // and `atInstructionBoundary` accessors via fake pause events.
 
+import { InstructionTrace } from "@dcorp80/z80cpu-debug";
 import { render } from "solid-js/web";
 import { afterEach, describe, expect, it } from "vitest";
 import { MemoryBackend } from "../../storage/memory.ts";
@@ -15,6 +16,10 @@ import {
 import { makeStubDbg } from "../../store/testStubDbg.ts";
 import { makeStubLoop, type StubLoop } from "../../store/testStubLoop.ts";
 import { cpuState } from "./index.tsx";
+
+// Minimal valid InstructionTrace — the store pushes the value into the
+// trace ring, which reads `bytes`/`length`/etc. unconditionally.
+const blankTrace = (): InstructionTrace => new InstructionTrace();
 
 function makeStubBus() {
   let v = 0xff;
@@ -78,7 +83,7 @@ function emitBoundary(
   patch: Partial<Parameters<Harness["dbg"]["setNext"]>[0]> = {},
 ): void {
   h.dbg.setNext(patch);
-  h.loop.emitInstruction({} as never);
+  h.loop.emitInstruction(blankTrace());
   h.loop.emitPause({ kind: "step-complete" });
 }
 

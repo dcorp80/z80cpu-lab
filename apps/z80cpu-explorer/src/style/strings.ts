@@ -107,7 +107,44 @@ export const STR = {
   instructionTrace: {
     title: "Instruction trace",
     foldedEmpty: "0 insns",
-    bodyPlaceholder: "Instruction trace section — milestone 6.",
+    // Folded summary: "PC=8000 · paused · 124 insns · last: LD A,B".
+    // The last-insn clause is dropped when the ring is empty so the
+    // line reads cleanly on a fresh boot.
+    foldedSummary: (pc: string, status: string, insns: string) =>
+      `PC=${pc} · ${status} · ${insns} insns`,
+    foldedSummaryWithLast: (
+      pc: string,
+      status: string,
+      insns: string,
+      lastDisasm: string,
+    ) => `PC=${pc} · ${status} · ${insns} insns · last: ${lastDisasm}`,
+    statusPaused: "paused",
+    statusRunning: "running",
+    statusStepping: "stepping",
+    snapToLive: "Snap to live",
+    snapToLiveTooltip: "Re-attach the cursor to live execution (g)",
+    detachedBadge: "detached",
+    detachedBadgeTooltip: (anchor: string) =>
+      `Pinned at HC=${anchor} — scroll back to history`,
+    executedHeading: "Executed",
+    previewHeading: "Preview (next at PC)",
+    previewEmpty: "(no bytes at PC)",
+    emptyExecuted: "(no instructions executed yet)",
+    // Column labels — used as aria-labels for screen-reader rows.
+    colHc: "HC",
+    colAddr: "Address",
+    colBytes: "Bytes",
+    colDisasm: "Disassembly",
+    // m1Type tags. "normal" never renders (the common case).
+    m1Tags: {
+      nmi: "NMI",
+      int: "INT",
+      halt: "HALT",
+      special_reset: "RESET",
+      // Synthetic — set by the section when length===1 and bytes[0] ∈ {DD,FD}
+      // (DESIGN §3.1: wasted prefix M1s surface as their own short traces).
+      prefix: "PREFIX",
+    },
   },
   io: {
     title: "IO",

@@ -1,7 +1,7 @@
 import { Z80Cpu } from "@dcorp80/z80cpu";
 import { describe, expect, it } from "vitest";
+import { type BusConfig, DEFAULT_BUS_CONFIG } from "../config/defaults.ts";
 import { IO_SIZE, MEM_SIZE, makeBus64k } from "./bus.ts";
-import { type BusConfig, DEFAULT_BUS_CONFIG } from "./defaults.ts";
 
 function freshBus(overrides: Partial<BusConfig> = {}) {
   const cpu = new Z80Cpu();

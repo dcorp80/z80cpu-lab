@@ -8,10 +8,29 @@ import type {
   ProgramFileSession,
   SectionUiState,
 } from "../storage/types.ts";
+import type { TraceRing } from "./traceRing.ts";
 
 // Re-export so loop / sections can import BP-related types from a single
 // hub (the store) without reaching into storage internals.
 export type { Breakpoint } from "../storage/types.ts";
+export type { TraceRecord, TraceRing } from "./traceRing.ts";
+
+/**
+ * Per-section view cursor (DESIGN §3.6). `live` = follow the head of
+ * the underlying buffer; `detached` = pinned at the given HC, ignoring
+ * new appends until the user snaps back to live.
+ */
+export type ViewCursor =
+  | { mode: "live" }
+  | { mode: "detached"; anchorHc: number };
+
+/**
+ * Cursor slice — one entry per traced section. M6 instantiates only
+ * `instructionTrace`; the `hwTrace` key arrives with M8.
+ */
+export interface CursorsState {
+  instructionTrace: ViewCursor;
+}
 
 export interface InputPinsState {
   /** Byte placed on `cpu.bus.data` during INT-acknowledge cycles (REQ §6.4). */
@@ -74,6 +93,31 @@ export interface Store {
   stepHC(n: number): void;
   zeroHC(): void;
 
+  // ── instruction trace (DESIGN §3.1). Ring is the canonical buffer;
+  // `traceRingVersion` bumps on push/clear so sections re-render via a
+  // memo keyed on the version rather than tracking each record.
+  // `traceRingVersionThrottled` is rAF-debounced during run and
+  // flushed immediately on pause-edge (REQ §7.5: trace panes batch
+  // appends while running, flush on the next paint). When the loop is
+  // already paused, the throttle is bypassed so step-pause and tests
+  // observe updates synchronously.
+  readonly traceRing: TraceRing;
+  readonly traceRingVersion: Accessor<number>;
+  readonly traceRingVersionThrottled: Accessor<number>;
+
+  // ── view cursors (DESIGN §3.6, REQ §7.2). Default `live`; detached
+  // by scroll-back; snap-to-live button (and `g` hotkey) reattaches.
+  readonly cursors: SolidStore<CursorsState>;
+  detachInstructionTraceCursor(anchorHc: number): void;
+  snapInstructionTraceCursorToLive(): void;
+
+  // ── memory read path. Sections (instruction trace preview here, the
+  // hex grid in M7) read mem through `memByte`; the createMemo tracking
+  // `memVersion()` triggers re-render after writes. Editable writes
+  // arrive in M7 via `setMemByte`.
+  memByte(addr: number): number;
+  readonly memVersion: Accessor<number>;
+
   // ── input pins
   readonly inputPins: SolidStore<InputPinsState>;
   setIntVector(byte: number): void;
@@ -101,4 +145,12 @@ export interface Store {
   removeBreakpoint(id: string): void;
   toggleBreakpoint(id: string): void;
   editBreakpoint(id: string, patch: BreakpointPatch): void;
+
+  /**
+   * Tear-down for store-owned timers. Blocks the throttle's pending
+   * `requestAnimationFrame` callback from firing a signal write after
+   * the consuming component tree is gone. Called from `bootApp().dispose`
+   * and from tests that hot-swap the global rAF scheduler.
+   */
+  dispose(): void;
 }

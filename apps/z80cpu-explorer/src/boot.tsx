@@ -9,11 +9,11 @@ import { Z80Cpu } from "@dcorp80/z80cpu";
 import { Z80DebugContext } from "@dcorp80/z80cpu-debug";
 import type { JSX } from "solid-js";
 import { App } from "./app.tsx";
+import { DEFAULT_BUS_CONFIG, DEFAULT_LOOP_CONFIG } from "./config/defaults.ts";
 import { registerDefaultHotkeys } from "./hotkeys/defaults.ts";
 import { installHotkeyDispatcher } from "./hotkeys/dispatch.ts";
 import { createHotkeyRegistry } from "./hotkeys/registry.ts";
 import { makeBus64k } from "./runloop/bus.ts";
-import { DEFAULT_BUS_CONFIG, DEFAULT_LOOP_CONFIG } from "./runloop/defaults.ts";
 import { createRunLoop } from "./runloop/loop.ts";
 import { MemoryBackend } from "./storage/memory.ts";
 import type { StorageBackend } from "./storage/types.ts";
@@ -75,6 +75,7 @@ export async function bootApp(opts: BootOptions = {}): Promise<BootedApp> {
     dispose() {
       detachHotkeys();
       loop.pause();
+      store.dispose();
     },
   };
 }

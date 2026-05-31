@@ -2,6 +2,7 @@ import type { CpuState } from "@dcorp80/z80cpu";
 import type { Z80DebugContext } from "@dcorp80/z80cpu-debug";
 import { createContext, createSignal, useContext } from "solid-js";
 import { createStore, produce, unwrap } from "solid-js/store";
+import { DEFAULT_INSTRUCTION_RING_CAP } from "../config/defaults.ts";
 import type { Bus64k } from "../runloop/bus.ts";
 import { MEM_SIZE } from "../runloop/bus.ts";
 import type { PauseReason, RunLoop, RunStatus } from "../runloop/loop.ts";
@@ -17,8 +18,10 @@ import {
 } from "../storage/types.ts";
 import { formatHex } from "../util/hex.ts";
 import { shortId } from "../util/id.ts";
+import { TraceRing } from "./traceRing.ts";
 import type {
   BreakpointPatch,
+  CursorsState,
   InputPinsState,
   NewBreakpoint,
   NewProgramFile,
@@ -127,6 +130,74 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     intVector: bus.intVector(),
   });
 
+  // Instruction-trace ring (DESIGN §3.1). Reactivity rides a version
+  // counter — sections createMemo on `traceRingVersion()` and pull
+  // records via `ring.at(...)`, which is cheap and avoids per-record
+  // signal allocation at push rate.
+  //
+  // Two version signals:
+  //   - `traceRingVersion`: raw, bumps on every push. Tests + any
+  //     consumer that genuinely needs every-push fidelity read this.
+  //   - `traceRingVersionThrottled`: rAF-debounced during run, flushed
+  //     immediately on pause-edge and whenever the loop is already
+  //     paused (REQ §7.5). Section consumers (folded summary, body
+  //     memos) read this — at full speed the body would otherwise
+  //     diff ~10k DOM rows on every push and starve rAF.
+  const traceRing = new TraceRing(DEFAULT_INSTRUCTION_RING_CAP);
+  const [traceRingVersion, setTraceRingVersion] = createSignal(0);
+  const [traceRingVersionThrottled, setTraceRingVersionThrottled] =
+    createSignal(0);
+  let throttleScheduled = false;
+  // Set on `dispose()`; the rAF callback checks it so a frame queued
+  // before teardown can't fire a signal write after the consuming
+  // component tree is gone. Matters for tests that swap rAF for a
+  // controllable scheduler and for HMR.
+  let disposed = false;
+  // Schedule under rAF when available; setTimeout fallback for Node /
+  // environments where rAF isn't defined. The fallback isn't perfect
+  // (it doesn't align with paint) but keeps the contract — "at most one
+  // bump per scheduler tick" — in test environments too.
+  const scheduleFrame: (cb: () => void) => void =
+    typeof requestAnimationFrame === "function"
+      ? (cb) => {
+          requestAnimationFrame(() => cb());
+        }
+      : (cb) => {
+          setTimeout(cb, 16);
+        };
+  function bumpThrottled(): void {
+    // If the loop is already paused (boot, step-pause, post-BP),
+    // there's nothing to coalesce — fire synchronously so tests and
+    // single-step pauses don't have to wait for a frame.
+    if (loop.status() === "paused") {
+      setTraceRingVersionThrottled(traceRing.version());
+      return;
+    }
+    if (throttleScheduled) return;
+    throttleScheduled = true;
+    scheduleFrame(() => {
+      throttleScheduled = false;
+      if (disposed) return;
+      setTraceRingVersionThrottled(traceRing.version());
+    });
+  }
+
+  // View cursors (DESIGN §3.6, REQ §7.2). Only the instruction-trace
+  // cursor exists in M6 — `hwTrace` lands with M8.
+  const [cursors, setCursors] = createStore<CursorsState>({
+    instructionTrace: { mode: "live" },
+  });
+
+  // Memory read path. The `memByte` accessor tracks `memVersion()` so
+  // any consumer createMemo re-runs after writes. Bumped from
+  // `writeAndWarn` (file load / autoload / reload-all) and `zeroHC`
+  // does NOT bump because zero-HC leaves memory alone (REQ §7.3).
+  // `setMemByte` arrives in M7.
+  const [memVersion, setMemVersion] = createSignal(0);
+  const bumpMemVersion = (): void => {
+    setMemVersion((v) => v + 1);
+  };
+
   // CPU state for the cpuState section (REQ §6.5). `cpuState` is the
   // last sampled snapshot — refreshed on every pause so the section
   // always shows what the CPU just did. `prevCpuStateAtBoundary` is the
@@ -195,11 +266,21 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       setPrevCpuStateAtBoundary(cpuStateAtBoundary);
       cpuStateAtBoundary = next;
     }
+    // Pause flushes any pending throttle so the trace section snaps
+    // to the final state on the same tick the user paused, not the
+    // next rAF.
+    setTraceRingVersionThrottled(traceRing.version());
   });
   loop.onTick((h) => setHc(h));
-  loop.onInstruction(() => {
+  loop.onInstruction((trace, hcAtComplete) => {
     instructionFiredSinceLastPause = true;
     setInsnCount((n) => n + 1);
+    // DESIGN §3.1: copy out of the dbg's double-buffered trace into the
+    // ring's stable record. The handler must not retain `trace` past the
+    // callback — `ring.push` does the byte-by-byte copy.
+    traceRing.push(trace, hcAtComplete);
+    setTraceRingVersion((v) => v + 1);
+    bumpThrottled();
   });
 
   function toggleSectionFold(id: string): void {
@@ -362,6 +443,9 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       );
     }
     setSessionLoaded(f.id, f.loadAddr);
+    // Mem changed — bump the reactive version so the instruction-trace
+    // PC preview (and M7 hex grid) re-render.
+    bumpMemVersion();
   }
 
   function writeFileToMemory(id: string): void {
@@ -542,7 +626,52 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       loop.zeroHC();
       setHc(0);
       setInsnCount(0);
+      // Time-stamped buffers clear on zero-HC (REQ §7.3). HW-trace +
+      // snapshot logs land in M8 / M9; the instruction-trace ring is
+      // the only one alive in M6.
+      traceRing.clear();
+      setTraceRingVersion((v) => v + 1);
+      // zeroHC is paused-only (gated by the Breakpoints header), so
+      // the throttle bypass would fire anyway — still, be explicit.
+      setTraceRingVersionThrottled(traceRing.version());
+      // Cursor snaps back to live — its anchor HC would no longer mean
+      // anything against the rebased counter.
+      setCursors(
+        produce((s) => {
+          s.instructionTrace = { mode: "live" };
+        }),
+      );
     },
+    traceRing,
+    traceRingVersion,
+    traceRingVersionThrottled,
+    cursors,
+    detachInstructionTraceCursor(anchorHc: number) {
+      // `produce` replaces the slice wholesale; plain
+      // `setCursors("instructionTrace", obj)` would deep-merge and
+      // leave a stale `anchorHc` after a live→detached→live cycle.
+      setCursors(
+        produce((s) => {
+          s.instructionTrace = { mode: "detached", anchorHc };
+        }),
+      );
+    },
+    snapInstructionTraceCursorToLive() {
+      setCursors(
+        produce((s) => {
+          s.instructionTrace = { mode: "live" };
+        }),
+      );
+    },
+    memByte(addr: number) {
+      // Track the version signal so consumers' createMemo re-runs after
+      // writes. The `& 0xffff` mask folds reads past 0xFFFF back into
+      // the 64K window — matches the CPU's PC wrap and lets the disasm
+      // preview cross the end of address space without a special case.
+      memVersion();
+      return bus.mem[addr & 0xffff];
+    },
+    memVersion,
     inputPins,
     setIntVector(byte: number) {
       // Bus is authoritative; mirror into the UI store so dependent
@@ -565,6 +694,9 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     removeBreakpoint,
     toggleBreakpoint,
     editBreakpoint,
+    dispose() {
+      disposed = true;
+    },
   };
 }
 

@@ -1,8 +1,8 @@
 import type { Z80Cpu } from "@dcorp80/z80cpu";
 import type { InstructionTrace, Z80DebugContext } from "@dcorp80/z80cpu-debug";
+import type { LoopConfig } from "../config/defaults.ts";
 import type { Breakpoint } from "../store/types.ts";
 import { createBreakpointEvaluator } from "./breakpoints.ts";
-import type { LoopConfig } from "./defaults.ts";
 
 export type RunStatus = "paused" | "running" | "stepping";
 
@@ -253,4 +253,4 @@ export function createRunLoop(deps: RunLoopDeps): RunLoop {
   };
 }
 
-export { DEFAULT_LOOP_CONFIG, type LoopConfig } from "./defaults.ts";
+export { DEFAULT_LOOP_CONFIG, type LoopConfig } from "../config/defaults.ts";

@@ -8,7 +8,7 @@
 // §2.5), and `nNMI` is a momentary pulse driven by busTick (milestone 8).
 
 import type { Z80Cpu } from "@dcorp80/z80cpu";
-import type { BusConfig } from "./defaults.ts";
+import type { BusConfig } from "../config/defaults.ts";
 
 export const MEM_SIZE = 0x10000;
 export const IO_SIZE = 0x10000;
