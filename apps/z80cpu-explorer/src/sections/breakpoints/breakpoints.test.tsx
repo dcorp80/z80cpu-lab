@@ -12,21 +12,11 @@ import {
   type Store,
   StoreProvider,
 } from "../../store/index.ts";
+import { makeStubBus } from "../../store/testStubBus.ts";
 import { makeStubDbg } from "../../store/testStubDbg.ts";
 import { makeStubLoop, type StubLoop } from "../../store/testStubLoop.ts";
 import { STR } from "../../style/strings.ts";
 import { breakpoints } from "./index.tsx";
-
-function makeStubBus() {
-  let v = 0xff;
-  return {
-    mem: new Uint8Array(0x10000).fill(0xff),
-    intVector: () => v,
-    setIntVector: (b: number) => {
-      v = b & 0xff;
-    },
-  };
-}
 
 interface Harness {
   store: Store;

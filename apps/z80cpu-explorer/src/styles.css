@@ -689,3 +689,212 @@ body {
   color: var(--warning);
   background: var(--warning-bg);
 }
+
+/* ── Memory / IO watch input (section header) ─────────────────────── */
+
+.watch-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+.watch-input-label {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.watch-input-field {
+  width: 6ch;
+  padding: 2px 4px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: inherit;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+.watch-input-field:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: 0;
+  border-color: var(--accent);
+}
+
+/* ── Hex grid (shared by Memory + IO bodies) ───────────────────────── */
+
+.hex-grid {
+  max-height: 480px;
+  overflow-y: auto;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  padding: 4px 6px;
+}
+
+.hex-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 1px 4px;
+  white-space: pre;
+}
+.hex-row.is-watch-row {
+  background: var(--highlight-bg);
+  border-left: 2px solid var(--accent);
+  padding-left: 2px;
+}
+
+.hex-row-addr {
+  color: var(--muted);
+  width: 4ch;
+  flex: 0 0 auto;
+}
+
+.hex-row-cells {
+  display: grid;
+  gap: 0;
+  flex: 0 0 auto;
+}
+.hex-row-cells.cells-16 {
+  grid-template-columns: repeat(16, 2.5ch);
+}
+.hex-row-cells.cells-32 {
+  grid-template-columns: repeat(32, 2.5ch);
+}
+.hex-row-cells.cells-64 {
+  grid-template-columns: repeat(64, 2.5ch);
+}
+
+.hex-cell {
+  /* Rendered as <button> for native click/keyboard semantics; reset
+     the UA styling so the grid keeps its monospace alignment. */
+  appearance: none;
+  background: none;
+  border: none;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  display: inline-block;
+  text-align: center;
+  padding: 0 1px;
+  border-radius: 2px;
+  cursor: default;
+}
+.hex-cell.is-editable {
+  cursor: text;
+}
+.hex-cell.is-editable:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.hex-cell.is-watch-cell {
+  /* Background-only emphasis — bumping font-weight here shifts the row
+     baseline by ~1 px because flex/baseline alignment grows the line
+     box to fit the bolder glyphs. */
+  background: var(--highlight);
+  color: var(--bg);
+}
+.hex-cell-input {
+  width: 2.2ch;
+  padding: 0;
+  margin: 0;
+  border: 1px solid var(--accent);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  text-align: center;
+  text-transform: uppercase;
+}
+.hex-cell-input:focus {
+  outline: none;
+}
+
+.hex-row-ascii {
+  display: grid;
+  gap: 0;
+  flex: 0 0 auto;
+  color: var(--muted);
+  padding-left: 8px;
+  border-left: 1px dashed var(--border);
+}
+.hex-row-ascii.cells-16 {
+  grid-template-columns: repeat(16, 1.2ch);
+}
+.hex-row-ascii.cells-32 {
+  grid-template-columns: repeat(32, 1.2ch);
+}
+.hex-row-ascii.cells-64 {
+  grid-template-columns: repeat(64, 1.2ch);
+}
+.hex-ascii-cell {
+  /* See .hex-cell — same <button> UA reset. */
+  appearance: none;
+  background: none;
+  border: none;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  display: inline-block;
+  text-align: center;
+  border-radius: 2px;
+  cursor: default;
+}
+.hex-ascii-cell.is-editable {
+  cursor: text;
+}
+.hex-ascii-cell.is-editable:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.hex-ascii-cell.is-watch-cell {
+  /* See .hex-cell.is-watch-cell — keep weight uniform to lock baseline. */
+  background: var(--highlight);
+  color: var(--bg);
+}
+.hex-ascii-input {
+  width: 1.1ch;
+  padding: 0;
+  margin: 0;
+  border: 1px solid var(--accent);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  text-align: center;
+}
+.hex-ascii-input:focus {
+  outline: none;
+}
+
+/* Bytes-per-row selector (Memory / IO section headers). */
+
+.bpr-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+.bpr-select-label {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.bpr-select-field {
+  appearance: auto;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 1px 4px;
+}
+.bpr-select-field:focus {
+  outline: 1px solid var(--accent);
+  border-color: var(--accent);
+}

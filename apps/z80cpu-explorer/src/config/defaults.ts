@@ -62,3 +62,32 @@ export const DEFAULT_BUS_CONFIG: BusConfig = {
  * cost is fixed regardless of cap.
  */
 export const DEFAULT_INSTRUCTION_RING_CAP = 10_000;
+
+// ── Hex grid (memory + IO sections) ───────────────────────────────
+//
+// The grid renders a watch window centered on a user-typed address —
+// `rowsBefore` rows of context above the watch row, plus the watch
+// row, plus `rowsAfter` rows below. No 64K scroll, no virtualization.
+// User scrolls within the rendered window via the section body's
+// CSS overflow; pressing Enter on the watch input re-centers the row.
+//
+// Memory and IO size independently — memory windows want enough rows
+// to read structures around the watch byte; IO maps are sparser and
+// users typically watch one port at a time, so 3 rows is plenty.
+
+/** Memory section — rows above watch (default 2 + 1 + 9 = 12 total). */
+export const DEFAULT_MEMORY_ROWS_BEFORE = 2;
+export const DEFAULT_MEMORY_ROWS_AFTER = 9;
+/** IO section — rows above watch (default 1 + 1 + 1 = 3 total). */
+export const DEFAULT_IO_ROWS_BEFORE = 1;
+export const DEFAULT_IO_ROWS_AFTER = 1;
+
+/**
+ * Allowed bytes-per-row values for the hex grid. Restricted to powers
+ * of two so row-base alignment is a single mask (`addr & ~(bpr - 1)`)
+ * and CSS column tracks can be enumerated as a small fixed set.
+ */
+export const BYTES_PER_ROW_OPTIONS = [16, 32, 64] as const;
+export type BytesPerRow = (typeof BYTES_PER_ROW_OPTIONS)[number];
+export const DEFAULT_MEMORY_BYTES_PER_ROW: BytesPerRow = 16;
+export const DEFAULT_IO_BYTES_PER_ROW: BytesPerRow = 16;

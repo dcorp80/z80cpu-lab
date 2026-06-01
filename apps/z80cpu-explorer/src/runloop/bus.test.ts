@@ -145,4 +145,113 @@ describe("makeBus64k", () => {
     bus.resolve();
     expect(cpu.bus.data).toBe(0xee);
   });
+
+  describe("last-touched tracking", () => {
+    // Helper to drive a specific cycle through resolve(). Sets only the
+    // pins each cycle uses; the others default to deasserted (1).
+    function setPins(
+      cpu: Z80Cpu,
+      pins: Partial<{
+        nM1: 0 | 1;
+        nMREQ: 0 | 1;
+        nIORQ: 0 | 1;
+        nRD: 0 | 1;
+        nWR: 0 | 1;
+        addr: number;
+        data: number | undefined;
+      }>,
+    ): void {
+      cpu.bus.nM1 = pins.nM1 ?? 1;
+      cpu.bus.nMREQ = pins.nMREQ ?? 1;
+      cpu.bus.nIORQ = pins.nIORQ ?? 1;
+      cpu.bus.nRD = pins.nRD ?? 1;
+      cpu.bus.nWR = pins.nWR ?? 1;
+      if (pins.addr !== undefined) cpu.bus.addr = pins.addr;
+      if ("data" in pins) cpu.bus.data = pins.data;
+    }
+
+    it("all accessors return null on a fresh bus", () => {
+      const { bus } = freshBus();
+      expect(bus.lastMemRead()).toBeNull();
+      expect(bus.lastMemWrite()).toBeNull();
+      expect(bus.lastIoRead()).toBeNull();
+      expect(bus.lastIoWrite()).toBeNull();
+    });
+
+    it("captures mem reads with the byte placed on the bus", () => {
+      const { cpu, bus } = freshBus({ memInit: 0 });
+      bus.mem[0x1234] = 0x42;
+      setPins(cpu, { nMREQ: 0, nRD: 0, addr: 0x1234 });
+      bus.resolve();
+      expect(bus.lastMemRead()).toEqual({ addr: 0x1234, value: 0x42 });
+      // Write trackers untouched.
+      expect(bus.lastMemWrite()).toBeNull();
+    });
+
+    it("captures mem writes with the byte latched into mem", () => {
+      const { cpu, bus } = freshBus({ memInit: 0 });
+      setPins(cpu, { nMREQ: 0, nWR: 0, addr: 0x8000, data: 0xa5 });
+      bus.resolve();
+      expect(bus.lastMemWrite()).toEqual({ addr: 0x8000, value: 0xa5 });
+      expect(bus.lastMemRead()).toBeNull();
+    });
+
+    it("tracks mem reads and writes independently", () => {
+      const { cpu, bus } = freshBus({ memInit: 0 });
+      bus.mem[0x0010] = 0x33;
+      setPins(cpu, { nMREQ: 0, nRD: 0, addr: 0x0010 });
+      bus.resolve();
+      setPins(cpu, { nMREQ: 0, nWR: 0, addr: 0x0020, data: 0x77 });
+      bus.resolve();
+      expect(bus.lastMemRead()).toEqual({ addr: 0x0010, value: 0x33 });
+      expect(bus.lastMemWrite()).toEqual({ addr: 0x0020, value: 0x77 });
+    });
+
+    it("captures IO reads and writes; doesn't conflate with mem trackers", () => {
+      const { cpu, bus } = freshBus({ ioInit: 0 });
+      bus.io[0x00fe] = 0xbf;
+      setPins(cpu, { nIORQ: 0, nRD: 0, addr: 0x00fe });
+      bus.resolve();
+      setPins(cpu, { nIORQ: 0, nWR: 0, addr: 0x00fe, data: 0x07 });
+      bus.resolve();
+      expect(bus.lastIoRead()).toEqual({ addr: 0x00fe, value: 0xbf });
+      expect(bus.lastIoWrite()).toEqual({ addr: 0x00fe, value: 0x07 });
+      expect(bus.lastMemRead()).toBeNull();
+      expect(bus.lastMemWrite()).toBeNull();
+    });
+
+    it("does NOT count INT acknowledge as an IO read", () => {
+      const { cpu, bus } = freshBus();
+      bus.setIntVector(0x42);
+      // M1 + IORQ asserted — INT ack, byte placed from intVector, not io[].
+      setPins(cpu, { nM1: 0, nIORQ: 0, addr: 0x0000 });
+      bus.resolve();
+      expect(cpu.bus.data).toBe(0x42);
+      expect(bus.lastIoRead()).toBeNull();
+      expect(bus.lastIoWrite()).toBeNull();
+    });
+
+    it("most-recent semantics: each new cycle overwrites the prior record", () => {
+      const { cpu, bus } = freshBus({ memInit: 0 });
+      bus.mem[0x0001] = 0x11;
+      bus.mem[0x0002] = 0x22;
+      setPins(cpu, { nMREQ: 0, nRD: 0, addr: 0x0001 });
+      bus.resolve();
+      expect(bus.lastMemRead()).toEqual({ addr: 0x0001, value: 0x11 });
+      setPins(cpu, { nMREQ: 0, nRD: 0, addr: 0x0002 });
+      bus.resolve();
+      expect(bus.lastMemRead()).toEqual({ addr: 0x0002, value: 0x22 });
+    });
+
+    it("returns a fresh record each call (no shared aliasing)", () => {
+      const { cpu, bus } = freshBus({ memInit: 0 });
+      bus.mem[0x1000] = 0xaa;
+      setPins(cpu, { nMREQ: 0, nRD: 0, addr: 0x1000 });
+      bus.resolve();
+      const a = bus.lastMemRead();
+      const b = bus.lastMemRead();
+      expect(a).not.toBe(b);
+      expect(a).toEqual(b);
+    });
+  });
 });

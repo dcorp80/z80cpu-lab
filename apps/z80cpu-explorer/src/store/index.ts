@@ -1,8 +1,18 @@
 import type { CpuState } from "@dcorp80/z80cpu";
 import type { Z80DebugContext } from "@dcorp80/z80cpu-debug";
-import { createContext, createSignal, useContext } from "solid-js";
+import {
+  type Accessor,
+  createContext,
+  createSignal,
+  useContext,
+} from "solid-js";
 import { createStore, produce, unwrap } from "solid-js/store";
-import { DEFAULT_INSTRUCTION_RING_CAP } from "../config/defaults.ts";
+import {
+  BYTES_PER_ROW_OPTIONS,
+  DEFAULT_INSTRUCTION_RING_CAP,
+  DEFAULT_IO_BYTES_PER_ROW,
+  DEFAULT_MEMORY_BYTES_PER_ROW,
+} from "../config/defaults.ts";
 import type { Bus64k } from "../runloop/bus.ts";
 import { MEM_SIZE } from "../runloop/bus.ts";
 import type { PauseReason, RunLoop, RunStatus } from "../runloop/loop.ts";
@@ -21,6 +31,7 @@ import { shortId } from "../util/id.ts";
 import { TraceRing } from "./traceRing.ts";
 import type {
   BreakpointPatch,
+  BusAccessRecord,
   CursorsState,
   InputPinsState,
   NewBreakpoint,
@@ -74,13 +85,24 @@ export interface CreateStoreDeps {
   backend: StorageBackend;
   loop: RunLoop;
   /**
-   * Bus is held privately for action implementations (mem writes for file
-   * load, INT vector mirroring). NOT exposed on the public Store interface
-   * — sections see only signals and verbs (DESIGN §4 "Layering rule").
+   * Bus is held privately for action implementations (mem/IO writes for
+   * file load + hex grid edits, INT vector mirroring, last-touched
+   * sampling on pause). NOT exposed on the public Store interface —
+   * sections see only signals and verbs (DESIGN §4 "Layering rule").
    * Reinit lives in the UI as a `window.location.reload()` button; no
    * targeted bus.reset is needed (DESIGN §7.3).
    */
-  bus: Pick<Bus64k, "setIntVector" | "intVector" | "mem">;
+  bus: Pick<
+    Bus64k,
+    | "setIntVector"
+    | "intVector"
+    | "mem"
+    | "io"
+    | "lastMemRead"
+    | "lastMemWrite"
+    | "lastIoRead"
+    | "lastIoWrite"
+  >;
   /**
    * Source of CPU register/flag snapshots for the cpuState section
    * (REQ §6.5). The store calls `dbg.state()` on each pause to refresh
@@ -188,15 +210,78 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     instructionTrace: { mode: "live" },
   });
 
-  // Memory read path. The `memByte` accessor tracks `memVersion()` so
-  // any consumer createMemo re-runs after writes. Bumped from
-  // `writeAndWarn` (file load / autoload / reload-all) and `zeroHC`
-  // does NOT bump because zero-HC leaves memory alone (REQ §7.3).
-  // `setMemByte` arrives in M7.
+  // Memory / IO read paths. The `memByte` / `ioByte` accessors track
+  // their version signal so any consumer createMemo re-runs after
+  // writes. Bumped from `writeAndWarn` (file load / autoload /
+  // reload-all), `setMemByte`, `setIoByte`. `zeroHC` does NOT bump
+  // because zero-HC leaves memory and IO alone (REQ §7.3).
   const [memVersion, setMemVersion] = createSignal(0);
   const bumpMemVersion = (): void => {
     setMemVersion((v) => v + 1);
   };
+  const [ioVersion, setIoVersion] = createSignal(0);
+  const bumpIoVersion = (): void => {
+    setIoVersion((v) => v + 1);
+  };
+
+  // Watch-window state for Memory and IO sections (M7). Persisted via
+  // `SectionUiState.config.watchAddr`, read through plain accessors
+  // (Solid stores track property reads, so the accessor re-runs when
+  // the relevant slice updates). Jump-request signals are in-memory
+  // event counters — pressing Enter on the watch input bumps them and
+  // the section body reacts with a scrollIntoView side-effect.
+  const watchAddrFromConfig = (sectionId: string): number => {
+    const s = sections.find((sec) => sec.id === sectionId);
+    const v = s?.config.watchAddr;
+    return typeof v === "number" ? v : 0;
+  };
+  const memWatchAddr: Accessor<number> = () => watchAddrFromConfig("memory");
+  const ioWatchAddr: Accessor<number> = () => watchAddrFromConfig("io");
+  const [memWatchJumpVersion, setMemWatchJumpVersion] = createSignal(0);
+  const [ioWatchJumpVersion, setIoWatchJumpVersion] = createSignal(0);
+
+  // Bytes-per-row — same storage path as watchAddr (section config).
+  // Defaults to the matching `DEFAULT_*_BYTES_PER_ROW`; invalid stored
+  // values (corrupt backend, downgrade) fall back to the default.
+  const bytesPerRowFromConfig = (
+    sectionId: string,
+    fallback: number,
+  ): number => {
+    const s = sections.find((sec) => sec.id === sectionId);
+    const v = s?.config.bytesPerRow;
+    return typeof v === "number" &&
+      (BYTES_PER_ROW_OPTIONS as ReadonlyArray<number>).includes(v)
+      ? v
+      : fallback;
+  };
+  const memBytesPerRow: Accessor<number> = () =>
+    bytesPerRowFromConfig("memory", DEFAULT_MEMORY_BYTES_PER_ROW);
+  const ioBytesPerRow: Accessor<number> = () =>
+    bytesPerRowFromConfig("io", DEFAULT_IO_BYTES_PER_ROW);
+  function assertBytesPerRow(n: number, label: string): void {
+    if (!(BYTES_PER_ROW_OPTIONS as ReadonlyArray<number>).includes(n)) {
+      throw new RangeError(
+        `${label}: must be one of ${BYTES_PER_ROW_OPTIONS.join(", ")}; got ${n}`,
+      );
+    }
+  }
+
+  // Bus last-touched snapshots (REQ §6.6 / §6.7 folded summaries).
+  // Sampled from the bus on every pause-edge so consumers see a frozen
+  // "what the CPU did up to the pause" reading. `null` initial value
+  // matches the bus's sentinel-of-"no such cycle yet".
+  const [lastMemRead, setLastMemRead] = createSignal<BusAccessRecord | null>(
+    null,
+  );
+  const [lastMemWrite, setLastMemWrite] = createSignal<BusAccessRecord | null>(
+    null,
+  );
+  const [lastIoRead, setLastIoRead] = createSignal<BusAccessRecord | null>(
+    null,
+  );
+  const [lastIoWrite, setLastIoWrite] = createSignal<BusAccessRecord | null>(
+    null,
+  );
 
   // CPU state for the cpuState section (REQ §6.5). `cpuState` is the
   // last sampled snapshot — refreshed on every pause so the section
@@ -270,6 +355,21 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     // to the final state on the same tick the user paused, not the
     // next rAF.
     setTraceRingVersionThrottled(traceRing.version());
+    // Sample bus last-touched (REQ §6.6 / §6.7). Snapshots — sections
+    // read these on pause and don't see per-edge churn during run.
+    setLastMemRead(bus.lastMemRead());
+    setLastMemWrite(bus.lastMemWrite());
+    setLastIoRead(bus.lastIoRead());
+    setLastIoWrite(bus.lastIoWrite());
+    // The CPU may have written to mem/IO during the run that just
+    // ended; those writes don't flow through `setMemByte`/`setIoByte`
+    // so the version signals never bumped. Bump unconditionally on
+    // pause so the Memory and IO grids re-read. The grids are frozen
+    // during run (§7.5), so one bump per pause is the right cadence
+    // — even when no write occurred, the cost is a re-render that
+    // produces identical DOM.
+    bumpMemVersion();
+    bumpIoVersion();
   });
   loop.onTick((h) => setHc(h));
   loop.onInstruction((trace, hcAtComplete) => {
@@ -332,6 +432,17 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
   function assertAddr16(addr: number, label: string): void {
     if (!Number.isInteger(addr) || addr < 0 || addr > 0xffff) {
       throw new RangeError(`${label}: address out of range 0..0xFFFF: ${addr}`);
+    }
+  }
+
+  /**
+   * Same boundary defense for byte values entering the public verbs.
+   * The hex grid's edit input already validates via `parseHex` + range
+   * check; this catches programmatic mistakes (tests, future scripting).
+   */
+  function assertByte(value: number, label: string): void {
+    if (!Number.isInteger(value) || value < 0 || value > 0xff) {
+      throw new RangeError(`${label}: byte out of range 0..0xFF: ${value}`);
     }
   }
 
@@ -672,6 +783,60 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       return bus.mem[addr & 0xffff];
     },
     memVersion,
+    setMemByte(addr: number, value: number) {
+      // Paused-only per REQ §6.6. Calls during run silently no-op —
+      // matches the input's `disabled` state in the UI.
+      if (status() !== "paused") return;
+      assertAddr16(addr, "setMemByte");
+      assertByte(value, "setMemByte value");
+      bus.mem[addr] = value;
+      bumpMemVersion();
+    },
+    ioByte(addr: number) {
+      ioVersion();
+      return bus.io[addr & 0xffff];
+    },
+    ioVersion,
+    setIoByte(addr: number, value: number) {
+      // Paused-only per REQ §6.7. Same gate as setMemByte.
+      if (status() !== "paused") return;
+      assertAddr16(addr, "setIoByte");
+      assertByte(value, "setIoByte value");
+      bus.io[addr] = value;
+      bumpIoVersion();
+    },
+    lastMemRead,
+    lastMemWrite,
+    lastIoRead,
+    lastIoWrite,
+    memWatchAddr,
+    setMemWatchAddr(addr: number) {
+      assertAddr16(addr, "setMemWatchAddr");
+      updateSectionConfig("memory", { watchAddr: addr });
+    },
+    memWatchJumpVersion,
+    requestMemWatchJump() {
+      setMemWatchJumpVersion((v) => v + 1);
+    },
+    ioWatchAddr,
+    setIoWatchAddr(addr: number) {
+      assertAddr16(addr, "setIoWatchAddr");
+      updateSectionConfig("io", { watchAddr: addr });
+    },
+    ioWatchJumpVersion,
+    requestIoWatchJump() {
+      setIoWatchJumpVersion((v) => v + 1);
+    },
+    memBytesPerRow,
+    setMemBytesPerRow(n: number) {
+      assertBytesPerRow(n, "setMemBytesPerRow");
+      updateSectionConfig("memory", { bytesPerRow: n });
+    },
+    ioBytesPerRow,
+    setIoBytesPerRow(n: number) {
+      assertBytesPerRow(n, "setIoBytesPerRow");
+      updateSectionConfig("io", { bytesPerRow: n });
+    },
     inputPins,
     setIntVector(byte: number) {
       // Bus is authoritative; mirror into the UI store so dependent

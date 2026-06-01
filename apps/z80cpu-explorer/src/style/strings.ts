@@ -101,8 +101,17 @@ export const STR = {
   },
   memory: {
     title: "Memory",
-    foldedEmpty: "64KB · no activity",
-    bodyPlaceholder: "Memory section — milestone 7.",
+    // Folded summary: "64KB · watch=4020 · last write 4022=A7 · last read 0042".
+    // Clauses drop when their data is absent so the line reads cleanly
+    // on fresh boot.
+    foldedHeader: (watch: string) => `64KB · watch=${watch}`,
+    foldedLastWrite: (addr: string, value: string) =>
+      `last write ${addr}=${value}`,
+    foldedLastRead: (addr: string) => `last read ${addr}`,
+    foldedNoActivity: "no activity",
+    watchLabel: "Watch:",
+    watchTooltip: "Hex address to watch — press Enter to jump back to this row",
+    watchAriaLabel: "Memory watch address",
   },
   instructionTrace: {
     title: "Instruction trace",
@@ -148,8 +157,21 @@ export const STR = {
   },
   io: {
     title: "IO",
-    foldedEmpty: "no IO activity",
-    bodyPlaceholder: "IO section — milestone 7.",
+    foldedHeader: (watch: string) => `64K ports · watch=${watch}`,
+    foldedLastOut: (addr: string, value: string) => `last out ${addr}=${value}`,
+    foldedLastIn: (addr: string, value: string) => `last in ${addr}=${value}`,
+    foldedNoActivity: "no activity",
+    watchLabel: "Watch:",
+    watchTooltip: "Hex port to watch — press Enter to jump back to this row",
+    watchAriaLabel: "IO watch address",
+  },
+  hexGrid: {
+    cellEditAriaLabel: (addr: string) => `Edit byte at ${addr}`,
+    cellAsciiEditAriaLabel: (addr: string) => `Edit ASCII character at ${addr}`,
+    // Non-printable byte glyph in the ASCII column.
+    nonPrintable: ".",
+    bytesPerRowLabel: "Width:",
+    bytesPerRowAriaLabel: "Bytes per row",
   },
   hwTrace: {
     title: "Hardware trace",

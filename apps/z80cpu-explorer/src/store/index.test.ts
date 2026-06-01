@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { defaultSectionIds } from "../sections/sectionRegistry.ts";
 import { MemoryBackend } from "../storage/memory.ts";
 import { createAppStore } from "./index.ts";
+import { makeStubBus } from "./testStubBus.ts";
 import { makeStubDbg } from "./testStubDbg.ts";
 import { makeStubLoop } from "./testStubLoop.ts";
 
@@ -28,18 +29,6 @@ function mkTrace(
   t.hc = opts.hc ?? 0;
   t.nextPc = opts.nextPc ?? 0;
   return t;
-}
-
-function makeStubBus() {
-  let v = 0xff;
-  const mem = new Uint8Array(0x10000).fill(0xff);
-  return {
-    mem,
-    intVector: () => v,
-    setIntVector: (b: number) => {
-      v = b & 0xff;
-    },
-  };
 }
 
 async function freshStore() {
@@ -344,7 +333,212 @@ describe("createAppStore", () => {
       expect(store.memByte(0x0000)).toBe(0xde);
       expect(store.memByte(0x0001)).toBe(0xad);
     });
+  });
 
+  describe("memory & IO write actions (M7 — REQ §6.6 / §6.7)", () => {
+    it("setMemByte writes to mem and bumps memVersion when paused", async () => {
+      const { store, bus } = await freshStore();
+      // Stub loop starts paused — write should land.
+      const v0 = store.memVersion();
+      store.setMemByte(0x4020, 0xa7);
+      expect(bus.mem[0x4020]).toBe(0xa7);
+      expect(store.memByte(0x4020)).toBe(0xa7);
+      expect(store.memVersion()).toBeGreaterThan(v0);
+    });
+
+    it("setMemByte no-ops while running (paused-only gate per §7.5)", async () => {
+      const { store, bus, loop } = await freshStore();
+      loop.setStatus("running");
+      // Drive the reactive store.status() signal to "running" too — the
+      // gate reads the store-side signal, not loop.status().
+      store.run();
+      const v0 = store.memVersion();
+      store.setMemByte(0x4020, 0xa7);
+      expect(bus.mem[0x4020]).toBe(0xff);
+      expect(store.memVersion()).toBe(v0);
+    });
+
+    it("setMemByte rejects out-of-range addrs and values", async () => {
+      const { store } = await freshStore();
+      expect(() => store.setMemByte(-1, 0)).toThrow(RangeError);
+      expect(() => store.setMemByte(0x10000, 0)).toThrow(RangeError);
+      expect(() => store.setMemByte(0, -1)).toThrow(RangeError);
+      expect(() => store.setMemByte(0, 0x100)).toThrow(RangeError);
+      expect(() => store.setMemByte(0, 1.5)).toThrow(RangeError);
+    });
+
+    it("ioByte reads from bus.io masked to 16 bits; ioVersion bumps on setIoByte", async () => {
+      const { store, bus } = await freshStore();
+      bus.io[0x00fe] = 0xbf;
+      expect(store.ioByte(0x00fe)).toBe(0xbf);
+      // Mask: 0x100fe → 0x00fe
+      expect(store.ioByte(0x100fe)).toBe(0xbf);
+      const v0 = store.ioVersion();
+      store.setIoByte(0x00fe, 0x07);
+      expect(bus.io[0x00fe]).toBe(0x07);
+      expect(store.ioByte(0x00fe)).toBe(0x07);
+      expect(store.ioVersion()).toBeGreaterThan(v0);
+    });
+
+    it("setIoByte no-ops while running", async () => {
+      const { store, bus, loop } = await freshStore();
+      loop.setStatus("running");
+      store.run();
+      const v0 = store.ioVersion();
+      store.setIoByte(0x00fe, 0x07);
+      expect(bus.io[0x00fe]).toBe(0xff);
+      expect(store.ioVersion()).toBe(v0);
+    });
+
+    it("setIoByte rejects out-of-range addrs and values", async () => {
+      const { store } = await freshStore();
+      expect(() => store.setIoByte(-1, 0)).toThrow(RangeError);
+      expect(() => store.setIoByte(0x10000, 0)).toThrow(RangeError);
+      expect(() => store.setIoByte(0, 0x100)).toThrow(RangeError);
+    });
+  });
+
+  describe("bus last-touched sampling (M7)", () => {
+    it("all four accessors start null on a fresh store", async () => {
+      const { store } = await freshStore();
+      expect(store.lastMemRead()).toBeNull();
+      expect(store.lastMemWrite()).toBeNull();
+      expect(store.lastIoRead()).toBeNull();
+      expect(store.lastIoWrite()).toBeNull();
+    });
+
+    it("samples bus accessors on every pause-edge", async () => {
+      const { store, bus, loop } = await freshStore();
+      bus.setLastMemRead({ addr: 0x0042, value: 0xab });
+      bus.setLastMemWrite({ addr: 0x4020, value: 0xa7 });
+      bus.setLastIoRead({ addr: 0x00fe, value: 0xbf });
+      bus.setLastIoWrite({ addr: 0x00fe, value: 0x07 });
+      loop.emitPause({ kind: "user" });
+      expect(store.lastMemRead()).toEqual({ addr: 0x0042, value: 0xab });
+      expect(store.lastMemWrite()).toEqual({ addr: 0x4020, value: 0xa7 });
+      expect(store.lastIoRead()).toEqual({ addr: 0x00fe, value: 0xbf });
+      expect(store.lastIoWrite()).toEqual({ addr: 0x00fe, value: 0x07 });
+    });
+
+    it("a later pause overwrites the snapshot", async () => {
+      const { store, bus, loop } = await freshStore();
+      bus.setLastMemWrite({ addr: 0x0001, value: 0x11 });
+      loop.emitPause({ kind: "user" });
+      bus.setLastMemWrite({ addr: 0x0002, value: 0x22 });
+      loop.emitPause({ kind: "step-complete" });
+      expect(store.lastMemWrite()).toEqual({ addr: 0x0002, value: 0x22 });
+    });
+  });
+
+  describe("watch addr persistence (M7)", () => {
+    it("defaults to 0 when section config is empty", async () => {
+      const { store } = await freshStore();
+      expect(store.memWatchAddr()).toBe(0);
+      expect(store.ioWatchAddr()).toBe(0);
+    });
+
+    it("setMemWatchAddr writes through to section config", async () => {
+      const { store } = await freshStore();
+      store.setMemWatchAddr(0x4020);
+      expect(store.memWatchAddr()).toBe(0x4020);
+      // Stored under the section's config map so reload restores it.
+      const mem = store.sections.find((s) => s.id === "memory");
+      expect(mem?.config.watchAddr).toBe(0x4020);
+    });
+
+    it("setIoWatchAddr is independent of memWatchAddr", async () => {
+      const { store } = await freshStore();
+      store.setMemWatchAddr(0x4020);
+      store.setIoWatchAddr(0x00fe);
+      expect(store.memWatchAddr()).toBe(0x4020);
+      expect(store.ioWatchAddr()).toBe(0x00fe);
+    });
+
+    it("rejects out-of-range watch addresses", async () => {
+      const { store } = await freshStore();
+      expect(() => store.setMemWatchAddr(-1)).toThrow(RangeError);
+      expect(() => store.setMemWatchAddr(0x10000)).toThrow(RangeError);
+      expect(() => store.setIoWatchAddr(1.5)).toThrow(RangeError);
+    });
+
+    it("restores watch addr from stored UI state on boot", async () => {
+      const backend = new MemoryBackend();
+      await backend.saveUiState({
+        sections: [
+          { id: "memory", folded: false, config: { watchAddr: 0x8000 } },
+          { id: "io", folded: false, config: { watchAddr: 0x00fe } },
+        ],
+      });
+      const store = await createAppStore({
+        backend,
+        loop: makeStubLoop(),
+        bus: makeStubBus(),
+        dbg: makeStubDbg(),
+      });
+      expect(store.memWatchAddr()).toBe(0x8000);
+      expect(store.ioWatchAddr()).toBe(0x00fe);
+    });
+
+    it("requestMemWatchJump bumps memWatchJumpVersion", async () => {
+      const { store } = await freshStore();
+      const v0 = store.memWatchJumpVersion();
+      store.requestMemWatchJump();
+      expect(store.memWatchJumpVersion()).toBeGreaterThan(v0);
+    });
+
+    it("requestIoWatchJump bumps ioWatchJumpVersion independently", async () => {
+      const { store } = await freshStore();
+      const memV = store.memWatchJumpVersion();
+      const ioV = store.ioWatchJumpVersion();
+      store.requestIoWatchJump();
+      expect(store.ioWatchJumpVersion()).toBeGreaterThan(ioV);
+      expect(store.memWatchJumpVersion()).toBe(memV);
+    });
+  });
+
+  describe("bytes-per-row per section (M7)", () => {
+    it("defaults to 16 for both sections", async () => {
+      const { store } = await freshStore();
+      expect(store.memBytesPerRow()).toBe(16);
+      expect(store.ioBytesPerRow()).toBe(16);
+    });
+
+    it("setMemBytesPerRow persists via section config", async () => {
+      const { store } = await freshStore();
+      store.setMemBytesPerRow(32);
+      expect(store.memBytesPerRow()).toBe(32);
+      const mem = store.sections.find((s) => s.id === "memory");
+      expect(mem?.config.bytesPerRow).toBe(32);
+    });
+
+    it("rejects non-allowed bytes-per-row values", async () => {
+      const { store } = await freshStore();
+      expect(() => store.setMemBytesPerRow(20)).toThrow(RangeError);
+      expect(() => store.setIoBytesPerRow(8)).toThrow(RangeError);
+    });
+
+    it("restores stored bytes-per-row from UI state on boot; clamps unknowns", async () => {
+      const backend = new MemoryBackend();
+      await backend.saveUiState({
+        sections: [
+          { id: "memory", folded: false, config: { bytesPerRow: 64 } },
+          // Bad value in storage — falls back to default rather than
+          // breaking the grid math.
+          { id: "io", folded: false, config: { bytesPerRow: 7 } },
+        ],
+      });
+      const store = await createAppStore({
+        backend,
+        loop: makeStubLoop(),
+        bus: makeStubBus(),
+        dbg: makeStubDbg(),
+      });
+      expect(store.memBytesPerRow()).toBe(64);
+      expect(store.ioBytesPerRow()).toBe(16);
+    });
+  });
+
+  describe("legacy int-vector + pause-reason (regression block)", () => {
     it("setIntVector masks to 8 bits and pushes through to the bus", async () => {
       const { store, bus } = await freshStore();
       store.setIntVector(0x1ab);

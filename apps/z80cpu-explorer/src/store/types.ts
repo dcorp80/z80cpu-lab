@@ -1,6 +1,7 @@
 import type { CpuState } from "@dcorp80/z80cpu";
 import type { Accessor } from "solid-js";
 import type { Store as SolidStore } from "solid-js/store";
+import type { BusAccessRecord } from "../runloop/bus.ts";
 import type { PauseReason, RunStatus } from "../runloop/loop.ts";
 import type {
   Breakpoint,
@@ -10,6 +11,7 @@ import type {
 } from "../storage/types.ts";
 import type { TraceRing } from "./traceRing.ts";
 
+export type { BusAccessRecord } from "../runloop/bus.ts";
 // Re-export so loop / sections can import BP-related types from a single
 // hub (the store) without reaching into storage internals.
 export type { Breakpoint } from "../storage/types.ts";
@@ -111,12 +113,51 @@ export interface Store {
   detachInstructionTraceCursor(anchorHc: number): void;
   snapInstructionTraceCursorToLive(): void;
 
-  // ── memory read path. Sections (instruction trace preview here, the
-  // hex grid in M7) read mem through `memByte`; the createMemo tracking
-  // `memVersion()` triggers re-render after writes. Editable writes
-  // arrive in M7 via `setMemByte`.
+  // ── memory & IO read/write (REQ §6.6 / §6.7). Sections read through
+  // `memByte` / `ioByte`; the createMemo tracking the matching version
+  // signal re-runs after writes. `setMemByte` / `setIoByte` are
+  // paused-only — calls during run no-op (REQ §7.5).
   memByte(addr: number): number;
   readonly memVersion: Accessor<number>;
+  setMemByte(addr: number, value: number): void;
+  ioByte(addr: number): number;
+  readonly ioVersion: Accessor<number>;
+  setIoByte(addr: number, value: number): void;
+
+  // ── bus last-touched (REQ §6.6 / §6.7 folded summaries). Sampled
+  // from the bus on every `loop.onPause`, so they reflect what the
+  // CPU did before pausing — frozen during run per §7.5. `null` until
+  // the corresponding cycle has occurred at least once.
+  readonly lastMemRead: Accessor<BusAccessRecord | null>;
+  readonly lastMemWrite: Accessor<BusAccessRecord | null>;
+  readonly lastIoRead: Accessor<BusAccessRecord | null>;
+  readonly lastIoWrite: Accessor<BusAccessRecord | null>;
+
+  // ── watch-window state (M7). The Memory and IO sections each render
+  // a fixed window of rows centered on a user-typed address. Watch
+  // address persists via `SectionUiState.config.watchAddr` so reload
+  // restores the user's view. The `*JumpVersion` signals bump every
+  // time the user presses Enter on the watch input; the section body
+  // listens and scrolls the watch row back into view, even if the
+  // address itself didn't change.
+  readonly memWatchAddr: Accessor<number>;
+  setMemWatchAddr(addr: number): void;
+  readonly memWatchJumpVersion: Accessor<number>;
+  requestMemWatchJump(): void;
+  readonly ioWatchAddr: Accessor<number>;
+  setIoWatchAddr(addr: number): void;
+  readonly ioWatchJumpVersion: Accessor<number>;
+  requestIoWatchJump(): void;
+
+  /**
+   * Bytes-per-row for each hex grid (16 / 32 / 64). Persisted via
+   * `SectionUiState.config.bytesPerRow`. Setters validate against
+   * `BYTES_PER_ROW_OPTIONS`; an invalid value throws `RangeError`.
+   */
+  readonly memBytesPerRow: Accessor<number>;
+  setMemBytesPerRow(n: number): void;
+  readonly ioBytesPerRow: Accessor<number>;
+  setIoBytesPerRow(n: number): void;
 
   // ── input pins
   readonly inputPins: SolidStore<InputPinsState>;

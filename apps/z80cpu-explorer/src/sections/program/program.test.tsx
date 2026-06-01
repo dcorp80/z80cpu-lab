@@ -15,31 +15,11 @@ import {
   type Store,
   StoreProvider,
 } from "../../store/index.ts";
+import { makeStubBus, type StubBus } from "../../store/testStubBus.ts";
 import { makeStubDbg } from "../../store/testStubDbg.ts";
 import { makeStubLoop } from "../../store/testStubLoop.ts";
 import { STR } from "../../style/strings.ts";
 import { __testing, defaultPickFile, program } from "./index.tsx";
-
-interface StubBus {
-  mem: Uint8Array;
-  io: Uint8Array;
-  intVector(): number;
-  setIntVector(b: number): void;
-}
-
-function makeStubBus(): StubBus {
-  let v = 0xff;
-  const mem = new Uint8Array(0x10000).fill(0xff);
-  const io = new Uint8Array(0x10000).fill(0xff);
-  return {
-    mem,
-    io,
-    intVector: () => v,
-    setIntVector: (b: number) => {
-      v = b & 0xff;
-    },
-  };
-}
 
 interface Harness {
   store: Store;
