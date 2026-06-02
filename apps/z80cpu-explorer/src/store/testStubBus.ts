@@ -10,6 +10,8 @@ export interface StubBus {
   intVector(): number;
   setIntVector(byte: number): void;
   broadcastIoLowByte(port: number, value: number): void;
+  ioWriteProtect(): boolean;
+  setIoWriteProtect(on: boolean): void;
   lastMemRead(): BusAccessRecord | null;
   lastMemWrite(): BusAccessRecord | null;
   lastIoRead(): BusAccessRecord | null;
@@ -23,6 +25,7 @@ export interface StubBus {
 
 export function makeStubBus(): StubBus {
   let v = 0xff;
+  let wp = false;
   const mem = new Uint8Array(0x10000).fill(0xff);
   const io = new Uint8Array(0x10000).fill(0xff);
   let lastMR: BusAccessRecord | null = null;
@@ -42,6 +45,10 @@ export function makeStubBus(): StubBus {
       for (let hi = 0; hi < 256; hi++) {
         io[(hi << 8) | p] = val;
       }
+    },
+    ioWriteProtect: () => wp,
+    setIoWriteProtect: (on: boolean) => {
+      wp = on === true;
     },
     lastMemRead: () => lastMR,
     lastMemWrite: () => lastMW,

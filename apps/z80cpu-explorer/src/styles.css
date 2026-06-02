@@ -851,7 +851,7 @@ body {
   border-color: var(--danger);
 }
 
-/* IO 8-bit view (REQ §11). Cells whose 256 high-byte aliases disagree
+/* IO 8-bit view (REQ §6.7). Cells whose 256 high-byte aliases disagree
    show the io[port] value plus a danger-tinted tag so the user knows
    the cell is showing one of several values. Editing rewrites all
    aliases via setIoBytePort8 → broadcastIoLowByte. */
@@ -879,6 +879,23 @@ body {
   border: 1px solid var(--border);
   border-radius: 2px;
   padding: 0 4px;
+}
+
+/* IO write-protect toggle in the section header. Suppresses CPU OUT
+   side effects at the bus while still letting user edits land. */
+.io-wp {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 12px;
+}
+.io-wp.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.io-wp-label {
+  color: var(--muted);
+  font-size: 0.9em;
 }
 
 .hex-row-ascii {

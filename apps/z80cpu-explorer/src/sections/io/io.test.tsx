@@ -114,7 +114,7 @@ describe("IO section", () => {
   });
 });
 
-describe("IO section — 8-bit view (REQ §11)", () => {
+describe("IO section — 8-bit view (REQ §6.7)", () => {
   it("toggle switches the body to a windowed 8-bit port grid", async () => {
     harness = await mount("Body");
     // 16-bit defaults: 1 + 1 + 1 = 3 rows.
@@ -325,5 +325,54 @@ describe("IO section — 8-bit view (REQ §11)", () => {
     harness.store.setIoBytesPerRow(64);
     expect(harness.container.querySelectorAll(".hex-row").length).toBe(3);
     expect(harness.container.querySelectorAll(".hex-cell").length).toBe(3 * 64);
+  });
+});
+
+describe("IO section — write protect (REQ §6.7)", () => {
+  it("checkbox renders in the header and reflects store state", async () => {
+    harness = await mount("Header");
+    const cb = harness.container.querySelector(
+      ".io-wp-checkbox",
+    ) as HTMLInputElement;
+    expect(cb).not.toBeNull();
+    expect(cb.checked).toBe(false);
+    harness.store.setIoWriteProtect(true);
+    expect(cb.checked).toBe(true);
+  });
+
+  it("toggling the checkbox mirrors into store + bus", async () => {
+    harness = await mount("Header");
+    const cb = harness.container.querySelector(
+      ".io-wp-checkbox",
+    ) as HTMLInputElement;
+    fireEvent.click(cb);
+    expect(harness.store.ioWriteProtect()).toBe(true);
+    expect(harness.bus.ioWriteProtect()).toBe(true);
+    fireEvent.click(cb);
+    expect(harness.store.ioWriteProtect()).toBe(false);
+    expect(harness.bus.ioWriteProtect()).toBe(false);
+  });
+
+  it("checkbox is disabled while the CPU is not paused", async () => {
+    harness = await mount("Header");
+    const cb = harness.container.querySelector(
+      ".io-wp-checkbox",
+    ) as HTMLInputElement;
+    expect(cb.disabled).toBe(false);
+    expect(
+      harness.container
+        .querySelector(".io-wp")
+        ?.classList.contains("is-disabled"),
+    ).toBe(false);
+    harness.store.run();
+    expect(cb.disabled).toBe(true);
+    expect(
+      harness.container
+        .querySelector(".io-wp")
+        ?.classList.contains("is-disabled"),
+    ).toBe(true);
+    // Pausing re-enables the toggle.
+    harness.loop.emitPause({ kind: "user" });
+    expect(cb.disabled).toBe(false);
   });
 });

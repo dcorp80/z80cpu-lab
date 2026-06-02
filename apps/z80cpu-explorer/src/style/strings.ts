@@ -175,6 +175,10 @@ export const STR = {
       "16-bit: full 64K port view. 8-bit: 256 ports, edits broadcast to all upper-byte aliases.",
     aliasMismatchTooltip: (port: string) =>
       `Port ${port}: high-byte aliases hold different values; cell shows io[00${port}]. Editing rewrites all 256 aliases.`,
+    writeProtectLabel: "WP",
+    writeProtectAriaLabel: "IO write protect",
+    writeProtectTooltip:
+      "Write protect — block CPU OUT writes from updating IO state. User edits still apply.",
   },
   hexGrid: {
     cellEditAriaLabel: (addr: string) => `Edit byte at ${addr}`,

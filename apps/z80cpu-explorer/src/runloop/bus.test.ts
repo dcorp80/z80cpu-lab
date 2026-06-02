@@ -9,6 +9,30 @@ function freshBus(overrides: Partial<BusConfig> = {}) {
   return { cpu, bus };
 }
 
+// Drives a single bus cycle by setting only the relevant pins; everything
+// not passed defaults to deasserted (1). Shared across the per-cycle and
+// last-touched describes so each test stays self-explanatory.
+function setPins(
+  cpu: Z80Cpu,
+  pins: Partial<{
+    nM1: 0 | 1;
+    nMREQ: 0 | 1;
+    nIORQ: 0 | 1;
+    nRD: 0 | 1;
+    nWR: 0 | 1;
+    addr: number;
+    data: number | undefined;
+  }>,
+): void {
+  cpu.bus.nM1 = pins.nM1 ?? 1;
+  cpu.bus.nMREQ = pins.nMREQ ?? 1;
+  cpu.bus.nIORQ = pins.nIORQ ?? 1;
+  cpu.bus.nRD = pins.nRD ?? 1;
+  cpu.bus.nWR = pins.nWR ?? 1;
+  if (pins.addr !== undefined) cpu.bus.addr = pins.addr;
+  if ("data" in pins) cpu.bus.data = pins.data;
+}
+
 describe("makeBus64k", () => {
   it("fills mem and IO with the configured init bytes (default FF per REQ §6.6/§6.7)", () => {
     const { bus } = freshBus();
@@ -180,29 +204,6 @@ describe("makeBus64k", () => {
   });
 
   describe("last-touched tracking", () => {
-    // Helper to drive a specific cycle through resolve(). Sets only the
-    // pins each cycle uses; the others default to deasserted (1).
-    function setPins(
-      cpu: Z80Cpu,
-      pins: Partial<{
-        nM1: 0 | 1;
-        nMREQ: 0 | 1;
-        nIORQ: 0 | 1;
-        nRD: 0 | 1;
-        nWR: 0 | 1;
-        addr: number;
-        data: number | undefined;
-      }>,
-    ): void {
-      cpu.bus.nM1 = pins.nM1 ?? 1;
-      cpu.bus.nMREQ = pins.nMREQ ?? 1;
-      cpu.bus.nIORQ = pins.nIORQ ?? 1;
-      cpu.bus.nRD = pins.nRD ?? 1;
-      cpu.bus.nWR = pins.nWR ?? 1;
-      if (pins.addr !== undefined) cpu.bus.addr = pins.addr;
-      if ("data" in pins) cpu.bus.data = pins.data;
-    }
-
     it("all accessors return null on a fresh bus", () => {
       const { bus } = freshBus();
       expect(bus.lastMemRead()).toBeNull();
@@ -285,6 +286,69 @@ describe("makeBus64k", () => {
       const b = bus.lastMemRead();
       expect(a).not.toBe(b);
       expect(a).toEqual(b);
+    });
+  });
+
+  describe("ioWriteProtect", () => {
+    it("defaults to false on a fresh bus", () => {
+      const { bus } = freshBus();
+      expect(bus.ioWriteProtect()).toBe(false);
+    });
+
+    it("when on, CPU IO writes do not update io[]", () => {
+      const { cpu, bus } = freshBus({ ioInit: 0 });
+      bus.setIoWriteProtect(true);
+      setPins(cpu, { nIORQ: 0, nWR: 0, addr: 0x00fe, data: 0xa5 });
+      bus.resolve();
+      expect(bus.io[0x00fe]).toBe(0);
+    });
+
+    it("when on, lastIoWrite still records the attempted cycle", () => {
+      // The CPU cycle still happened; the bus gates the side-effect, not
+      // the observation. Lets the IO section surface what the program tried.
+      const { cpu, bus } = freshBus({ ioInit: 0 });
+      bus.setIoWriteProtect(true);
+      setPins(cpu, { nIORQ: 0, nWR: 0, addr: 0x00fe, data: 0xa5 });
+      bus.resolve();
+      expect(bus.lastIoWrite()).toEqual({ addr: 0x00fe, value: 0xa5 });
+    });
+
+    it("does not gate IO reads", () => {
+      const { cpu, bus } = freshBus({ ioInit: 0 });
+      bus.io[0x00fe] = 0xbf;
+      bus.setIoWriteProtect(true);
+      setPins(cpu, { nIORQ: 0, nRD: 0, addr: 0x00fe });
+      bus.resolve();
+      expect(cpu.bus.data).toBe(0xbf);
+    });
+
+    it("does not gate mem writes", () => {
+      const { cpu, bus } = freshBus({ memInit: 0 });
+      bus.setIoWriteProtect(true);
+      setPins(cpu, { nMREQ: 0, nWR: 0, addr: 0x8000, data: 0x42 });
+      bus.resolve();
+      expect(bus.mem[0x8000]).toBe(0x42);
+    });
+
+    it("does not gate broadcastIoLowByte — user edits bypass WP", () => {
+      const { bus } = freshBus({ ioInit: 0 });
+      bus.setIoWriteProtect(true);
+      bus.broadcastIoLowByte(0x80, 0x5a);
+      for (let hi = 0; hi < 256; hi++) {
+        expect(bus.io[(hi << 8) | 0x80]).toBe(0x5a);
+      }
+    });
+
+    it("toggling off restores CPU writes", () => {
+      const { cpu, bus } = freshBus({ ioInit: 0 });
+      bus.setIoWriteProtect(true);
+      setPins(cpu, { nIORQ: 0, nWR: 0, addr: 0x00fe, data: 0xa5 });
+      bus.resolve();
+      expect(bus.io[0x00fe]).toBe(0);
+      bus.setIoWriteProtect(false);
+      setPins(cpu, { nIORQ: 0, nWR: 0, addr: 0x00fe, data: 0xa5 });
+      bus.resolve();
+      expect(bus.io[0x00fe]).toBe(0xa5);
     });
   });
 });

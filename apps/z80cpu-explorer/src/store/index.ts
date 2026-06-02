@@ -100,6 +100,9 @@ export interface CreateStoreDeps {
     | "intVector"
     | "mem"
     | "io"
+    | "broadcastIoLowByte"
+    | "ioWriteProtect"
+    | "setIoWriteProtect"
     | "lastMemRead"
     | "lastMemWrite"
     | "lastIoRead"
@@ -305,7 +308,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
   const ioBytesPerRow: Accessor<number> = () =>
     bytesPerRowFromConfig("io", DEFAULT_IO_BYTES_PER_ROW);
 
-  // IO render mode (REQ §11). '16bit' renders the default 64K-port grid;
+  // IO render mode (REQ §6.7). '16bit' renders the default 64K-port grid;
   // '8bit' renders 256 cells where each write broadcasts to all 256
   // high-byte aliases. Persisted via the IO section's config; falls
   // back to '16bit' for older backends or corrupt values.
@@ -314,6 +317,19 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     const v = s?.config.viewMode;
     return v === "8bit" ? "8bit" : "16bit";
   };
+
+  // IO write protect (REQ §6.7). Persisted via the IO section's config;
+  // section config is the persistence root, the bus owns the runtime
+  // flag the resolver reads on every cycle. Setters keep both in sync.
+  // Malformed persisted values fall back to false.
+  const ioWriteProtect: Accessor<boolean> = () => {
+    const s = sections.find((sec) => sec.id === "io");
+    return s?.config.writeProtect === true;
+  };
+  // Sync persisted state into the bus once at boot — keeps the hot-path
+  // resolver allocation- and accessor-free while still honoring the
+  // user's last toggle across reloads.
+  bus.setIoWriteProtect(ioWriteProtect());
   function assertBytesPerRow(n: number, label: string): void {
     if (!(BYTES_PER_ROW_OPTIONS as ReadonlyArray<number>).includes(n)) {
       throw new RangeError(
@@ -948,6 +964,16 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
         }
       }
       updateSectionConfig("io", { viewMode: mode });
+    },
+    ioWriteProtect,
+    setIoWriteProtect(on: boolean) {
+      // Paused-only — toggling WP mid-run has confusing semantics (some
+      // OUTs already landed, the next one is suppressed). Matches the
+      // checkbox's `disabled` gate in WriteProtectToggle.
+      if (status() !== "paused") return;
+      const v = on === true;
+      bus.setIoWriteProtect(v);
+      updateSectionConfig("io", { writeProtect: v });
     },
     inputPins,
     setIntVector(byte: number) {

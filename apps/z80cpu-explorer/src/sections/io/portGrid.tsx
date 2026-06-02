@@ -1,4 +1,4 @@
-// 8-bit-decoded IO view (REQ §11). Structurally a HexGrid clone for the
+// 8-bit-decoded IO view (REQ §6.7). Structurally a HexGrid clone for the
 // 256-port address space:
 //   - Renders a windowed view (rowsBefore + 1 + rowsAfter rows)
 //     centred on the watchAddr, identical shape to the 16-bit IO and

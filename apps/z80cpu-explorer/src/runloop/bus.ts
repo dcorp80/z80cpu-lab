@@ -34,11 +34,20 @@ export interface Bus64k {
   /**
    * Write `value` into all 256 high-byte aliases of `port` in the IO
    * array (`io[(hi<<8) | port] = value` for hi in 0..255). Used by the
-   * IO section's 8-bit view (REQ §11) so the user can seed an
+   * IO section's 8-bit view (REQ §6.7) so the user can seed an
    * A0–A7-only-decoded port without minding the upper address bits.
    * Inputs are masked at the boundary; caller bumps `ioVersion`.
    */
   broadcastIoLowByte(port: number, value: number): void;
+  /**
+   * When true, CPU IO write cycles are suppressed at the bus — io[]
+   * state stays unchanged. `lastIoWrite` still records the cycle so
+   * the IO section can surface the CPU's attempted write. User edits
+   * (`io[…] =` via the store, `broadcastIoLowByte`) bypass this gate.
+   * Default false.
+   */
+  ioWriteProtect(): boolean;
+  setIoWriteProtect(on: boolean): void;
   resolve(): void;
   /**
    * Most recent mem/IO accesses, captured inside `resolve()`. Returns
@@ -74,6 +83,7 @@ export function makeBus64k(cpu: Z80Cpu, config: BusConfig): Bus64k {
   let lastIoReadValue = 0;
   let lastIoWriteAddr = -1;
   let lastIoWriteValue = 0;
+  let ioWriteProtect = false;
   const resolve = () => {
     const { nM1, nMREQ, nIORQ, nRD, nWR, addr, data } = cpu.bus;
     if (nMREQ === 0) {
@@ -103,7 +113,9 @@ export function makeBus64k(cpu: Z80Cpu, config: BusConfig): Bus64k {
           lastIoReadValue = v;
         }
         if (nWR === 0) {
-          io[addr] = data;
+          // Track the cycle even when WP gates the side-effect, so the
+          // user sees what the program tried to write at the port.
+          if (!ioWriteProtect) io[addr] = data;
           lastIoWriteAddr = addr;
           lastIoWriteValue = data;
         }
@@ -124,6 +136,10 @@ export function makeBus64k(cpu: Z80Cpu, config: BusConfig): Bus64k {
       for (let hi = 0; hi < 256; hi++) {
         io[(hi << 8) | p] = v;
       }
+    },
+    ioWriteProtect: () => ioWriteProtect,
+    setIoWriteProtect(on) {
+      ioWriteProtect = on === true;
     },
     lastMemRead: () =>
       lastMemReadAddr < 0

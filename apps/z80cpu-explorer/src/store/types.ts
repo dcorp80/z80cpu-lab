@@ -137,7 +137,7 @@ export interface Store {
   readonly ioVersion: Accessor<number>;
   setIoByte(addr: number, value: number): void;
   /**
-   * 8-bit-decoded IO write (REQ §11). Writes `value` to all 256
+   * 8-bit-decoded IO write (REQ §6.7). Writes `value` to all 256
    * high-byte aliases of `port` in `bus.io` so subsequent CPU reads
    * return the same value regardless of the upper address byte.
    * `port` is 0..0xFF; out-of-range throws `RangeError`. Paused-only;
@@ -181,13 +181,23 @@ export interface Store {
   setIoBytesPerRow(n: number): void;
 
   /**
-   * IO render mode (REQ §11). '16bit' (default) shows the 64K-port
+   * IO render mode (REQ §6.7). '16bit' (default) shows the 64K-port
    * grid; '8bit' shows a fixed 256-cell low-byte-decoded view whose
    * edits broadcast through `setIoBytePort8`. Persisted via the IO
    * section's config; malformed values fall back to '16bit'.
    */
   readonly ioViewMode: Accessor<"16bit" | "8bit">;
   setIoViewMode(mode: "16bit" | "8bit"): void;
+
+  /**
+   * IO write protect (REQ §6.7). When true, CPU OUT cycles are
+   * suppressed at the bus — io[] stays unchanged, but `lastIoWrite`
+   * still tracks the attempted write. User edits (`setIoByte`,
+   * `setIoBytePort8`) bypass the gate. Persisted via the IO section's
+   * config; malformed values fall back to false.
+   */
+  readonly ioWriteProtect: Accessor<boolean>;
+  setIoWriteProtect(on: boolean): void;
 
   // ── input pins
   readonly inputPins: SolidStore<InputPinsState>;

@@ -33,6 +33,31 @@ const ViewModeToggle: Component = () => {
   );
 };
 
+const WriteProtectToggle: Component = () => {
+  const store = useStore();
+  // Paused-only — toggling WP mid-run has confusing semantics (writes
+  // landing mid-stream); the visible state lets the user know they need
+  // to pause first to change the policy.
+  const paused = () => store.status() === "paused";
+  return (
+    <label
+      class="io-wp"
+      classList={{ "is-disabled": !paused() }}
+      title={STR.io.writeProtectTooltip}
+    >
+      <input
+        type="checkbox"
+        class="io-wp-checkbox"
+        aria-label={STR.io.writeProtectAriaLabel}
+        checked={store.ioWriteProtect()}
+        disabled={!paused()}
+        onChange={(e) => store.setIoWriteProtect(e.currentTarget.checked)}
+      />
+      <span class="io-wp-label">{STR.io.writeProtectLabel}</span>
+    </label>
+  );
+};
+
 const Header: Component = () => {
   const store = useStore();
   // The watch input is present in both modes; in 8-bit it shrinks to
@@ -43,6 +68,7 @@ const Header: Component = () => {
   return (
     <>
       <ViewModeToggle />
+      <WriteProtectToggle />
       <WatchAddrInput
         watchAddr={store.ioWatchAddr}
         setWatchAddr={(a) => store.setIoWatchAddr(a)}

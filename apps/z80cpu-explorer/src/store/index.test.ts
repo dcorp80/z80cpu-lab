@@ -564,7 +564,7 @@ describe("createAppStore", () => {
     });
   });
 
-  describe("IO view mode (REQ §11)", () => {
+  describe("IO view mode (REQ §6.7)", () => {
     it("defaults to 16bit on a fresh store", async () => {
       const { store } = await freshStore();
       expect(store.ioViewMode()).toBe("16bit");
@@ -598,6 +598,56 @@ describe("createAppStore", () => {
       const dbg = makeStubDbg();
       const store = await createAppStore({ backend, loop, bus, dbg });
       expect(store.ioViewMode()).toBe("16bit");
+      store.dispose();
+    });
+  });
+
+  describe("IO write protect (REQ §6.7)", () => {
+    it("defaults to false on a fresh store", async () => {
+      const { store, bus } = await freshStore();
+      expect(store.ioWriteProtect()).toBe(false);
+      expect(bus.ioWriteProtect()).toBe(false);
+    });
+
+    it("setIoWriteProtect mirrors into the bus and persists", async () => {
+      const { store, bus, backend } = await freshStore();
+      store.setIoWriteProtect(true);
+      expect(store.ioWriteProtect()).toBe(true);
+      expect(bus.ioWriteProtect()).toBe(true);
+      const persisted = await backend.loadUiState();
+      const ioSec = persisted?.sections.find((s) => s.id === "io");
+      expect(ioSec?.config.writeProtect).toBe(true);
+    });
+
+    it("persisted true restores the bus state at boot", async () => {
+      const backend = new MemoryBackend();
+      await backend.saveUiState({
+        sections: [
+          { id: "io", folded: false, config: { writeProtect: true } },
+        ],
+      });
+      const loop = makeStubLoop();
+      const bus = makeStubBus();
+      const dbg = makeStubDbg();
+      const store = await createAppStore({ backend, loop, bus, dbg });
+      expect(store.ioWriteProtect()).toBe(true);
+      expect(bus.ioWriteProtect()).toBe(true);
+      store.dispose();
+    });
+
+    it("malformed persisted value falls back to false", async () => {
+      const backend = new MemoryBackend();
+      await backend.saveUiState({
+        sections: [
+          { id: "io", folded: false, config: { writeProtect: "yes" } },
+        ],
+      });
+      const loop = makeStubLoop();
+      const bus = makeStubBus();
+      const dbg = makeStubDbg();
+      const store = await createAppStore({ backend, loop, bus, dbg });
+      expect(store.ioWriteProtect()).toBe(false);
+      expect(bus.ioWriteProtect()).toBe(false);
       store.dispose();
     });
   });
