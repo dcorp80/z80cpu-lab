@@ -136,6 +136,14 @@ export interface Store {
   ioByte(addr: number): number;
   readonly ioVersion: Accessor<number>;
   setIoByte(addr: number, value: number): void;
+  /**
+   * 8-bit-decoded IO write (REQ §11). Writes `value` to all 256
+   * high-byte aliases of `port` in `bus.io` so subsequent CPU reads
+   * return the same value regardless of the upper address byte.
+   * `port` is 0..0xFF; out-of-range throws `RangeError`. Paused-only;
+   * calls during run no-op (same gate as `setIoByte`).
+   */
+  setIoBytePort8(port: number, value: number): void;
 
   // ── bus last-touched (REQ §6.6 / §6.7 folded summaries). Sampled
   // from the bus on every `loop.onPause`, so they reflect what the
@@ -171,6 +179,15 @@ export interface Store {
   setMemBytesPerRow(n: number): void;
   readonly ioBytesPerRow: Accessor<number>;
   setIoBytesPerRow(n: number): void;
+
+  /**
+   * IO render mode (REQ §11). '16bit' (default) shows the 64K-port
+   * grid; '8bit' shows a fixed 256-cell low-byte-decoded view whose
+   * edits broadcast through `setIoBytePort8`. Persisted via the IO
+   * section's config; malformed values fall back to '16bit'.
+   */
+  readonly ioViewMode: Accessor<"16bit" | "8bit">;
+  setIoViewMode(mode: "16bit" | "8bit"): void;
 
   // ── input pins
   readonly inputPins: SolidStore<InputPinsState>;

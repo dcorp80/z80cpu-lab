@@ -304,6 +304,16 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     bytesPerRowFromConfig("memory", DEFAULT_MEMORY_BYTES_PER_ROW);
   const ioBytesPerRow: Accessor<number> = () =>
     bytesPerRowFromConfig("io", DEFAULT_IO_BYTES_PER_ROW);
+
+  // IO render mode (REQ §11). '16bit' renders the default 64K-port grid;
+  // '8bit' renders 256 cells where each write broadcasts to all 256
+  // high-byte aliases. Persisted via the IO section's config; falls
+  // back to '16bit' for older backends or corrupt values.
+  const ioViewMode: Accessor<"16bit" | "8bit"> = () => {
+    const s = sections.find((sec) => sec.id === "io");
+    const v = s?.config.viewMode;
+    return v === "8bit" ? "8bit" : "16bit";
+  };
   function assertBytesPerRow(n: number, label: string): void {
     if (!(BYTES_PER_ROW_OPTIONS as ReadonlyArray<number>).includes(n)) {
       throw new RangeError(
@@ -872,6 +882,21 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       bus.io[addr] = value;
       bumpIoVersion();
     },
+    setIoBytePort8(port: number, value: number) {
+      // Paused-only — same gate as setIoByte. `port` is an 8-bit value
+      // (0..0xff); the bus handles the mask + broadcast across the
+      // 256 high-byte aliases. UI version bump fires once for the
+      // whole broadcast, not per alias.
+      if (status() !== "paused") return;
+      if (!Number.isInteger(port) || port < 0 || port > 0xff) {
+        throw new RangeError(
+          `setIoBytePort8 port: 0..0xFF required, got ${port}`,
+        );
+      }
+      assertByte(value, "setIoBytePort8 value");
+      bus.broadcastIoLowByte(port, value);
+      bumpIoVersion();
+    },
     lastMemRead,
     lastMemWrite,
     lastIoRead,
@@ -903,6 +928,26 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     setIoBytesPerRow(n: number) {
       assertBytesPerRow(n, "setIoBytesPerRow");
       updateSectionConfig("io", { bytesPerRow: n });
+    },
+    ioViewMode,
+    setIoViewMode(mode: "16bit" | "8bit") {
+      if (mode !== "16bit" && mode !== "8bit") {
+        throw new RangeError(
+          `setIoViewMode: '16bit' | '8bit' required, got ${mode}`,
+        );
+      }
+      // Switching to 8-bit mode masks the persisted watch address to
+      // the low byte — the 8-bit view's address space is 0..0xFF, so a
+      // stale 16-bit value (4080) would be unreachable. Single config
+      // write so reload restores both fields atomically.
+      if (mode === "8bit") {
+        const wa = ioWatchAddr();
+        if (wa > 0xff) {
+          updateSectionConfig("io", { viewMode: mode, watchAddr: wa & 0xff });
+          return;
+        }
+      }
+      updateSectionConfig("io", { viewMode: mode });
     },
     inputPins,
     setIntVector(byte: number) {

@@ -130,6 +130,39 @@ describe("makeBus64k", () => {
     expect(cpu.bus.data).toBe(0xff);
   });
 
+  describe("broadcastIoLowByte", () => {
+    it("writes value to all 256 high-byte aliases of the port", () => {
+      const { bus } = freshBus();
+      bus.broadcastIoLowByte(0x80, 0x5a);
+      for (let hi = 0; hi < 256; hi++) {
+        expect(bus.io[(hi << 8) | 0x80]).toBe(0x5a);
+      }
+    });
+
+    it("does not touch other ports", () => {
+      const { bus } = freshBus();
+      bus.io.fill(0xee); // sentinel
+      bus.broadcastIoLowByte(0x10, 0x11);
+      // Aliases of 0x10 changed; aliases of every other port untouched.
+      for (let hi = 0; hi < 256; hi++) {
+        expect(bus.io[(hi << 8) | 0x10]).toBe(0x11);
+        expect(bus.io[(hi << 8) | 0x11]).toBe(0xee);
+      }
+    });
+
+    it("masks port and value to 8 bits at the boundary", () => {
+      const { bus } = freshBus();
+      bus.io.fill(0); // zero so the mask check has a clean baseline
+      // 0x1180 → port 0x80; 0x1ff → value 0xff.
+      bus.broadcastIoLowByte(0x1180, 0x1ff);
+      expect(bus.io[0x0080]).toBe(0xff);
+      expect(bus.io[0xff80]).toBe(0xff);
+      // Confirms port mask: nothing landed at port 0x11 aliases.
+      expect(bus.io[0x0011]).toBe(0);
+      expect(bus.io[0xff11]).toBe(0);
+    });
+  });
+
   it("reads the latest INT vector on each ack", () => {
     const { cpu, bus } = freshBus();
     bus.setIntVector(0x10);

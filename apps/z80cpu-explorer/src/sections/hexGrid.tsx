@@ -28,7 +28,8 @@ import {
   Show,
 } from "solid-js";
 import { STR } from "../style/strings.ts";
-import { filterHexInput, formatHex, parseHex } from "../util/hex.ts";
+import { formatHex } from "../util/hex.ts";
+import { HexCell } from "./hexCell.tsx";
 
 export interface HexGridProps {
   /** Read a byte at the given 16-bit address. Implementations should
@@ -78,129 +79,6 @@ function asciiGlyph(byte: number): string {
   if (byte >= 0x20 && byte <= 0x7e) return String.fromCharCode(byte);
   return STR.hexGrid.nonPrintable;
 }
-
-interface HexCellProps {
-  addr: number;
-  byte: number;
-  isWatch: boolean;
-  paused: Accessor<boolean>;
-  setByte: (addr: number, value: number) => void;
-  /** Called after a successful Enter commit so the grid can open the
-   *  next cell. Invalid / empty Enters do NOT call this. */
-  advance: (addr: number) => void;
-}
-
-const HexCell: Component<HexCellProps> = (props) => {
-  const [editing, setEditing] = createSignal(false);
-  const [text, setText] = createSignal("");
-  const [invalid, setInvalid] = createSignal(false);
-
-  /** Parse + write. Returns "ok" / "invalid" / "empty" so callers can
-   *  drive different post-commit behavior (advance, revert + stay, close). */
-  const tryCommit = (): "ok" | "invalid" | "empty" => {
-    const t = text();
-    if (t === "") return "empty";
-    const v = parseHex(t);
-    if (v === null || v < 0 || v > 0xff) return "invalid";
-    props.setByte(props.addr, v);
-    return "ok";
-  };
-
-  const beginEdit = () => {
-    if (!props.paused()) return;
-    setText(formatHex(props.byte, 2));
-    setInvalid(false);
-    setEditing(true);
-  };
-
-  return (
-    <button
-      type="button"
-      class="hex-cell"
-      classList={{
-        "is-watch-cell": props.isWatch,
-        "is-editable": props.paused(),
-      }}
-      // tabIndex={-1} keeps cells out of the natural tab order; full
-      // grid keyboard nav (arrow keys, etc.) is post-MVP and the
-      // section header's watch input is the keyboard entry point.
-      tabIndex={-1}
-      data-addr={formatHex(props.addr, 4)}
-      onClick={beginEdit}
-    >
-      <Show when={editing()} fallback={<span>{formatHex(props.byte, 2)}</span>}>
-        <input
-          type="text"
-          class="hex-cell-input"
-          classList={{ "is-invalid": invalid() }}
-          aria-label={STR.hexGrid.cellEditAriaLabel(formatHex(props.addr, 4))}
-          maxLength={2}
-          value={text()}
-          // Imperative focus on mount — the HTML `autofocus` attribute
-          // only fires at document load, not when an element is
-          // inserted dynamically. The button we just clicked still owns
-          // focus when this input mounts; without this call the input
-          // renders un-focused and the browser logs
-          // "Autofocus processing was blocked because a document already
-          //  has a focused element". `.select()` highlights the seeded
-          // hex so the user can type-replace immediately — and so the
-          // rapid-entry advance lands the user on a pre-selected next
-          // cell ready to overwrite.
-          ref={(el) => {
-            queueMicrotask(() => {
-              el.focus();
-              el.select();
-            });
-          }}
-          onInput={(e) => {
-            setText(filterHexInput(e.currentTarget.value));
-            setInvalid(false);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              const result = tryCommit();
-              if (result === "ok") {
-                // Clear so the subsequent blur doesn't re-commit.
-                setText("");
-                setInvalid(false);
-                // Schedule the advance BEFORE blur — the blur closes
-                // this cell, freeing the focus the next cell will take.
-                props.advance(props.addr);
-                (e.currentTarget as HTMLInputElement).blur();
-              } else if (result === "invalid") {
-                // Revert text, KEEP editing so user can retype without
-                // re-clicking. The flash gives a moment of feedback.
-                setInvalid(true);
-                setText("");
-              } else {
-                // Empty Enter — close.
-                (e.currentTarget as HTMLInputElement).blur();
-              }
-            } else if (e.key === "Escape") {
-              setText("");
-              setInvalid(false);
-              (e.currentTarget as HTMLInputElement).blur();
-            }
-          }}
-          onBlur={() => {
-            // Implicit commit on blur (user clicked elsewhere). text===""
-            // means we already committed via Enter, or the user never
-            // typed — either way, leave the cell value untouched.
-            const t = text();
-            if (t !== "") {
-              const v = parseHex(t);
-              if (v !== null && v >= 0 && v <= 0xff) {
-                props.setByte(props.addr, v);
-              }
-            }
-            setEditing(false);
-            setInvalid(false);
-          }}
-        />
-      </Show>
-    </button>
-  );
-};
 
 interface AsciiCellProps {
   addr: number;

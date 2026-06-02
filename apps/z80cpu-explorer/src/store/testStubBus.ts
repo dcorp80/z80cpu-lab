@@ -9,6 +9,7 @@ export interface StubBus {
   io: Uint8Array;
   intVector(): number;
   setIntVector(byte: number): void;
+  broadcastIoLowByte(port: number, value: number): void;
   lastMemRead(): BusAccessRecord | null;
   lastMemWrite(): BusAccessRecord | null;
   lastIoRead(): BusAccessRecord | null;
@@ -34,6 +35,13 @@ export function makeStubBus(): StubBus {
     intVector: () => v,
     setIntVector: (b: number) => {
       v = b & 0xff;
+    },
+    broadcastIoLowByte: (port: number, value: number) => {
+      const p = port & 0xff;
+      const val = value & 0xff;
+      for (let hi = 0; hi < 256; hi++) {
+        io[(hi << 8) | p] = val;
+      }
     },
     lastMemRead: () => lastMR,
     lastMemWrite: () => lastMW,

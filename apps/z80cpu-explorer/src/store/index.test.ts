@@ -530,6 +530,76 @@ describe("createAppStore", () => {
       expect(() => store.setIoByte(0x10000, 0)).toThrow(RangeError);
       expect(() => store.setIoByte(0, 0x100)).toThrow(RangeError);
     });
+
+    it("setIoBytePort8 broadcasts to all 256 aliases and bumps ioVersion once", async () => {
+      const { store, bus } = await freshStore();
+      const v0 = store.ioVersion();
+      store.setIoBytePort8(0x80, 0x5a);
+      // Every alias holds the byte.
+      for (let hi = 0; hi < 256; hi++) {
+        expect(bus.io[(hi << 8) | 0x80]).toBe(0x5a);
+      }
+      // Single bump regardless of how many aliases were touched.
+      expect(store.ioVersion()).toBe(v0 + 1);
+    });
+
+    it("setIoBytePort8 no-ops while running", async () => {
+      const { store, bus, loop } = await freshStore();
+      // Plant a non-default value so we can tell the call no-opped.
+      bus.io.fill(0xee);
+      loop.setStatus("running");
+      store.run();
+      store.setIoBytePort8(0x80, 0x11);
+      expect(bus.io[0x0080]).toBe(0xee);
+      expect(bus.io[0xff80]).toBe(0xee);
+    });
+
+    it("setIoBytePort8 rejects out-of-range port and value", async () => {
+      const { store } = await freshStore();
+      expect(() => store.setIoBytePort8(-1, 0)).toThrow(RangeError);
+      expect(() => store.setIoBytePort8(0x100, 0)).toThrow(RangeError);
+      expect(() => store.setIoBytePort8(1.5, 0)).toThrow(RangeError);
+      expect(() => store.setIoBytePort8(0, -1)).toThrow(RangeError);
+      expect(() => store.setIoBytePort8(0, 0x100)).toThrow(RangeError);
+    });
+  });
+
+  describe("IO view mode (REQ §11)", () => {
+    it("defaults to 16bit on a fresh store", async () => {
+      const { store } = await freshStore();
+      expect(store.ioViewMode()).toBe("16bit");
+    });
+
+    it("setIoViewMode switches and persists via the IO section config", async () => {
+      const { store, backend } = await freshStore();
+      store.setIoViewMode("8bit");
+      expect(store.ioViewMode()).toBe("8bit");
+      const persisted = await backend.loadUiState();
+      const ioSec = persisted?.sections.find((s) => s.id === "io");
+      expect(ioSec?.config.viewMode).toBe("8bit");
+    });
+
+    it("setIoViewMode rejects unknown values", async () => {
+      const { store } = await freshStore();
+      expect(() => store.setIoViewMode("32bit" as unknown as "16bit")).toThrow(
+        RangeError,
+      );
+    });
+
+    it("malformed persisted viewMode falls back to 16bit", async () => {
+      const backend = new MemoryBackend();
+      await backend.saveUiState({
+        sections: [
+          { id: "io", folded: false, config: { viewMode: "garbage" } },
+        ],
+      });
+      const loop = makeStubLoop();
+      const bus = makeStubBus();
+      const dbg = makeStubDbg();
+      const store = await createAppStore({ backend, loop, bus, dbg });
+      expect(store.ioViewMode()).toBe("16bit");
+      store.dispose();
+    });
   });
 
   describe("bus last-touched sampling (M7)", () => {

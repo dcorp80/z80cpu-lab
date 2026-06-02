@@ -31,6 +31,14 @@ export interface Bus64k {
   intVector(): number;
   /** Updates the INT vector. Value is masked to 8 bits at the boundary. */
   setIntVector(byte: number): void;
+  /**
+   * Write `value` into all 256 high-byte aliases of `port` in the IO
+   * array (`io[(hi<<8) | port] = value` for hi in 0..255). Used by the
+   * IO section's 8-bit view (REQ §11) so the user can seed an
+   * A0–A7-only-decoded port without minding the upper address bits.
+   * Inputs are masked at the boundary; caller bumps `ioVersion`.
+   */
+  broadcastIoLowByte(port: number, value: number): void;
   resolve(): void;
   /**
    * Most recent mem/IO accesses, captured inside `resolve()`. Returns
@@ -109,6 +117,13 @@ export function makeBus64k(cpu: Z80Cpu, config: BusConfig): Bus64k {
     intVector: () => intVector,
     setIntVector(byte) {
       intVector = byte & 0xff;
+    },
+    broadcastIoLowByte(port, value) {
+      const p = port & 0xff;
+      const v = value & 0xff;
+      for (let hi = 0; hi < 256; hi++) {
+        io[(hi << 8) | p] = v;
+      }
     },
     lastMemRead: () =>
       lastMemReadAddr < 0

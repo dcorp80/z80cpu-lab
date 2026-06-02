@@ -160,12 +160,21 @@ export const STR = {
   io: {
     title: "IO",
     foldedHeader: (watch: string) => `64K ports · watch=${watch}`,
+    foldedHeader8b: (watch: string) => `256 ports · 8-bit · watch=${watch}`,
     foldedLastOut: (addr: string, value: string) => `last out ${addr}=${value}`,
     foldedLastIn: (addr: string, value: string) => `last in ${addr}=${value}`,
     foldedNoActivity: "no activity",
     watchLabel: "Watch:",
     watchTooltip: "Hex port to watch — press Enter to jump back to this row",
     watchAriaLabel: "IO watch address",
+    viewModeLabel: "Decode:",
+    viewModeAriaLabel: "IO address decoding mode",
+    viewMode16b: "16-bit",
+    viewMode8b: "8-bit",
+    viewModeTooltip:
+      "16-bit: full 64K port view. 8-bit: 256 ports, edits broadcast to all upper-byte aliases.",
+    aliasMismatchTooltip: (port: string) =>
+      `Port ${port}: high-byte aliases hold different values; cell shows io[00${port}]. Editing rewrites all 256 aliases.`,
   },
   hexGrid: {
     cellEditAriaLabel: (addr: string) => `Edit byte at ${addr}`,

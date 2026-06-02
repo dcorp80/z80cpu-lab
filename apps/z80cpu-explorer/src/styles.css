@@ -851,6 +851,36 @@ body {
   border-color: var(--danger);
 }
 
+/* IO 8-bit view (REQ §11). Cells whose 256 high-byte aliases disagree
+   show the io[port] value plus a danger-tinted tag so the user knows
+   the cell is showing one of several values. Editing rewrites all
+   aliases via setIoBytePort8 → broadcastIoLowByte. */
+.hex-cell.is-alias-mismatch {
+  color: var(--danger);
+  text-decoration: underline dotted var(--danger);
+  text-underline-offset: 2px;
+}
+
+/* IO viewmode toggle in the section header. */
+.io-viewmode {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 12px;
+}
+.io-viewmode-label {
+  color: var(--muted);
+  font-size: 0.9em;
+}
+.io-viewmode-select {
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 0 4px;
+}
+
 .hex-row-ascii {
   display: grid;
   gap: 0;

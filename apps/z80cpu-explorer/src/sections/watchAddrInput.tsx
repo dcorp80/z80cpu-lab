@@ -15,6 +15,10 @@ export interface WatchAddrInputProps {
   label: string;
   tooltip: string;
   ariaLabel: string;
+  /** Hex-digit display width (default 4). 2 for the IO 8-bit view. */
+  padTo?: number;
+  /** Inclusive max value (default 0xFFFF). 0xFF for the IO 8-bit view. */
+  maxValue?: number;
 }
 
 export const WatchAddrInput: Component<WatchAddrInputProps> = (props) => {
@@ -36,6 +40,8 @@ export const WatchAddrInput: Component<WatchAddrInputProps> = (props) => {
         onJumpAfterEnter={() => props.requestJump()}
         ariaLabel={props.ariaLabel}
         title={props.tooltip}
+        padTo={props.padTo}
+        maxValue={props.maxValue}
         maxLength={6}
       />
     </div>

@@ -1,4 +1,4 @@
-import type { Component } from "solid-js";
+import { type Component, Show } from "solid-js";
 import {
   DEFAULT_IO_ROWS_AFTER,
   DEFAULT_IO_ROWS_BEFORE,
@@ -10,11 +10,39 @@ import { BytesPerRowSelect } from "../bytesPerRowSelect.tsx";
 import { HexGrid } from "../hexGrid.tsx";
 import type { SectionModule } from "../types.ts";
 import { WatchAddrInput } from "../watchAddrInput.tsx";
+import { IoPortGrid } from "./portGrid.tsx";
+
+const ViewModeToggle: Component = () => {
+  const store = useStore();
+  return (
+    <label class="io-viewmode" title={STR.io.viewModeTooltip}>
+      <span class="io-viewmode-label">{STR.io.viewModeLabel}</span>
+      <select
+        class="io-viewmode-select"
+        aria-label={STR.io.viewModeAriaLabel}
+        value={store.ioViewMode()}
+        onChange={(e) => {
+          const v = e.currentTarget.value;
+          if (v === "16bit" || v === "8bit") store.setIoViewMode(v);
+        }}
+      >
+        <option value="16bit">{STR.io.viewMode16b}</option>
+        <option value="8bit">{STR.io.viewMode8b}</option>
+      </select>
+    </label>
+  );
+};
 
 const Header: Component = () => {
   const store = useStore();
+  // The watch input is present in both modes; in 8-bit it shrinks to
+  // 2 hex digits and rejects values > 0xFF. BPR also works in both
+  // (16/32/64 → 16/8/4 rows for the 256-port window).
+  const padTo = () => (store.ioViewMode() === "8bit" ? 2 : 4);
+  const maxValue = () => (store.ioViewMode() === "8bit" ? 0xff : 0xffff);
   return (
     <>
+      <ViewModeToggle />
       <WatchAddrInput
         watchAddr={store.ioWatchAddr}
         setWatchAddr={(a) => store.setIoWatchAddr(a)}
@@ -22,6 +50,8 @@ const Header: Component = () => {
         label={STR.io.watchLabel}
         tooltip={STR.io.watchTooltip}
         ariaLabel={STR.io.watchAriaLabel}
+        padTo={padTo()}
+        maxValue={maxValue()}
       />
       <BytesPerRowSelect
         value={store.ioBytesPerRow}
@@ -34,8 +64,16 @@ const Header: Component = () => {
 const FoldedSummary: Component = () => {
   const store = useStore();
   const summary = () => {
+    const mode = store.ioViewMode();
+    const padTo = mode === "8bit" ? 2 : 4;
+    const watch = formatHex(
+      store.ioWatchAddr() & (mode === "8bit" ? 0xff : 0xffff),
+      padTo,
+    );
     const parts: string[] = [
-      STR.io.foldedHeader(formatHex(store.ioWatchAddr(), 4)),
+      mode === "8bit"
+        ? STR.io.foldedHeader8b(watch)
+        : STR.io.foldedHeader(watch),
     ];
     const w = store.lastIoWrite();
     const r = store.lastIoRead();
@@ -58,20 +96,33 @@ const FoldedSummary: Component = () => {
 const Body: Component = () => {
   const store = useStore();
   const paused = () => store.status() === "paused";
+  // <Show> for reactive branching — a JSX ternary would read
+  // ioViewMode() once at setup and not re-evaluate on toggle.
   return (
-    <HexGrid
-      read={(a) => store.ioByte(a)}
-      version={store.ioVersion}
-      setByte={(a, v) => store.setIoByte(a, v)}
-      paused={paused}
-      showAscii={false}
-      watchAddr={store.ioWatchAddr}
-      setWatchAddr={(a) => store.setIoWatchAddr(a)}
-      jumpVersion={store.ioWatchJumpVersion}
-      rowsBefore={DEFAULT_IO_ROWS_BEFORE}
-      rowsAfter={DEFAULT_IO_ROWS_AFTER}
-      bytesPerRow={store.ioBytesPerRow()}
-    />
+    <Show
+      when={store.ioViewMode() === "8bit"}
+      fallback={
+        <HexGrid
+          read={(a) => store.ioByte(a)}
+          version={store.ioVersion}
+          setByte={(a, v) => store.setIoByte(a, v)}
+          paused={paused}
+          showAscii={false}
+          watchAddr={store.ioWatchAddr}
+          setWatchAddr={(a) => store.setIoWatchAddr(a)}
+          jumpVersion={store.ioWatchJumpVersion}
+          rowsBefore={DEFAULT_IO_ROWS_BEFORE}
+          rowsAfter={DEFAULT_IO_ROWS_AFTER}
+          bytesPerRow={store.ioBytesPerRow()}
+        />
+      }
+    >
+      <IoPortGrid
+        paused={paused}
+        rowsBefore={DEFAULT_IO_ROWS_BEFORE}
+        rowsAfter={DEFAULT_IO_ROWS_AFTER}
+      />
+    </Show>
   );
 };
 
