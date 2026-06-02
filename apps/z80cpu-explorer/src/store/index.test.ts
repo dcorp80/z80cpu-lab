@@ -260,6 +260,138 @@ describe("createAppStore", () => {
       expect(store.cursors.instructionTrace).toEqual({ mode: "live" });
     });
 
+    it("insnCountThrottled coalesces per-instruction bumps during run, flushes on pause", async () => {
+      const queued: Array<FrameRequestCallback> = [];
+      const origRaf = globalThis.requestAnimationFrame;
+      globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) => {
+        queued.push(cb);
+        return queued.length;
+      }) as typeof requestAnimationFrame;
+      try {
+        const { store, loop } = await freshStore();
+        // Pin to 60 Hz cadence so this test is about coalescing, not
+        // about frame counts. N=2 (the shipped default) is exercised
+        // in a separate test below.
+        store.setUiConfig({ flushEveryNFrames: 1 });
+        loop.setStatus("running");
+        // Three instructions land during the running frame — raw count
+        // moves by 3, throttled stays pinned until the rAF fires.
+        loop.emitInstruction(mkTrace({ startAddr: 0x100 }));
+        loop.emitInstruction(mkTrace({ startAddr: 0x101 }));
+        loop.emitInstruction(mkTrace({ startAddr: 0x102 }));
+        expect(store.insnCount()).toBe(3);
+        expect(store.insnCountThrottled()).toBe(0);
+        // One rAF scheduled regardless of how many pushes accumulated —
+        // shared with the trace-ring throttle.
+        expect(queued.length).toBe(1);
+        queued.shift()?.(0);
+        expect(store.insnCountThrottled()).toBe(3);
+        // More pushes during run schedule another single rAF.
+        loop.emitInstruction(mkTrace({ startAddr: 0x103 }));
+        loop.emitInstruction(mkTrace({ startAddr: 0x104 }));
+        expect(store.insnCount()).toBe(5);
+        expect(store.insnCountThrottled()).toBe(3);
+        expect(queued.length).toBe(1);
+        // Pause flushes synchronously without waiting for the queued rAF.
+        loop.emitPause({ kind: "user" });
+        expect(store.insnCountThrottled()).toBe(5);
+      } finally {
+        globalThis.requestAnimationFrame = origRaf;
+      }
+    });
+
+    it("zeroHC resets insnCountThrottled alongside insnCount", async () => {
+      const { store, loop } = await freshStore();
+      loop.emitInstruction(mkTrace({ startAddr: 0x100 }));
+      loop.emitInstruction(mkTrace({ startAddr: 0x101 }));
+      // Stub loop starts paused → flush is synchronous.
+      expect(store.insnCountThrottled()).toBe(2);
+      store.zeroHC();
+      expect(store.insnCount()).toBe(0);
+      expect(store.insnCountThrottled()).toBe(0);
+    });
+
+    it("UI throttle defaults to flushEveryNFrames=2 (30 Hz) and waits two rAFs to flush", async () => {
+      const queued: Array<FrameRequestCallback> = [];
+      const origRaf = globalThis.requestAnimationFrame;
+      globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) => {
+        queued.push(cb);
+        return queued.length;
+      }) as typeof requestAnimationFrame;
+      try {
+        const { store, loop } = await freshStore();
+        expect(store.uiConfig().flushEveryNFrames).toBe(2);
+        loop.setStatus("running");
+        loop.emitInstruction(mkTrace({ startAddr: 0x100 }));
+        // First rAF callback: counter ticks, no flush yet — re-schedules.
+        expect(queued.length).toBe(1);
+        queued.shift()?.(0);
+        expect(store.insnCountThrottled()).toBe(0);
+        // The re-schedule queued another rAF — drain it; this one flushes.
+        expect(queued.length).toBe(1);
+        queued.shift()?.(0);
+        expect(store.insnCountThrottled()).toBe(1);
+      } finally {
+        globalThis.requestAnimationFrame = origRaf;
+      }
+    });
+
+    it("setUiConfig validates and persists the cadence change", async () => {
+      const { store, backend } = await freshStore();
+      // Out-of-range values are rejected at the boundary.
+      expect(() => store.setUiConfig({ flushEveryNFrames: 0 })).toThrow(
+        RangeError,
+      );
+      expect(() => store.setUiConfig({ flushEveryNFrames: -1 })).toThrow(
+        RangeError,
+      );
+      expect(() => store.setUiConfig({ flushEveryNFrames: 1.5 })).toThrow(
+        RangeError,
+      );
+      // Valid change updates the accessor and persists via the backend.
+      store.setUiConfig({ flushEveryNFrames: 1 });
+      expect(store.uiConfig().flushEveryNFrames).toBe(1);
+      const persisted = await backend.loadUiState();
+      expect(persisted?.uiConfig?.flushEveryNFrames).toBe(1);
+    });
+
+    it("uiConfig survives a backend round-trip on reload", async () => {
+      const backend = new MemoryBackend();
+      // First boot: change the cadence.
+      {
+        const loop = makeStubLoop();
+        const bus = makeStubBus();
+        const dbg = makeStubDbg();
+        const store = await createAppStore({ backend, loop, bus, dbg });
+        store.setUiConfig({ flushEveryNFrames: 4 });
+        store.dispose();
+      }
+      // Second boot against the same backend: cadence persists.
+      {
+        const loop = makeStubLoop();
+        const bus = makeStubBus();
+        const dbg = makeStubDbg();
+        const store = await createAppStore({ backend, loop, bus, dbg });
+        expect(store.uiConfig().flushEveryNFrames).toBe(4);
+        store.dispose();
+      }
+    });
+
+    it("malformed persisted uiConfig falls back to defaults", async () => {
+      const backend = new MemoryBackend();
+      // Plant a malformed payload (flushEveryNFrames out of range / wrong type).
+      await backend.saveUiState({
+        sections: [],
+        uiConfig: { flushEveryNFrames: -42 } as unknown as never,
+      });
+      const loop = makeStubLoop();
+      const bus = makeStubBus();
+      const dbg = makeStubDbg();
+      const store = await createAppStore({ backend, loop, bus, dbg });
+      expect(store.uiConfig().flushEveryNFrames).toBe(2); // shipped default
+      store.dispose();
+    });
+
     it("throttled trace-ring version fires synchronously when loop is paused", async () => {
       const { store, loop } = await freshStore();
       // Stub loop starts paused → throttle bypass kicks in.
@@ -280,6 +412,8 @@ describe("createAppStore", () => {
       }) as typeof requestAnimationFrame;
       try {
         const { store, loop } = await freshStore();
+        // Pin to 60 Hz cadence — see insnCountThrottled test for rationale.
+        store.setUiConfig({ flushEveryNFrames: 1 });
         // Move into running; subsequent pushes should NOT bump
         // throttled until rAF fires.
         loop.setStatus("running");

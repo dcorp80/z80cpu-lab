@@ -66,6 +66,7 @@ const Body: Component = () => {
       paused={paused}
       showAscii={false}
       watchAddr={store.ioWatchAddr}
+      setWatchAddr={(a) => store.setIoWatchAddr(a)}
       jumpVersion={store.ioWatchJumpVersion}
       rowsBefore={DEFAULT_IO_ROWS_BEFORE}
       rowsAfter={DEFAULT_IO_ROWS_AFTER}

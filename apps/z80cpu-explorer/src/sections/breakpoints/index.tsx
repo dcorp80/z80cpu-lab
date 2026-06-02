@@ -2,6 +2,7 @@ import { createMemo, createSignal, For, Show } from "solid-js";
 import { useStore } from "../../store/index.ts";
 import { STR } from "../../style/strings.ts";
 import { filterHexInput, formatHex, parseAddr16 } from "../../util/hex.ts";
+import { HexAddrInput } from "../hexAddrInput.tsx";
 import type { SectionModule } from "../types.ts";
 
 // Compact decimal formatter for HC + instruction counts. Thousands
@@ -138,7 +139,11 @@ const Header = () => {
         {statusLine(
           store.status(),
           store.hc(),
-          store.insnCount(),
+          // Throttled mirror — the raw insnCount ticks per instruction
+          // (~10⁵–10⁶ Hz). Reading it here would repaint the status
+          // text node hundreds of thousands of times per second; the
+          // user can't read it at that rate anyway. Flushed on pause.
+          store.insnCountThrottled(),
           reasonToText(store.lastPauseReason),
         )}
       </div>
@@ -169,47 +174,24 @@ interface PcRowProps {
 
 const PcRow = (props: PcRowProps) => {
   const store = useStore();
-  // Edit buffer per field. `null` = "show canonical hex of the stored
-  // value". Same pattern as Program section's address input.
-  const [loEdit, setLoEdit] = createSignal<string | null>(null);
-  const [hiEdit, setHiEdit] = createSignal<string | null>(null);
-  const [loInvalid, setLoInvalid] = createSignal(false);
-  const [hiInvalid, setHiInvalid] = createSignal(false);
-
-  const loText = () => loEdit() ?? formatHex(props.bp.lo, 4);
-  const hiText = () => hiEdit() ?? formatHex(props.bp.hi, 4);
-
-  const commitLo = () => {
-    const v = parseAddr16(loText());
-    if (v === null) {
-      setLoInvalid(true);
-      return;
-    }
-    setLoInvalid(false);
-    setLoEdit(null);
-    if (v !== props.bp.lo) {
-      try {
-        store.editBreakpoint(props.bp.id, { lo: v });
-      } catch {
-        // Cross-field violation (lo > hi). Surface the same invalid cue.
-        setLoInvalid(true);
-      }
+  // Commit returns false on cross-field violation (lo > hi) so the
+  // shared HexAddrInput flashes its invalid cue and reverts.
+  const commitLo = (v: number): boolean => {
+    if (v === props.bp.lo) return true;
+    try {
+      store.editBreakpoint(props.bp.id, { lo: v });
+      return true;
+    } catch {
+      return false;
     }
   };
-  const commitHi = () => {
-    const v = parseAddr16(hiText());
-    if (v === null) {
-      setHiInvalid(true);
-      return;
-    }
-    setHiInvalid(false);
-    setHiEdit(null);
-    if (v !== props.bp.hi) {
-      try {
-        store.editBreakpoint(props.bp.id, { hi: v });
-      } catch {
-        setHiInvalid(true);
-      }
+  const commitHi = (v: number): boolean => {
+    if (v === props.bp.hi) return true;
+    try {
+      store.editBreakpoint(props.bp.id, { hi: v });
+      return true;
+    } catch {
+      return false;
     }
   };
 
@@ -222,60 +204,20 @@ const PcRow = (props: PcRowProps) => {
         aria-label={STR.breakpoints.bpEnabledLabel}
       />
       <span class="bp-kind">{STR.breakpoints.bpKindPc}</span>
-      <input
+      <HexAddrInput
         class="bp-hex-input"
-        classList={{ "is-invalid": loInvalid() }}
-        type="text"
-        value={loText()}
+        committed={() => props.bp.lo}
+        commit={commitLo}
         size={5}
-        aria-label={STR.breakpoints.bpPcLoLabel}
-        onInput={(e) => {
-          const filtered = filterHexInput(e.currentTarget.value);
-          if (filtered !== e.currentTarget.value)
-            e.currentTarget.value = filtered;
-          setLoEdit(filtered);
-          setLoInvalid(false);
-        }}
-        onBlur={commitLo}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            commitLo();
-            (e.currentTarget as HTMLInputElement).blur();
-          }
-          if (e.key === "Escape") {
-            setLoEdit(null);
-            setLoInvalid(false);
-            (e.currentTarget as HTMLInputElement).blur();
-          }
-        }}
+        ariaLabel={STR.breakpoints.bpPcLoLabel}
       />
       <span class="bp-range-sep">{STR.breakpoints.bpRangeSeparator}</span>
-      <input
+      <HexAddrInput
         class="bp-hex-input"
-        classList={{ "is-invalid": hiInvalid() }}
-        type="text"
-        value={hiText()}
+        committed={() => props.bp.hi}
+        commit={commitHi}
         size={5}
-        aria-label={STR.breakpoints.bpPcHiLabel}
-        onInput={(e) => {
-          const filtered = filterHexInput(e.currentTarget.value);
-          if (filtered !== e.currentTarget.value)
-            e.currentTarget.value = filtered;
-          setHiEdit(filtered);
-          setHiInvalid(false);
-        }}
-        onBlur={commitHi}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            commitHi();
-            (e.currentTarget as HTMLInputElement).blur();
-          }
-          if (e.key === "Escape") {
-            setHiEdit(null);
-            setHiInvalid(false);
-            (e.currentTarget as HTMLInputElement).blur();
-          }
-        }}
+        ariaLabel={STR.breakpoints.bpPcHiLabel}
       />
       <button
         type="button"

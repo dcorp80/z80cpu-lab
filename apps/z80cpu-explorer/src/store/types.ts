@@ -1,6 +1,7 @@
 import type { CpuState } from "@dcorp80/z80cpu";
 import type { Accessor } from "solid-js";
 import type { Store as SolidStore } from "solid-js/store";
+import type { UiConfig } from "../config/defaults.ts";
 import type { BusAccessRecord } from "../runloop/bus.ts";
 import type { PauseReason, RunStatus } from "../runloop/loop.ts";
 import type {
@@ -10,6 +11,8 @@ import type {
   SectionUiState,
 } from "../storage/types.ts";
 import type { TraceRing } from "./traceRing.ts";
+
+export type { UiConfig } from "../config/defaults.ts";
 
 export type { BusAccessRecord } from "../runloop/bus.ts";
 // Re-export so loop / sections can import BP-related types from a single
@@ -79,6 +82,16 @@ export interface Store {
   readonly status: Accessor<RunStatus>;
   readonly hc: Accessor<number>;
   readonly insnCount: Accessor<number>;
+  /**
+   * rAF-coalesced mirror of `insnCount` for UI consumers. While
+   * running, the raw `insnCount` ticks per instruction (~10⁵–10⁶
+   * Hz at full speed); section render paths read this instead so
+   * the BP status line and the trace folded summary don't repaint
+   * the DOM hundreds of thousands of times per second. Flushed
+   * synchronously on pause (including step-pauses) and on zeroHC,
+   * matching `traceRingVersionThrottled`.
+   */
+  readonly insnCountThrottled: Accessor<number>;
   readonly lastPauseReason: Accessor<PauseReason | null>;
 
   // ── CPU state (REQ §6.5). Sampled on every pause; the boundary flag
@@ -186,6 +199,19 @@ export interface Store {
   removeBreakpoint(id: string): void;
   toggleBreakpoint(id: string): void;
   editBreakpoint(id: string, patch: BreakpointPatch): void;
+
+  /**
+   * UI throttle cadence (REQ §7.5). Defaults to `DEFAULT_UI_CONFIG`
+   * (30 Hz). Live-editable via `setUiConfig` and persisted through
+   * the storage backend so a reload restores the user's choice.
+   */
+  readonly uiConfig: Accessor<UiConfig>;
+  /**
+   * Merge a partial UI config into the current value. Validates each
+   * field at the boundary — `flushEveryNFrames` must be an integer ≥ 1.
+   * Persists via the storage backend (commit-on-end; one write per call).
+   */
+  setUiConfig(patch: Partial<UiConfig>): void;
 
   /**
    * Tear-down for store-owned timers. Blocks the throttle's pending

@@ -12,6 +12,8 @@ import {
   DEFAULT_INSTRUCTION_RING_CAP,
   DEFAULT_IO_BYTES_PER_ROW,
   DEFAULT_MEMORY_BYTES_PER_ROW,
+  DEFAULT_UI_CONFIG,
+  type UiConfig,
 } from "../config/defaults.ts";
 import type { Bus64k } from "../runloop/bus.ts";
 import { MEM_SIZE } from "../runloop/bus.ts";
@@ -132,6 +134,23 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
   // BPs are live before the user does anything but only after mem reflects
   // the autoloaded files.
 
+  // UI throttle cadence (REQ §7.5). Persisted via UiState; falls back to
+  // the shipped default when the backend has no record or the stored
+  // value is malformed (older backend, corrupt write).
+  function sanitizeUiConfig(raw: unknown): UiConfig {
+    if (!raw || typeof raw !== "object") return { ...DEFAULT_UI_CONFIG };
+    const candidate = raw as Partial<UiConfig>;
+    const n = candidate.flushEveryNFrames;
+    const flushEveryNFrames =
+      typeof n === "number" && Number.isInteger(n) && n >= 1
+        ? n
+        : DEFAULT_UI_CONFIG.flushEveryNFrames;
+    return { flushEveryNFrames };
+  }
+  const [uiConfig, setUiConfigSignal] = createSignal<UiConfig>(
+    sanitizeUiConfig(loaded?.uiConfig),
+  );
+
   // Sessions start fresh each boot — autoload writes set them below.
   const initialSessions: Record<string, ProgramFileSession> = {};
   for (const f of initialFiles)
@@ -165,11 +184,16 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
   //     paused (REQ §7.5). Section consumers (folded summary, body
   //     memos) read this — at full speed the body would otherwise
   //     diff ~10k DOM rows on every push and starve rAF.
+  //
+  // `insnCountThrottled` rides the same per-frame flush — the
+  // Breakpoints status line and the trace folded summary need a
+  // human-readable count, not a per-instruction signal storm.
   const traceRing = new TraceRing(DEFAULT_INSTRUCTION_RING_CAP);
   const [traceRingVersion, setTraceRingVersion] = createSignal(0);
   const [traceRingVersionThrottled, setTraceRingVersionThrottled] =
     createSignal(0);
-  let throttleScheduled = false;
+  const [insnCountThrottled, setInsnCountThrottled] = createSignal(0);
+  let runFlushScheduled = false;
   // Set on `dispose()`; the rAF callback checks it so a frame queued
   // before teardown can't fire a signal write after the consuming
   // component tree is gone. Matters for tests that swap rAF for a
@@ -187,21 +211,43 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       : (cb) => {
           setTimeout(cb, 16);
         };
+  /** Single rAF-coalesced flush of all run-state mirrors:
+   *    - traceRingVersionThrottled  (per-instruction trace ring push)
+   *    - insnCountThrottled         (per-instruction counter)
+   *  Both are bumped together — they tick on the same event, and
+   *  consumers (trace folded summary, BP status line) typically read
+   *  both. Sharing one schedule keeps the hot-path cost flat as we
+   *  add more throttled mirrors. */
+  function flushRunState(): void {
+    setTraceRingVersionThrottled(traceRing.version());
+    setInsnCountThrottled(insnCount());
+  }
   function bumpThrottled(): void {
     // If the loop is already paused (boot, step-pause, post-BP),
     // there's nothing to coalesce — fire synchronously so tests and
     // single-step pauses don't have to wait for a frame.
     if (loop.status() === "paused") {
-      setTraceRingVersionThrottled(traceRing.version());
+      flushRunState();
       return;
     }
-    if (throttleScheduled) return;
-    throttleScheduled = true;
-    scheduleFrame(() => {
-      throttleScheduled = false;
+    if (runFlushScheduled) return;
+    runFlushScheduled = true;
+    // Capture the cadence at schedule time. Changing `uiConfig` mid-
+    // flight does not retroactively shorten / extend the current wait
+    // — it takes effect on the next bump cycle, which keeps the timing
+    // model simple.
+    let pending = Math.max(1, uiConfig().flushEveryNFrames | 0);
+    const tick = (): void => {
       if (disposed) return;
-      setTraceRingVersionThrottled(traceRing.version());
-    });
+      pending--;
+      if (pending > 0) {
+        scheduleFrame(tick);
+        return;
+      }
+      flushRunState();
+      runFlushScheduled = false;
+    };
+    scheduleFrame(tick);
   }
 
   // View cursors (DESIGN §3.6, REQ §7.2). Only the instruction-trace
@@ -307,9 +353,27 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     const state: UiState = {
       sections: unwrap(sections),
       fileOrder: files.map((f) => f.id),
+      uiConfig: uiConfig(),
     };
     // Fire-and-forget; commit-on-end means at most one call per user action.
     void backend.saveUiState(state);
+  }
+
+  function setUiConfig(patch: Partial<UiConfig>): void {
+    const current = uiConfig();
+    let nextFlush = current.flushEveryNFrames;
+    if (patch.flushEveryNFrames !== undefined) {
+      const n = patch.flushEveryNFrames;
+      if (!Number.isInteger(n) || n < 1) {
+        throw new RangeError(
+          `setUiConfig flushEveryNFrames: integer ≥ 1 required, got ${n}`,
+        );
+      }
+      nextFlush = n;
+    }
+    if (nextFlush === current.flushEveryNFrames) return;
+    setUiConfigSignal({ flushEveryNFrames: nextFlush });
+    persistUi();
   }
 
   // File mutations persist the file table AND the UI order (since order
@@ -351,10 +415,10 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       setPrevCpuStateAtBoundary(cpuStateAtBoundary);
       cpuStateAtBoundary = next;
     }
-    // Pause flushes any pending throttle so the trace section snaps
-    // to the final state on the same tick the user paused, not the
-    // next rAF.
-    setTraceRingVersionThrottled(traceRing.version());
+    // Pause flushes any pending throttle so the trace section + status
+    // line snap to the final state on the same tick the user paused,
+    // not the next rAF.
+    flushRunState();
     // Sample bus last-touched (REQ §6.6 / §6.7). Snapshots — sections
     // read these on pause and don't see per-edge churn during run.
     setLastMemRead(bus.lastMemRead());
@@ -707,6 +771,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     status,
     hc,
     insnCount,
+    insnCountThrottled,
     lastPauseReason,
     cpuState,
     prevCpuStateAtBoundary,
@@ -744,7 +809,9 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       setTraceRingVersion((v) => v + 1);
       // zeroHC is paused-only (gated by the Breakpoints header), so
       // the throttle bypass would fire anyway — still, be explicit.
-      setTraceRingVersionThrottled(traceRing.version());
+      // Drops both the trace-ring throttle AND insnCountThrottled to
+      // 0 in one shot.
+      flushRunState();
       // Cursor snaps back to live — its anchor HC would no longer mean
       // anything against the rebased counter.
       setCursors(
@@ -859,6 +926,8 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     removeBreakpoint,
     toggleBreakpoint,
     editBreakpoint,
+    uiConfig,
+    setUiConfig,
     dispose() {
       disposed = true;
     },

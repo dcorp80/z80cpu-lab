@@ -116,7 +116,9 @@ const FoldedSummary: Component = () => {
       }
     })();
     const pc = formatHex(store.cpuState().pc, 4);
-    const insns = fmt(store.insnCount());
+    // Same rationale as the BP status line — use the throttled mirror
+    // so the folded summary refreshes once per frame, not per insn.
+    const insns = fmt(store.insnCountThrottled());
     const size = store.traceRing.size();
     if (size === 0) {
       return STR.instructionTrace.foldedSummary(pc, status, insns);
@@ -159,6 +161,82 @@ interface PreviewLine {
   bytes: number[];
   text: string;
 }
+
+interface PreviewRowProps {
+  line: PreviewLine;
+}
+
+/**
+ * Preview row. The leading address is a click target: clicking toggles
+ * an exact-match (hi===lo===addr) PC breakpoint. A wider range BP that
+ * happens to cover the address is NOT touched — clicking only manages
+ * the single-PC BPs created from this surface. The gutter dot lights
+ * up whenever ANY enabled pc-range BP covers the address (single-PC or
+ * wider) so the visual rule reads "would this stop here?".
+ */
+const PreviewRow: Component<PreviewRowProps> = (props) => {
+  const store = useStore();
+
+  // True iff any enabled pc-range BP covers this address (single-PC or
+  // wider range). Drives the gutter dot.
+  const bpCovers = createMemo(() => {
+    const a = props.line.addr;
+    for (const bp of store.breakpoints) {
+      if (bp.kind !== "pc-range") continue;
+      if (!bp.enabled) continue;
+      if (a >= bp.lo && a <= bp.hi) return true;
+    }
+    return false;
+  });
+
+  // True iff a BP exists with exact match hi===lo===addr (whether or
+  // not enabled). Drives the toggle action.
+  const exactBp = createMemo(() => {
+    const a = props.line.addr;
+    for (const bp of store.breakpoints) {
+      if (bp.kind === "pc-range" && bp.lo === a && bp.hi === a) return bp;
+    }
+    return null;
+  });
+
+  const onAddrClick = () => {
+    const ex = exactBp();
+    if (ex) {
+      store.removeBreakpoint(ex.id);
+    } else {
+      store.addBreakpoint({
+        kind: "pc-range",
+        lo: props.line.addr,
+        hi: props.line.addr,
+      });
+    }
+  };
+
+  return (
+    <div class="itrace-row is-preview" classList={{ "has-bp": bpCovers() }}>
+      <span class="itrace-bp-marker" aria-hidden="true" />
+      <button
+        type="button"
+        class="itrace-addr itrace-addr-btn"
+        onClick={onAddrClick}
+        title={
+          exactBp()
+            ? STR.instructionTrace.previewAddrRemoveBpTooltip
+            : STR.instructionTrace.previewAddrAddBpTooltip
+        }
+      >
+        {formatHex(props.line.addr, 4)}
+      </button>
+      <span class="itrace-bytes">
+        {props.line.bytes
+          .map((b) => formatHex(b, 2))
+          .concat(Array(4 - props.line.bytes.length).fill("  "))
+          .join(" ")}
+      </span>
+      <span class="itrace-disasm">{props.line.text}</span>
+    </div>
+  );
+};
 
 const Body: Component = () => {
   const store = useStore();
@@ -318,18 +396,7 @@ const Body: Component = () => {
           }
         >
           <Index each={previewLines()}>
-            {(line) => (
-              <div class="itrace-row is-preview">
-                <span class="itrace-addr">{formatHex(line().addr, 4)}</span>
-                <span class="itrace-bytes">
-                  {line()
-                    .bytes.map((b) => formatHex(b, 2))
-                    .concat(Array(4 - line().bytes.length).fill("  "))
-                    .join(" ")}
-                </span>
-                <span class="itrace-disasm">{line().text}</span>
-              </div>
-            )}
+            {(line) => <PreviewRow line={line()} />}
           </Index>
         </Show>
       </div>

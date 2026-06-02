@@ -9,6 +9,14 @@
 // re-runs and the grid updates. Per-cell edits are local input state;
 // `paused()` gates the input — calls during run no-op anyway (store
 // enforces the gate too).
+//
+// Rapid entry (Enter advances to the next cell): on a successful Enter
+// commit the cell calls `advance(addr, lane)` which (a) bumps watchAddr
+// by one row when the current cell is at the bottom edge of the window
+// and (b) DOM-clicks the next cell's button so it opens its editor.
+// Hex and ASCII columns are independent advance lanes. Invalid Enter
+// reverts the local text and KEEPS the cell focused so the user can
+// immediately retype (REQ §6.6 rapid-entry rules).
 
 import {
   type Accessor,
@@ -35,6 +43,9 @@ export interface HexGridProps {
   /** Memory wants ASCII; IO does not (no character semantics on ports). */
   showAscii: boolean;
   watchAddr: Accessor<number>;
+  /** Used by the rapid-entry advance to scroll the watch window forward
+   *  one row when Enter happens on the last cell of the bottom row. */
+  setWatchAddr: (addr: number) => void;
   /** Event signal — bumps on Enter from the watch input. Scrolls the
    *  watch row into view as a side effect. */
   jumpVersion: Accessor<number>;
@@ -58,6 +69,8 @@ interface RowModel {
   watchOffset: number;
 }
 
+type Lane = "hex" | "ascii";
+
 /** Printable-ASCII guard for the ASCII column. Z80 programs frequently
  *  store data with the high bit set or use 0..1F as token codes; both
  *  render as the configured placeholder so the column stays aligned. */
@@ -72,23 +85,31 @@ interface HexCellProps {
   isWatch: boolean;
   paused: Accessor<boolean>;
   setByte: (addr: number, value: number) => void;
+  /** Called after a successful Enter commit so the grid can open the
+   *  next cell. Invalid / empty Enters do NOT call this. */
+  advance: (addr: number) => void;
 }
 
 const HexCell: Component<HexCellProps> = (props) => {
   const [editing, setEditing] = createSignal(false);
   const [text, setText] = createSignal("");
+  const [invalid, setInvalid] = createSignal(false);
 
-  const commit = () => {
-    const v = parseHex(text());
-    if (v !== null && v >= 0 && v <= 0xff) {
-      props.setByte(props.addr, v);
-    }
-    setEditing(false);
+  /** Parse + write. Returns "ok" / "invalid" / "empty" so callers can
+   *  drive different post-commit behavior (advance, revert + stay, close). */
+  const tryCommit = (): "ok" | "invalid" | "empty" => {
+    const t = text();
+    if (t === "") return "empty";
+    const v = parseHex(t);
+    if (v === null || v < 0 || v > 0xff) return "invalid";
+    props.setByte(props.addr, v);
+    return "ok";
   };
 
   const beginEdit = () => {
     if (!props.paused()) return;
     setText(formatHex(props.byte, 2));
+    setInvalid(false);
     setEditing(true);
   };
 
@@ -104,12 +125,14 @@ const HexCell: Component<HexCellProps> = (props) => {
       // grid keyboard nav (arrow keys, etc.) is post-MVP and the
       // section header's watch input is the keyboard entry point.
       tabIndex={-1}
+      data-addr={formatHex(props.addr, 4)}
       onClick={beginEdit}
     >
       <Show when={editing()} fallback={<span>{formatHex(props.byte, 2)}</span>}>
         <input
           type="text"
           class="hex-cell-input"
+          classList={{ "is-invalid": invalid() }}
           aria-label={STR.hexGrid.cellEditAriaLabel(formatHex(props.addr, 4))}
           maxLength={2}
           value={text()}
@@ -120,24 +143,59 @@ const HexCell: Component<HexCellProps> = (props) => {
           // renders un-focused and the browser logs
           // "Autofocus processing was blocked because a document already
           //  has a focused element". `.select()` highlights the seeded
-          // hex so the user can type-replace immediately.
+          // hex so the user can type-replace immediately — and so the
+          // rapid-entry advance lands the user on a pre-selected next
+          // cell ready to overwrite.
           ref={(el) => {
             queueMicrotask(() => {
               el.focus();
               el.select();
             });
           }}
-          onInput={(e) => setText(filterHexInput(e.currentTarget.value))}
+          onInput={(e) => {
+            setText(filterHexInput(e.currentTarget.value));
+            setInvalid(false);
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
-              commit();
-              (e.currentTarget as HTMLInputElement).blur();
+              const result = tryCommit();
+              if (result === "ok") {
+                // Clear so the subsequent blur doesn't re-commit.
+                setText("");
+                setInvalid(false);
+                // Schedule the advance BEFORE blur — the blur closes
+                // this cell, freeing the focus the next cell will take.
+                props.advance(props.addr);
+                (e.currentTarget as HTMLInputElement).blur();
+              } else if (result === "invalid") {
+                // Revert text, KEEP editing so user can retype without
+                // re-clicking. The flash gives a moment of feedback.
+                setInvalid(true);
+                setText("");
+              } else {
+                // Empty Enter — close.
+                (e.currentTarget as HTMLInputElement).blur();
+              }
             } else if (e.key === "Escape") {
-              setEditing(false);
+              setText("");
+              setInvalid(false);
               (e.currentTarget as HTMLInputElement).blur();
             }
           }}
-          onBlur={commit}
+          onBlur={() => {
+            // Implicit commit on blur (user clicked elsewhere). text===""
+            // means we already committed via Enter, or the user never
+            // typed — either way, leave the cell value untouched.
+            const t = text();
+            if (t !== "") {
+              const v = parseHex(t);
+              if (v !== null && v >= 0 && v <= 0xff) {
+                props.setByte(props.addr, v);
+              }
+            }
+            setEditing(false);
+            setInvalid(false);
+          }}
         />
       </Show>
     </button>
@@ -150,29 +208,32 @@ interface AsciiCellProps {
   isWatch: boolean;
   paused: Accessor<boolean>;
   setByte: (addr: number, value: number) => void;
+  advance: (addr: number) => void;
 }
 
 const AsciiCell: Component<AsciiCellProps> = (props) => {
   const [editing, setEditing] = createSignal(false);
   const [text, setText] = createSignal("");
+  // Reachable via paste/IME of a multi-code-unit glyph (emoji etc.):
+  // maxLength clamps to 1 char, but `charCodeAt(0)` of a surrogate
+  // pair returns 0xD800–0xDBFF, which trips the 0..0xff guard.
+  const [invalid, setInvalid] = createSignal(false);
 
-  const commit = () => {
+  /** Accept any single 0..255 byte; the user explicitly typed it, even
+   *  if the glyph renders as `.` in the column. */
+  const tryCommit = (): "ok" | "invalid" | "empty" => {
     const t = text();
-    if (t.length > 0) {
-      const code = t.charCodeAt(0);
-      // Accept any 0..255 single-byte glyph the user typed. The ASCII
-      // glyph mapping renders non-printables as `.` but the underlying
-      // byte stays whatever the user committed (matches a hex editor).
-      if (code >= 0 && code <= 0xff) {
-        props.setByte(props.addr, code);
-      }
-    }
-    setEditing(false);
+    if (t === "") return "empty";
+    const code = t.charCodeAt(0);
+    if (code < 0 || code > 0xff) return "invalid";
+    props.setByte(props.addr, code);
+    return "ok";
   };
 
   const beginEdit = () => {
     if (!props.paused()) return;
     setText(asciiGlyph(props.byte));
+    setInvalid(false);
     setEditing(true);
   };
 
@@ -185,35 +246,62 @@ const AsciiCell: Component<AsciiCellProps> = (props) => {
         "is-editable": props.paused(),
       }}
       tabIndex={-1}
+      data-addr={formatHex(props.addr, 4)}
       onClick={beginEdit}
     >
       <Show when={editing()} fallback={<span>{asciiGlyph(props.byte)}</span>}>
         <input
           type="text"
           class="hex-ascii-input"
+          classList={{ "is-invalid": invalid() }}
           aria-label={STR.hexGrid.cellAsciiEditAriaLabel(
             formatHex(props.addr, 4),
           )}
           maxLength={1}
           value={text()}
-          // See HexCell — imperative focus + select for the same reason.
           ref={(el) => {
             queueMicrotask(() => {
               el.focus();
               el.select();
             });
           }}
-          onInput={(e) => setText(e.currentTarget.value)}
+          onInput={(e) => {
+            setText(e.currentTarget.value);
+            setInvalid(false);
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
-              commit();
-              (e.currentTarget as HTMLInputElement).blur();
+              const result = tryCommit();
+              if (result === "ok") {
+                setText("");
+                setInvalid(false);
+                props.advance(props.addr);
+                (e.currentTarget as HTMLInputElement).blur();
+              } else if (result === "invalid") {
+                // Mirror HexCell: flash, revert text, keep editing so
+                // the user can retype without re-clicking.
+                setInvalid(true);
+                setText("");
+              } else {
+                (e.currentTarget as HTMLInputElement).blur();
+              }
             } else if (e.key === "Escape") {
-              setEditing(false);
+              setText("");
+              setInvalid(false);
               (e.currentTarget as HTMLInputElement).blur();
             }
           }}
-          onBlur={commit}
+          onBlur={() => {
+            const t = text();
+            if (t !== "") {
+              const code = t.charCodeAt(0);
+              if (code >= 0 && code <= 0xff) {
+                props.setByte(props.addr, code);
+              }
+            }
+            setEditing(false);
+            setInvalid(false);
+          }}
         />
       </Show>
     </button>
@@ -257,6 +345,7 @@ export const HexGrid: Component<HexGridProps> = (props) => {
   // DOM element when length is stable, so this ref stays valid as
   // rows() re-runs.
   let watchRowEl: HTMLDivElement | undefined;
+  let gridEl: HTMLDivElement | undefined;
 
   createEffect(() => {
     // Subscribe to the jump event; queueMicrotask lets the row layout
@@ -268,8 +357,55 @@ export const HexGrid: Component<HexGridProps> = (props) => {
     });
   });
 
+  /** Last visible address in the current window. Used to detect when an
+   *  advance would fall off the bottom and the window needs to scroll. */
+  const windowLastAddr = (): number => {
+    const bpr = props.bytesPerRow;
+    const alignMask = 0xffff & ~(bpr - 1);
+    const wa = props.watchAddr() & 0xffff;
+    const watchRowAddr = wa & alignMask;
+    const start = (watchRowAddr - props.rowsBefore * bpr) & 0xffff;
+    const count = props.rowsBefore + 1 + props.rowsAfter;
+    return (start + count * bpr - 1) & 0xffff;
+  };
+
+  /** Common advance handler — called by both HexCell and AsciiCell on
+   *  a successful Enter commit. Wrap-around at 0xFFFF is intentional:
+   *  next wraps to 0x0000 and the watchAddr bump also wraps, so the
+   *  user keeps editing into the bottom of address space without a
+   *  special-case stop. */
+  const advance = (lane: Lane, currentAddr: number): void => {
+    const next = (currentAddr + 1) & 0xffff;
+    if (currentAddr === windowLastAddr()) {
+      // Bump the watch addr by one row so the next cell is visible.
+      // Per REQ §6.6 the watch row highlight follows the entry point;
+      // a separate edit-cursor distinct from watchAddr is an option if
+      // this feels wrong in practice.
+      props.setWatchAddr((props.watchAddr() + props.bytesPerRow) & 0xffff);
+    }
+    // Defer through two microtasks so Solid's row memo can re-run and
+    // the cells re-render with new addrs before we go looking. The
+    // first microtask runs after the synchronous reactive flush; the
+    // second waits for the DOM mutation queued by `<Index>`.
+    queueMicrotask(() => {
+      queueMicrotask(() => {
+        if (!gridEl) return;
+        const cls = lane === "hex" ? "hex-cell" : "hex-ascii-cell";
+        const el = gridEl.querySelector(
+          `.${cls}[data-addr="${formatHex(next, 4)}"]`,
+        ) as HTMLElement | null;
+        el?.click();
+      });
+    });
+  };
+
   return (
-    <div class="hex-grid">
+    <div
+      class="hex-grid"
+      ref={(el) => {
+        gridEl = el;
+      }}
+    >
       <Index each={rows()}>
         {(row, idx) => {
           const captureRef = (el: HTMLDivElement) => {
@@ -291,6 +427,7 @@ export const HexGrid: Component<HexGridProps> = (props) => {
                       isWatch={row().watchOffset === colIdx}
                       paused={props.paused}
                       setByte={props.setByte}
+                      advance={(a) => advance("hex", a)}
                     />
                   )}
                 </Index>
@@ -305,6 +442,7 @@ export const HexGrid: Component<HexGridProps> = (props) => {
                         isWatch={row().watchOffset === colIdx}
                         paused={props.paused}
                         setByte={props.setByte}
+                        advance={(a) => advance("ascii", a)}
                       />
                     )}
                   </Index>

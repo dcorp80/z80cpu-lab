@@ -340,6 +340,109 @@ describe("instructionTrace section — run-time freeze (REQ §7.5)", () => {
   });
 });
 
+describe("instructionTrace section — preview click-to-BP", () => {
+  it("clicking a preview address adds an exact-match PC breakpoint", async () => {
+    harness = await mount();
+    harness.bus.mem[0x0400] = 0x00; // NOP
+    harness.bus.mem[0x0401] = 0x00; // NOP
+    harness.dbg.setNext({ pc: 0x0400 });
+    harness.loop.emitPause({ kind: "user" });
+    const btn = harness.container.querySelector<HTMLButtonElement>(
+      ".itrace-row.is-preview .itrace-addr-btn",
+    );
+    expect(btn).not.toBeNull();
+    btn?.click();
+    expect(harness.store.breakpoints.length).toBe(1);
+    expect(harness.store.breakpoints[0]).toMatchObject({
+      kind: "pc-range",
+      lo: 0x0400,
+      hi: 0x0400,
+      enabled: true,
+    });
+  });
+
+  it("clicking again removes the exact-match BP (toggle)", async () => {
+    harness = await mount();
+    harness.bus.mem[0x0500] = 0x00;
+    harness.dbg.setNext({ pc: 0x0500 });
+    harness.loop.emitPause({ kind: "user" });
+    const btn = harness.container.querySelector<HTMLButtonElement>(
+      ".itrace-row.is-preview .itrace-addr-btn",
+    );
+    btn?.click();
+    expect(harness.store.breakpoints.length).toBe(1);
+    btn?.click();
+    expect(harness.store.breakpoints.length).toBe(0);
+  });
+
+  it("preview row gets has-bp class when an enabled pc-range BP covers the addr", async () => {
+    harness = await mount();
+    harness.bus.mem[0x0600] = 0x00;
+    harness.dbg.setNext({ pc: 0x0600 });
+    harness.store.addBreakpoint({ kind: "pc-range", lo: 0x0600, hi: 0x0600 });
+    harness.loop.emitPause({ kind: "user" });
+    const row = harness.container.querySelector(".itrace-row.is-preview");
+    expect(row?.classList.contains("has-bp")).toBe(true);
+  });
+
+  it("wider range BP also lights the marker but click adds a duplicate single-PC BP (never modifies the wider range)", async () => {
+    harness = await mount();
+    harness.bus.mem[0x0700] = 0x00;
+    harness.dbg.setNext({ pc: 0x0700 });
+    // Wider range covering the previewed PC.
+    harness.store.addBreakpoint({ kind: "pc-range", lo: 0x0700, hi: 0x07ff });
+    harness.loop.emitPause({ kind: "user" });
+    const row = harness.container.querySelector(".itrace-row.is-preview");
+    expect(row?.classList.contains("has-bp")).toBe(true);
+    const btn = harness.container.querySelector<HTMLButtonElement>(
+      ".itrace-row.is-preview .itrace-addr-btn",
+    );
+    btn?.click();
+    // Original wider range BP is untouched; a new single-PC BP added.
+    expect(harness.store.breakpoints.length).toBe(2);
+    expect(harness.store.breakpoints[0]).toMatchObject({
+      lo: 0x0700,
+      hi: 0x07ff,
+    });
+    expect(harness.store.breakpoints[1]).toMatchObject({
+      lo: 0x0700,
+      hi: 0x0700,
+    });
+    // A second click removes the single-PC BP but leaves the wider range.
+    btn?.click();
+    expect(harness.store.breakpoints.length).toBe(1);
+    expect(harness.store.breakpoints[0]).toMatchObject({
+      lo: 0x0700,
+      hi: 0x07ff,
+    });
+  });
+
+  it("disabled BPs do not light the marker", async () => {
+    harness = await mount();
+    harness.bus.mem[0x0800] = 0x00;
+    harness.dbg.setNext({ pc: 0x0800 });
+    harness.store.addBreakpoint({ kind: "pc-range", lo: 0x0800, hi: 0x0800 });
+    const id = harness.store.breakpoints[0].id;
+    harness.store.toggleBreakpoint(id); // disable
+    harness.loop.emitPause({ kind: "user" });
+    const row = harness.container.querySelector(".itrace-row.is-preview");
+    expect(row?.classList.contains("has-bp")).toBe(false);
+  });
+
+  it("executed-log rows do not render a click target or marker", async () => {
+    harness = await mount();
+    harness.loop.emitInstruction(mkTrace({ startAddr: 0x0900, bytes: [0x00] }));
+    harness.loop.emitPause({ kind: "user" });
+    // Executed rows have no .is-preview class and no .itrace-addr-btn.
+    const executedRow = harness.container.querySelector(
+      ".itrace-row:not(.is-preview)",
+    );
+    expect(executedRow).not.toBeNull();
+    expect(executedRow?.querySelector(".itrace-addr-btn")).toBeNull();
+    expect(executedRow?.querySelector(".itrace-bp-marker")).toBeNull();
+  });
+});
+
 describe("instructionTrace section — g hotkey", () => {
   it("g snaps a detached instruction-trace cursor to live", async () => {
     const backend = new MemoryBackend();

@@ -296,6 +296,114 @@ describe("Memory section — cell editing", () => {
   });
 });
 
+describe("Memory section — rapid entry", () => {
+  // After a successful Enter commit, the grid's `advance` queues two
+  // microtasks before clicking the next cell — give the test loop time
+  // to drain them.
+  const flushMicrotasks = async (): Promise<void> => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+
+  it("Enter on a hex cell commits and advances focus to the next cell", async () => {
+    harness = await mount("Body");
+    harness.store.setMemWatchAddr(0x4020);
+    const rows = harness.container.querySelectorAll(".hex-row");
+    // Watch row (index rowsBefore = 2), first cell = 0x4020.
+    const cell = rows[2].querySelector(".hex-cell") as HTMLElement;
+    fireEvent.click(cell);
+    const input = harness.container.querySelector(
+      ".hex-cell-input",
+    ) as HTMLInputElement;
+    fireEvent.input(input, { target: { value: "5A" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(harness.bus.mem[0x4020]).toBe(0x5a);
+    // Advance opens the next cell's input.
+    await flushMicrotasks();
+    const nextInput = harness.container.querySelector(
+      '.hex-cell[data-addr="4021"] .hex-cell-input',
+    );
+    expect(nextInput).not.toBeNull();
+  });
+
+  it("Enter on an ASCII cell advances within the ASCII lane", async () => {
+    harness = await mount("Body");
+    harness.store.setMemWatchAddr(0x4020);
+    const rows = harness.container.querySelectorAll(".hex-row");
+    const ascii = rows[2].querySelector(".hex-ascii-cell") as HTMLElement;
+    fireEvent.click(ascii);
+    const input = harness.container.querySelector(
+      ".hex-ascii-input",
+    ) as HTMLInputElement;
+    fireEvent.input(input, { target: { value: "Z" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(harness.bus.mem[0x4020]).toBe(0x5a);
+    await flushMicrotasks();
+    const nextAscii = harness.container.querySelector(
+      '.hex-ascii-cell[data-addr="4021"] .hex-ascii-input',
+    );
+    expect(nextAscii).not.toBeNull();
+    // Hex lane is independent — no hex input at 0x4021.
+    expect(
+      harness.container.querySelector(
+        '.hex-cell[data-addr="4021"] .hex-cell-input',
+      ),
+    ).toBeNull();
+  });
+
+  it("Enter on invalid hex reverts text and KEEPS the cell focused", async () => {
+    harness = await mount("Body");
+    harness.store.setMemWatchAddr(0x4020);
+    harness.bus.mem[0x4020] = 0x11;
+    harness.store.setMemByte(0x4020, 0x11);
+    const rows = harness.container.querySelectorAll(".hex-row");
+    const cell = rows[2].querySelector(".hex-cell") as HTMLElement;
+    fireEvent.click(cell);
+    const input = harness.container.querySelector(
+      ".hex-cell-input",
+    ) as HTMLInputElement;
+    fireEvent.input(input, { target: { value: "ZZ" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    // Byte unchanged, the same cell's input is still mounted (focus held).
+    expect(harness.bus.mem[0x4020]).toBe(0x11);
+    // Editor still open.
+    expect(harness.container.querySelector(".hex-cell-input")).not.toBeNull();
+  });
+
+  it("Enter at the bottom-right cell scrolls the watch window forward by one row", async () => {
+    harness = await mount("Body");
+    // Pick a watch addr; figure out the window's bottom-right addr.
+    harness.store.setMemWatchAddr(0x4020);
+    const bpr = harness.store.memBytesPerRow();
+    const rowsBeforeCount =
+      harness.container.querySelectorAll(".hex-row").length;
+    // start = (watchRowAddr) - rowsBefore*bpr; last addr = start + rowsCount*bpr - 1
+    // For mem defaults (2 + 1 + 9 = 12 rows, bpr=16):
+    //   start = 0x4020 - 32 = 0x4000; last = 0x4000 + 12*16 - 1 = 0x40BF
+    expect(rowsBeforeCount).toBe(12);
+    expect(bpr).toBe(16);
+    const bottomCell = harness.container.querySelector(
+      '.hex-cell[data-addr="40BF"]',
+    ) as HTMLElement;
+    expect(bottomCell).not.toBeNull();
+    fireEvent.click(bottomCell);
+    const input = harness.container.querySelector(
+      ".hex-cell-input",
+    ) as HTMLInputElement;
+    fireEvent.input(input, { target: { value: "AA" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(harness.bus.mem[0x40bf]).toBe(0xaa);
+    // watchAddr bumped by one row → next cell at 0x40C0 is now visible
+    // and is in the rendered window.
+    expect(harness.store.memWatchAddr()).toBe(0x4030);
+    await flushMicrotasks();
+    expect(
+      harness.container.querySelector('.hex-cell[data-addr="40C0"]'),
+    ).not.toBeNull();
+  });
+});
+
 describe("Memory section — folded summary", () => {
   it("shows watch address with no activity on fresh boot", async () => {
     harness = await mount("FoldedSummary");

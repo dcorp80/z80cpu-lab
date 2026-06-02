@@ -64,6 +64,7 @@ const Body: Component = () => {
       paused={paused}
       showAscii={true}
       watchAddr={store.memWatchAddr}
+      setWatchAddr={(a) => store.setMemWatchAddr(a)}
       jumpVersion={store.memWatchJumpVersion}
       rowsBefore={DEFAULT_MEMORY_ROWS_BEFORE}
       rowsAfter={DEFAULT_MEMORY_ROWS_AFTER}

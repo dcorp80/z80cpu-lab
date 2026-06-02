@@ -138,6 +138,8 @@ export const STR = {
     executedHeading: "Executed",
     previewHeading: "Preview (next at PC)",
     previewEmpty: "(no bytes at PC)",
+    previewAddrAddBpTooltip: "Click to set a PC breakpoint here",
+    previewAddrRemoveBpTooltip: "Click to remove the PC breakpoint here",
     emptyExecuted: "(no instructions executed yet)",
     // Column labels — used as aria-labels for screen-reader rows.
     colHc: "HC",

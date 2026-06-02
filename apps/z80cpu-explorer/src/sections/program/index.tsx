@@ -3,7 +3,8 @@ import { MEM_SIZE } from "../../runloop/bus.ts";
 import { MAX_FILE_BYTES, type ProgramFile } from "../../storage/types.ts";
 import { useStore } from "../../store/index.ts";
 import { STR } from "../../style/strings.ts";
-import { filterHexInput, formatHex, parseAddr16 } from "../../util/hex.ts";
+import { parseAddr16 } from "../../util/hex.ts";
+import { HexAddrInput } from "../hexAddrInput.tsx";
 import type { SectionModule } from "../types.ts";
 
 export type PickFile = () => Promise<{
@@ -121,14 +122,6 @@ interface FileRowProps {
 
 const FileRow = (props: FileRowProps) => {
   const store = useStore();
-  // `addrEdit` is the in-flight edit buffer; `null` means "show the
-  // canonical hex of the stored loadAddr". Deriving display text from
-  // props this way keeps the input in sync if `loadAddr` changes via any
-  // other path (programmatic, future hotkey, snapshot restore).
-  const [addrEdit, setAddrEdit] = createSignal<string | null>(null);
-  const addrText = () => addrEdit() ?? formatHex(props.file.loadAddr, 4);
-  const [addrInvalid, setAddrInvalid] = createSignal(false);
-
   const session = createMemo(() => store.fileSessions[props.file.id]);
   // "Dirty" iff loaded once already at a different addr (DESIGN §3.4).
   const dirty = createMemo(() => {
@@ -141,53 +134,22 @@ const FileRow = (props: FileRowProps) => {
     return overflow > 0 ? overflow : 0;
   });
 
-  const commitAddr = () => {
-    const v = parseAddr16(addrText());
-    if (v === null) {
-      setAddrInvalid(true);
-      return;
-    }
-    setAddrInvalid(false);
-    if (v !== props.file.loadAddr) {
-      store.setFileLoadAddr(props.file.id, v);
-    }
-    // Clear the edit override — display now mirrors props.file.loadAddr.
-    setAddrEdit(null);
-  };
-
   return (
     <div class="program-file-row" classList={{ "is-dirty": dirty() }}>
       <span class="program-file-name" title={STR.program.fileNameLabel}>
         {props.file.name}
       </span>
-      <input
+      <HexAddrInput
         class="program-file-addr"
-        classList={{ "is-invalid": addrInvalid() }}
-        type="text"
-        value={addrText()}
+        committed={() => props.file.loadAddr}
+        commit={(v) => {
+          if (v !== props.file.loadAddr) {
+            store.setFileLoadAddr(props.file.id, v);
+          }
+        }}
         size={5}
-        aria-label={STR.program.fileAddrLabel}
+        ariaLabel={STR.program.fileAddrLabel}
         title={dirty() ? STR.program.fileDirtyTooltip : undefined}
-        onInput={(e) => {
-          const filtered = filterHexInput(e.currentTarget.value);
-          if (filtered !== e.currentTarget.value) {
-            e.currentTarget.value = filtered;
-          }
-          setAddrEdit(filtered);
-          setAddrInvalid(false);
-        }}
-        onBlur={commitAddr}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            commitAddr();
-            (e.currentTarget as HTMLInputElement).blur();
-          }
-          if (e.key === "Escape") {
-            setAddrEdit(null);
-            setAddrInvalid(false);
-            (e.currentTarget as HTMLInputElement).blur();
-          }
-        }}
       />
       <button
         type="button"
@@ -235,24 +197,37 @@ const FileRow = (props: FileRowProps) => {
 // race a slow OS dialog.
 const AddStubRow = () => {
   const store = useStore();
-  const [addrText, setAddrText] = createSignal("0000");
-  const [addrInvalid, setAddrInvalid] = createSignal(false);
+  // `addr` is the committed value HexAddrInput renders when unfocused.
+  // `onAdd` reads the input's live DOM `.value` rather than this signal
+  // so a user can type + click Add without an intermediate Enter/blur:
+  // some browsers (Safari, mobile) don't move focus to a button on
+  // click, so the input never blurs and the signal stays at its prior
+  // committed value. The DOM value always reflects what's on screen.
+  const [addr, setAddr] = createSignal(0);
   const [autoload, setAutoload] = createSignal(false);
   const [busy, setBusy] = createSignal(false);
+  const [addrInvalid, setAddrInvalid] = createSignal(false);
+  // Bumped on successful Add — HexAddrInput's resetSignal effect clears
+  // its in-flight text so the placeholder/committed value re-shows.
+  const [addrResetVersion, setAddrResetVersion] = createSignal(0);
+  let addrInputRef: HTMLInputElement | undefined;
 
   const reset = () => {
-    setAddrText("0000");
+    setAddr(0);
     setAutoload(false);
     setAddrInvalid(false);
+    setAddrResetVersion((v) => v + 1);
   };
 
   const onAdd = async () => {
     if (busy()) return;
-    const addr = parseAddr16(addrText());
-    if (addr === null) {
+    const liveText = addrInputRef?.value ?? "";
+    const parsed = parseAddr16(liveText);
+    if (parsed === null) {
       setAddrInvalid(true);
       return;
     }
+    setAddrInvalid(false);
     setBusy(true);
     try {
       const picked = await pickFile();
@@ -260,7 +235,7 @@ const AddStubRow = () => {
       store.addFile({
         name: picked.name,
         bytes: picked.bytes,
-        loadAddr: addr,
+        loadAddr: parsed,
         autoload: autoload(),
       });
       const justAdded = store.files[store.files.length - 1];
@@ -274,21 +249,20 @@ const AddStubRow = () => {
   return (
     <div class="program-file-row program-add-stub">
       <span class="program-file-name program-add-stub-name muted">—</span>
-      <input
+      <HexAddrInput
         class="program-file-addr"
         classList={{ "is-invalid": addrInvalid() }}
-        type="text"
-        value={addrText()}
-        size={5}
-        aria-label={STR.program.fileAddrLabel}
-        disabled={busy()}
-        onInput={(e) => {
-          const filtered = filterHexInput(e.currentTarget.value);
-          if (filtered !== e.currentTarget.value) {
-            e.currentTarget.value = filtered;
-          }
-          setAddrText(filtered);
+        committed={addr}
+        commit={(v) => {
+          setAddr(v);
           setAddrInvalid(false);
+        }}
+        resetSignal={addrResetVersion}
+        size={5}
+        ariaLabel={STR.program.fileAddrLabel}
+        disabled={busy()}
+        ref={(el) => {
+          addrInputRef = el;
         }}
       />
       <button

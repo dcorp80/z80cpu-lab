@@ -28,6 +28,27 @@ export const DEFAULT_LOOP_CONFIG: LoopConfig = {
   budgetCheckEveryEdges: 1024,
 };
 
+// ── UI throttle cadence ───────────────────────────────────────────
+
+/**
+ * Throttled-flush cadence for run-state UI mirrors
+ * (`traceRingVersionThrottled`, `insnCountThrottled`). Independent of
+ * the CPU loop's rAF cadence — the CPU still runs every frame; this
+ * just gates how often the UI sees the new values.
+ *
+ * REQ §7.5 baseline: 30 Hz. `flushEveryNFrames: 2` flushes on every
+ * other rAF callback (~30 Hz on a 60 Hz display); `1` flushes every
+ * frame (~60 Hz). Values >2 are valid but make the BP status line
+ * and trace folded summary feel laggy without saving real CPU.
+ */
+export interface UiConfig {
+  flushEveryNFrames: number;
+}
+
+export const DEFAULT_UI_CONFIG: UiConfig = {
+  flushEveryNFrames: 2,
+};
+
 // ── Bus ───────────────────────────────────────────────────────────
 
 /**

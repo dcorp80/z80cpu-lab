@@ -3,6 +3,8 @@
 // methods are defined here so backends can implement them once and stay
 // stable across later milestones.
 
+import type { UiConfig } from "../config/defaults.ts";
+
 export interface SectionUiState {
   id: string;
   folded: boolean;
@@ -21,6 +23,11 @@ export interface UiState {
   fileOrder?: string[];
   /** Theme selector; `null` falls back to 'system'. Wired in milestone 11. */
   theme?: "light" | "dark" | "system" | null;
+  /**
+   * UI throttle cadence — falls back to `DEFAULT_UI_CONFIG` when
+   * absent or malformed (older backends, missing field on first run).
+   */
+  uiConfig?: UiConfig;
 }
 
 /**
