@@ -30,9 +30,12 @@ import type { SectionModule } from "../types.ts";
 import {
   type BitTransition,
   type BusValueTransition,
+  bitLevelRow,
+  type RowSegment,
   renderBitRow,
   renderBusValueRow,
   renderTriRow,
+  segmentByMask,
   type TriTransition,
 } from "./render.ts";
 
@@ -55,28 +58,18 @@ const Header: Component = () => {
   };
   return (
     <div class="hwt-header-controls">
-      <label class="hwt-capture-mode" title="">
+      <label class="hwt-capture-mode" title={STR.hwTrace.captureToggleTooltip}>
+        <input
+          type="checkbox"
+          aria-label={STR.hwTrace.captureToggleAriaLabel}
+          checked={store.hwTraceMode() === "ring"}
+          onChange={(e) =>
+            store.setHwTraceMode(e.currentTarget.checked ? "ring" : "disabled")
+          }
+        />
         <span class="hwt-capture-mode-label">
-          {STR.hwTrace.captureModeLabel}
+          {STR.hwTrace.captureToggleLabel}
         </span>
-        <select
-          aria-label={STR.hwTrace.captureModeAriaLabel}
-          value={store.hwTraceMode()}
-          onChange={(e) => {
-            const v = e.currentTarget.value;
-            if (v === "ring" || v === "disabled") store.setHwTraceMode(v);
-          }}
-        >
-          <option value="ring" title={STR.hwTrace.captureModeRingTooltip}>
-            {STR.hwTrace.captureModeRing}
-          </option>
-          <option
-            value="disabled"
-            title={STR.hwTrace.captureModeDisabledTooltip}
-          >
-            {STR.hwTrace.captureModeDisabled}
-          </option>
-        </select>
       </label>
       <Show when={detached()}>
         {(c) => (
@@ -155,12 +148,22 @@ const SignalRow: Component<{
   windowLo: number;
   windowHi: number;
   row: RowData;
+  /**
+   * Optional per-cell dim mask (true ⇒ render that cell dimmed). Only the
+   * `addr` row passes one — it marks DRAM-refresh cells (nRFSH low) so
+   * refresh addresses read distinctly from operational ones.
+   */
+  dimMask?: ReadonlyArray<boolean>;
 }> = (props) => {
   const glyphs = STR.hwTrace.glyphs;
-  const waveform = createMemo(() => {
+  // Each row renders as one or more runs. Rows without a dim mask collapse
+  // to a single full-width run, preserving the one-node-per-row cost; the
+  // addr row splits into dim/normal runs at refresh boundaries.
+  const segments = createMemo<RowSegment[]>(() => {
+    let text: string;
     if (isBusValue(props.signal)) {
       const width = props.signal === "addr" ? 4 : 2;
-      return renderBusValueRow(
+      text = renderBusValueRow(
         props.row.bus,
         props.windowLo,
         props.windowHi,
@@ -168,30 +171,39 @@ const SignalRow: Component<{
         props.row.initialBus,
         glyphs,
       );
-    }
-    if (isTri(props.signal)) {
-      return renderTriRow(
+      const mask = props.dimMask;
+      if (mask?.length) return segmentByMask(text, mask);
+    } else if (isTri(props.signal)) {
+      text = renderTriRow(
         props.row.tri,
         props.windowLo,
         props.windowHi,
         props.row.initialTri,
         glyphs,
       );
+    } else {
+      text = renderBitRow(
+        props.row.bit,
+        props.windowLo,
+        props.windowHi,
+        props.row.initialBit,
+        glyphs,
+      );
     }
-    return renderBitRow(
-      props.row.bit,
-      props.windowLo,
-      props.windowHi,
-      props.row.initialBit,
-      glyphs,
-    );
+    return [{ text, dim: false }];
   });
   return (
     <div class="hwt-row">
       <span class="hwt-row-label">
         {STR.hwTrace.signalLabels[props.signal]}
       </span>
-      <span class="hwt-row-waveform">{waveform()}</span>
+      <span class="hwt-row-waveform">
+        <For each={segments()}>
+          {(seg) =>
+            seg.dim ? <span class="hwt-bus-refresh">{seg.text}</span> : seg.text
+          }
+        </For>
+      </span>
     </div>
   );
 };
@@ -303,7 +315,20 @@ const Body: Component = () => {
       store.hwTraceVersion();
       const hi = store.hc();
       if (hi < 1) return { lo: 1, hi: 0 };
-      const lo = Math.max(1, hi - DEFAULT_HW_TRACE_RENDER_MAX_HCS + 1);
+      // Clamp the left edge UP to the oldest recorded HC. `store.hc()` is a
+      // free-running counter that keeps advancing while capture is DISABLED,
+      // but the ring records nothing then — so a window left edge of
+      // `hi - RENDER_MAX + 1` can fall before the first record. The renderer
+      // would then fill `[lo, oldestHc)` with carry-forward from
+      // `latestBefore(lo)` = undefined → default deasserted levels: the
+      // "dead lines" bug (visible after enabling capture mid-session, when
+      // HC already advanced past where the ring starts). Pinning `lo` to
+      // `oldestHc()` keeps the window over real data; the carry-forward seed
+      // then always has a record behind it. (`oldestHc()` is undefined only
+      // when the ring is empty — then the body shows the empty/disabled
+      // fallback, not rows, so the `?? 1` is never actually rendered.)
+      const oldest = store.hwTrace.oldestHc() ?? 1;
+      const lo = Math.max(1, hi - DEFAULT_HW_TRACE_RENDER_MAX_HCS + 1, oldest);
       return { lo, hi };
     },
     { lo: 1, hi: 0 },
@@ -321,11 +346,51 @@ const Body: Component = () => {
       store.hwTrace.rangeView(lo, hi),
     );
   }, emptyRowData());
+  // Gate the whole body on the ring actually holding records (head/tail
+  // emptiness), NOT on store.hc(). An emptied ring after a long run still
+  // leaves store.hc() large; keying off hc would render a window full of
+  // carried-forward "dead lines." If there's nothing in the ring, show
+  // nothing.
   const hasData = createMemo<boolean>((prev) => {
     if (store.status() !== "paused") return prev;
     store.hwTraceVersion();
-    return store.hwTrace.newestHc() !== undefined;
+    return !store.hwTrace.isEmpty();
   }, false);
+
+  // M1-cycle start markers: the cell offset (relative to windowLo) of
+  // every nM1 falling edge (1→0) inside the window. Rendered as faint
+  // vertical rules so instruction boundaries are visible at a glance —
+  // and as a built-in alignment ruler: because the lines live on the
+  // same 1ch grid as the glyphs, any row that drifted off-grid would
+  // show its glyphs sliced mid-cell by the lines. Derived from the nM1
+  // bit row we already build. Walking with the carried-in level
+  // (`initialBit`) avoids marking a spurious edge when the window opens
+  // mid-M1 (nM1 already low, so the first emitted transition isn't a
+  // real 1→0).
+  const m1Starts = createMemo<number[]>(() => {
+    const { lo } = renderBounds();
+    const row = rowData().nM1;
+    if (!row) return [];
+    const offsets: number[] = [];
+    let prev = row.initialBit;
+    for (const t of row.bit) {
+      if (prev === 1 && t.value === 0) offsets.push(t.hc - lo);
+      prev = t.value;
+    }
+    return offsets;
+  });
+
+  // Per-cell DRAM-refresh mask: true where nRFSH is asserted (low). The
+  // addr row uses it to dim refresh addresses (I:R on the bus during
+  // M1 T3–T4) so they read distinctly from operational addresses. Keyed
+  // purely on nRFSH level — never on whether addr changed, since a
+  // refresh address can coincidentally equal the prior operational one.
+  const refreshMask = createMemo<boolean[]>(() => {
+    const { lo, hi } = renderBounds();
+    const row = rowData().nRFSH;
+    if (!row) return [];
+    return bitLevelRow(row.bit, lo, hi, row.initialBit).map((v) => v === 0);
+  });
 
   // Scroll-driven cursor management. When the user scrolls left,
   // detach the cursor at the rightmost visible HC; when they scroll
@@ -386,18 +451,37 @@ const Body: Component = () => {
     >
       <Show
         when={hasData()}
-        fallback={<span class="muted">{STR.hwTrace.bodyEmpty}</span>}
+        fallback={
+          <span class="muted">
+            {store.hwTraceMode() === "disabled"
+              ? STR.hwTrace.bodyDisabled
+              : STR.hwTrace.bodyEmpty}
+          </span>
+        }
       >
-        <For each={ALL_SIGNALS}>
-          {(name) => (
-            <SignalRow
-              signal={name}
-              windowLo={renderBounds().lo}
-              windowHi={renderBounds().hi}
-              row={rowData()[name]}
-            />
-          )}
-        </For>
+        <div class="hwt-content">
+          <div class="hwt-gridlines" aria-hidden="true">
+            <For each={m1Starts()}>
+              {(offset) => (
+                <div
+                  class="hwt-gridline"
+                  style={{ left: `calc(${offset} * 1ch)` }}
+                />
+              )}
+            </For>
+          </div>
+          <For each={ALL_SIGNALS}>
+            {(name) => (
+              <SignalRow
+                signal={name}
+                windowLo={renderBounds().lo}
+                windowHi={renderBounds().hi}
+                row={rowData()[name]}
+                dimMask={name === "addr" ? refreshMask() : undefined}
+              />
+            )}
+          </For>
+        </div>
       </Show>
     </div>
   );

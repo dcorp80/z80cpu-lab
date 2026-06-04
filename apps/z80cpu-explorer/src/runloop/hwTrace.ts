@@ -451,6 +451,17 @@ export class HwTraceBuffer {
     return chunk.pointer < 0 ? undefined : chunk.hcs[chunk.pointer];
   }
 
+  /**
+   * True when the ring holds no records — the head/tail span is empty
+   * (nothing ever written, or `clear()`ed). The display uses this to
+   * render nothing rather than carrying a stale level across a window a
+   * later run advanced past ("dead lines"); the store uses it to decide
+   * whether disabling capture should offer to save before zeroing.
+   */
+  isEmpty(): boolean {
+    return this._size === 0;
+  }
+
   version(): number {
     return this._version;
   }

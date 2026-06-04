@@ -1002,6 +1002,7 @@ body {
   gap: 4px;
   font-size: 12px;
   color: var(--muted);
+  cursor: pointer;
 }
 .hwt-capture-mode-label {
   user-select: none;
@@ -1033,6 +1034,12 @@ body {
   color: var(--muted);
 }
 .hwt-body {
+  /* Single source of truth for the row geometry the M1 gridline layer
+     depends on: the waveform's first cell starts at label-w + row-gap
+     from the row's left (box-sizing:border-box, so the 80px basis is the
+     label's full outer width). Keep these in sync via the vars below. */
+  --hwt-label-w: 80px;
+  --hwt-row-gap: 8px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
   line-height: 1.4;
@@ -1051,7 +1058,7 @@ body {
 .hwt-row {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--hwt-row-gap);
   white-space: nowrap;
   /* Rows must expand to fit their full waveform width, not shrink to
      the body's clientWidth. `max-content` lets each row reach its
@@ -1059,9 +1066,14 @@ body {
      body container. */
   width: max-content;
   min-width: 100%;
+  /* Lift rows above the M1 gridline layer (which sits at z-index 0 in
+     the same .hwt-content stacking root) so glyphs paint on top of the
+     lines while the lines show through the transparent cell gaps. */
+  position: relative;
+  z-index: 1;
 }
 .hwt-row-label {
-  flex: 0 0 80px;
+  flex: 0 0 var(--hwt-label-w);
   color: var(--muted);
   font-size: 11px;
   text-align: right;
@@ -1081,9 +1093,45 @@ body {
   /* letter-spacing MUST be 0: the block-element rails (▔/▁) are
      edge-to-edge, so any inter-glyph gap would (a) break a HIGH/LOW
      span into dashes and (b) make the cell pitch (1ch + spacing)
-     non-integral, which the future M1 grid relies on staying exactly
+     non-integral, which the M1 grid relies on staying exactly
      1ch. See STR.hwTrace.glyphs width-invariant note. */
   letter-spacing: 0;
   color: var(--fg);
   flex: 0 0 auto;
+}
+/* Wraps all signal rows + the gridline overlay in one max-content,
+   position:relative box so the absolutely-positioned gridlines (a) size
+   to the full stacked height of every row and (b) scroll horizontally in
+   lockstep with the rows (shared scrolled content). */
+.hwt-content {
+  position: relative;
+  width: max-content;
+  min-width: 100%;
+}
+/* M1-cycle grid: faint vertical rules at each nM1 falling edge. The
+   layer's left origin = the waveform's first cell; child lines offset
+   from there in `ch` units (= one HC cell, since glyphs advance exactly
+   1ch). width:0 so the layer never adds to the body's scrollWidth. */
+.hwt-gridlines {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--hwt-label-w) + var(--hwt-row-gap));
+  width: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+.hwt-gridline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+  opacity: 0.6;
+}
+/* DRAM-refresh addresses (addr while nRFSH is low): dimmed so they read
+   as non-operational without changing glyph advance (opacity only — no
+   width change, so the 1ch grid + M1 lines stay aligned). */
+.hwt-bus-refresh {
+  opacity: 0.4;
 }

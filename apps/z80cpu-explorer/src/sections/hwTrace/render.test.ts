@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  bitLevelRow,
   type HwTraceGlyphs,
   renderBitRow,
   renderBusValueRow,
   renderTriRow,
+  segmentByMask,
 } from "./render.ts";
 
 // Use ASCII stand-ins in tests so glyph identity is obvious in failure
@@ -197,5 +199,77 @@ describe("renderBusValueRow — edge cases", () => {
         G,
       ),
     ).toBe("ZZZZZ");
+  });
+});
+
+describe("bitLevelRow", () => {
+  it("returns empty array when windowHi < windowLo", () => {
+    expect(bitLevelRow([], 5, 3, 1)).toEqual([]);
+  });
+
+  it("carries the initial level across a window with no transitions", () => {
+    expect(bitLevelRow([], 0, 3, 0)).toEqual([0, 0, 0, 0]);
+  });
+
+  it("matches renderBitRow's walk (drops at the transition HC)", () => {
+    // Same fixture as renderBitRow's "drops to low at the transition HC".
+    expect(bitLevelRow([{ hc: 2, value: 0 }], 0, 5, 1)).toEqual([
+      1, 1, 0, 0, 0, 0,
+    ]);
+  });
+
+  it("applies pre-window transitions to the carried value", () => {
+    expect(bitLevelRow([{ hc: 5, value: 0 }], 10, 12, 1)).toEqual([0, 0, 0]);
+  });
+});
+
+describe("segmentByMask", () => {
+  it("returns no segments for empty text", () => {
+    expect(segmentByMask("", [])).toEqual([]);
+  });
+
+  it("collapses to a single non-dim run when the mask is empty", () => {
+    expect(segmentByMask("4042", [])).toEqual([{ text: "4042", dim: false }]);
+  });
+
+  it("treats cells past the mask end as not dimmed", () => {
+    expect(segmentByMask("ABCD", [false, false])).toEqual([
+      { text: "ABCD", dim: false },
+    ]);
+  });
+
+  it("splits a dim run out of the middle (refresh address)", () => {
+    // 10 cells: operational, then a 4-cell refresh window, then filler.
+    const text = "00104242..";
+    const mask = [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+    ];
+    expect(segmentByMask(text, mask)).toEqual([
+      { text: "0010", dim: false },
+      { text: "4242", dim: true },
+      { text: "..", dim: false },
+    ]);
+  });
+
+  it("handles a mask that is dim from the very first cell", () => {
+    expect(segmentByMask("AABB", [true, true, false, false])).toEqual([
+      { text: "AA", dim: true },
+      { text: "BB", dim: false },
+    ]);
+  });
+
+  it("coalesces every-cell-dim into one run", () => {
+    expect(segmentByMask("FFFF", [true, true, true, true])).toEqual([
+      { text: "FFFF", dim: true },
+    ]);
   });
 });

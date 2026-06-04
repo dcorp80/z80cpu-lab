@@ -90,6 +90,38 @@ describe("HW trace (browser smoke)", () => {
       scrollEl.scrollWidth - scrollEl.scrollLeft - scrollEl.clientWidth,
     ).toBeLessThan(8);
   });
+
+  it("draws M1 gridlines whose origin lands on the waveform's first cell", async () => {
+    const runBtn = page.getByRole("button", { name: "Run" });
+    await runBtn.click();
+    const deadline = Date.now() + 500;
+    while (Date.now() < deadline && booted.store.hc() < 2000) {
+      await sleep(16);
+    }
+    await page.getByRole("button", { name: "Pause" }).click();
+    await sleep(16);
+
+    // RST 38h spin fetches an M1 every instruction → many nM1 falling
+    // edges → many gridlines.
+    const lines = document.querySelectorAll(".hwt-gridline");
+    expect(lines.length).toBeGreaterThan(0);
+
+    // The gridline layer's left origin must coincide with the waveform's
+    // first cell (label-w + row-gap). If that offset ever drifts from the
+    // real label geometry, the whole grid marches off the cells — so this
+    // pins the CSS-var math to the laid-out result. Difference is taken so
+    // horizontal scroll position cancels out.
+    const layer = document.querySelector<HTMLElement>(".hwt-gridlines");
+    const wave = document.querySelector<HTMLElement>(".hwt-row-waveform");
+    expect(layer).not.toBeNull();
+    expect(wave).not.toBeNull();
+    if (!layer || !wave) return;
+    expect(
+      Math.abs(
+        layer.getBoundingClientRect().left - wave.getBoundingClientRect().left,
+      ),
+    ).toBeLessThan(1.5);
+  });
 });
 
 // The whole HW-trace layout rests on "1 glyph = 1 HC cell": rows are

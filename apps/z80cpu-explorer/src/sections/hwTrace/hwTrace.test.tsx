@@ -126,26 +126,29 @@ describe("hwTrace section — folded summary", () => {
 });
 
 describe("hwTrace section — header", () => {
-  it("renders the capture-mode select with ring + disabled options", async () => {
+  it("renders the capture toggle as a checkbox, checked in ring mode", async () => {
     const { container } = await open("header");
-    const select = container.querySelector(
-      ".hwt-capture-mode select",
-    ) as HTMLSelectElement | null;
-    expect(select).not.toBeNull();
-    expect(select?.value).toBe("ring");
-    const opts = Array.from(select?.options ?? []).map((o) => o.value);
-    expect(opts).toEqual(["ring", "disabled"]);
+    const cb = container.querySelector(
+      ".hwt-capture-mode input[type=checkbox]",
+    ) as HTMLInputElement | null;
+    expect(cb).not.toBeNull();
+    expect(cb?.checked).toBe(true); // default mode is ring
   });
 
-  it("capture-mode select calls store.setHwTraceMode on change", async () => {
+  it("unchecking the capture toggle disables capture; rechecking re-enables", async () => {
     const { container, store } = await open("header");
-    const select = container.querySelector(
-      ".hwt-capture-mode select",
-    ) as HTMLSelectElement;
-    select.value = "disabled";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
+    const cb = container.querySelector(
+      ".hwt-capture-mode input[type=checkbox]",
+    ) as HTMLInputElement;
+    cb.checked = false;
+    cb.dispatchEvent(new Event("change", { bubbles: true }));
     expect(store.hwTraceMode()).toBe("disabled");
     expect(store.hwTrace.getMode()).toBe("disabled");
+
+    cb.checked = true;
+    cb.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(store.hwTraceMode()).toBe("ring");
+    expect(store.hwTrace.getMode()).toBe("ring");
   });
 
   it("snap-to-live button is hidden when the cursor is live", async () => {
@@ -178,6 +181,31 @@ describe("hwTrace section — body", () => {
     const { container } = await open("body");
     expect(container.textContent).toContain(STR.hwTrace.bodyEmpty);
     expect(container.querySelectorAll(".hwt-row").length).toBe(0);
+  });
+
+  it("shows a capture-off message (not the generic empty one) when disabled and empty", async () => {
+    const { container, store } = await open("body");
+    store.setHwTraceMode("disabled");
+    expect(container.textContent).toContain(STR.hwTrace.bodyDisabled);
+    expect(container.textContent).not.toContain(STR.hwTrace.bodyEmpty);
+    expect(container.querySelectorAll(".hwt-row").length).toBe(0);
+  });
+
+  it("clears the ring (and the display) when capture is toggled off", async () => {
+    const { container, store, loop } = await open("body");
+    const sample = makeBusSample();
+    recordSample(store.hwTrace, sample, 1);
+    recordSample(store.hwTrace, withOverrides(sample, { nM1: 0 }), 5);
+    loop.setHc(5);
+    loop.emitTick(5);
+    expect(container.querySelectorAll(".hwt-row").length).toBe(15);
+
+    // Disabling capture discards the ring (after the save placeholder) so
+    // a later run can't carry stale levels into the window as dead lines.
+    store.setHwTraceMode("disabled");
+    expect(store.hwTrace.isEmpty()).toBe(true);
+    expect(container.querySelectorAll(".hwt-row").length).toBe(0);
+    expect(container.textContent).toContain(STR.hwTrace.bodyDisabled);
   });
 
   it("renders one row per signal once activity has been captured", async () => {
@@ -222,12 +250,50 @@ describe("hwTrace section — body", () => {
       (el) => el.querySelector(".hwt-row-label")?.textContent === "addr",
     ) as HTMLElement;
     const waveform = addrRow.querySelector(".hwt-row-waveform")?.textContent;
-    // windowLo=1, windowHi=10. Snapshot at HC=2 carries addr=0x4042 with the
-    // change occurring AT HC=2 — so HC=1 has no prior info (carry-forward
-    // undefined → tristate filler), HC=2..5 render "4042", HC=6..10 filler.
-    expect(waveform).toBe(
-      `${STR.hwTrace.glyphs.tristate}4042${STR.hwTrace.glyphs.busHoldFiller.repeat(5)}`,
+    // windowHi=10; windowLo clamps to oldestHc()=2 (the first record), NOT
+    // HC=1 — store.hc() ran ahead of the ring, and rendering HC=1 would be a
+    // carry-from-nothing "dead line." So HC=2..5 render "4042", HC=6..10
+    // filler (9 cells, no leading tristate).
+    expect(waveform).toBe(`4042${STR.hwTrace.glyphs.busHoldFiller.repeat(5)}`);
+  });
+
+  it("dims addr cells during DRAM refresh (nRFSH low) only", async () => {
+    const { container, store, loop } = await open("body");
+    const op = withOverrides(makeBusSample(), { addr: 0x0010, nRFSH: 1 });
+    recordSample(store.hwTrace, op, 1);
+    // Refresh cycle: nRFSH low, addr = I:R on the bus, starting HC=5.
+    recordSample(
+      store.hwTrace,
+      withOverrides(op, { addr: 0x4242, nRFSH: 0 }),
+      5,
     );
+    // Back to operational at HC=9.
+    recordSample(
+      store.hwTrace,
+      withOverrides(op, { addr: 0x0011, nRFSH: 1 }),
+      9,
+    );
+    loop.setHc(12);
+    loop.emitTick(12);
+
+    const addrRow = Array.from(container.querySelectorAll(".hwt-row")).find(
+      (el) => el.querySelector(".hwt-row-label")?.textContent === "addr",
+    ) as HTMLElement;
+    const waveform = addrRow.querySelector(".hwt-row-waveform") as HTMLElement;
+    // window 1..12: "0010" (HC1-4) + "4242" (HC5-8, refresh) + "0011" (HC9-12).
+    expect(waveform.textContent).toBe("001042420011");
+    // Exactly the 4 refresh cells are dimmed — not the operational addrs.
+    const dimmed = waveform.querySelectorAll(".hwt-bus-refresh");
+    expect(dimmed.length).toBe(1);
+    expect(dimmed[0].textContent).toBe("4242");
+
+    // The dim treatment is addr-only: no other row carries a refresh span.
+    const otherDimmed = Array.from(container.querySelectorAll(".hwt-row"))
+      .filter(
+        (el) => el.querySelector(".hwt-row-label")?.textContent !== "addr",
+      )
+      .flatMap((el) => Array.from(el.querySelectorAll(".hwt-bus-refresh")));
+    expect(otherDimmed.length).toBe(0);
   });
 
   it("renders data as pre-transition tristate (sample.data=undefined)", async () => {
@@ -248,11 +314,12 @@ describe("hwTrace section — body", () => {
     );
   });
 
-  it("renders full HC extent (1..store.hc()) regardless of cursor", async () => {
-    // Under the new model the cursor controls scroll POSITION, not
-    // render bounds — so the rendered waveform always spans
-    // [max(1, hi-CAP+1), store.hc()] regardless of detach state.
-    // Scroll-driven cursor changes live in the browser tier.
+  it("renders the recorded HC extent (oldestHc..store.hc()) regardless of cursor", async () => {
+    // The cursor controls scroll POSITION, not render bounds — so the
+    // rendered range is independent of detach state. The left edge clamps
+    // to oldestHc() (here 100), NOT HC=1: store.hc() ran to 200 but the
+    // ring starts at 100, and cells 1..99 would be carry-from-nothing
+    // "dead lines." Scroll-driven cursor changes live in the browser tier.
     const { container, store, loop } = await open("body");
     const a = makeBusSample();
     recordSample(store.hwTrace, a, 100);
@@ -264,10 +331,32 @@ describe("hwTrace section — body", () => {
       (el) => el.querySelector(".hwt-row-label")?.textContent === "nM1",
     ) as HTMLElement;
     const waveform = m1Row.querySelector(".hwt-row-waveform")?.textContent;
-    expect(waveform?.length).toBe(200); // HC 1..200
+    expect(waveform?.length).toBe(101); // HC 100..200
     const high = STR.hwTrace.glyphs.high;
     const low = STR.hwTrace.glyphs.low;
-    // Cells 1..101 high (initial + carried), 102..200 low.
-    expect(waveform).toBe(high.repeat(101) + low.repeat(99));
+    // HC 100..101 high (record + carried), 102..200 low.
+    expect(waveform).toBe(high.repeat(2) + low.repeat(99));
+  });
+
+  it("trims the dead-line prefix when capture starts after HC has advanced", async () => {
+    // Repro of the reported bug: capture was OFF while HC ran ahead, so the
+    // ring's first-ever record lands at HC≫1 (here 2000). The window must
+    // start at that record (oldestHc), not HC=1 — otherwise [1, 2000)
+    // renders as carry-from-nothing "dead lines" before the real signals.
+    const { container, store, loop } = await open("body");
+    const a = makeBusSample();
+    recordSample(store.hwTrace, a, 2000);
+    recordSample(store.hwTrace, withOverrides(a, { nM1: 0 }), 2002);
+    loop.setHc(2002); // store.hc() === newestHc, as after an enable+Step
+    loop.emitTick(2002);
+    const m1Row = Array.from(container.querySelectorAll(".hwt-row")).find(
+      (el) => el.querySelector(".hwt-row-label")?.textContent === "nM1",
+    ) as HTMLElement;
+    const waveform = m1Row.querySelector(".hwt-row-waveform")?.textContent;
+    // Window = [oldestHc=2000, 2002] = 3 cells, NOT [1, 2002] = 2002 cells.
+    expect(waveform?.length).toBe(3);
+    expect(waveform).toBe(
+      STR.hwTrace.glyphs.high.repeat(2) + STR.hwTrace.glyphs.low,
+    );
   });
 });

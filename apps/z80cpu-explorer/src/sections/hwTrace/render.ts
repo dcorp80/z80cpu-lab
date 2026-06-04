@@ -73,9 +73,34 @@ export function renderBitRow(
   initialValue: 0 | 1,
   glyphs: HwTraceGlyphs,
 ): string {
-  if (windowHi < windowLo) return "";
+  // Glyph form of `bitLevelRow` — one shared walk, mapped to rails — so
+  // the level semantics (carry-forward, drop-at-transition-HC) live in
+  // exactly one place. `bitLevelRow` returns `[]` for an empty window,
+  // which `.join("")` collapses to "".
+  return bitLevelRow(transitions, windowLo, windowHi, initialValue)
+    .map((v) => (v === 1 ? glyphs.high : glyphs.low))
+    .join("");
+}
+
+/**
+ * Per-cell levels of a 1-bit signal across `[windowLo, windowHi]`: the
+ * walk primitive that `renderBitRow` maps to rail glyphs, exposed in raw
+ * `0|1` form so one row can style itself per-cell against ANOTHER signal.
+ * The `addr` row dims cells where `nRFSH` is low (DRAM refresh) so refresh
+ * addresses read distinctly from operational ones. The dim decision keys
+ * purely on `nRFSH` level, never on whether `addr` changed — a refresh
+ * address can coincidentally equal the preceding operational address and
+ * must still be marked.
+ */
+export function bitLevelRow(
+  transitions: ReadonlyArray<BitTransition>,
+  windowLo: number,
+  windowHi: number,
+  initialValue: 0 | 1,
+): (0 | 1)[] {
+  if (windowHi < windowLo) return [];
   const len = windowHi - windowLo + 1;
-  const cells = new Array<string>(len);
+  const out = new Array<0 | 1>(len);
   let cur: 0 | 1 = initialValue;
   let txIdx = 0;
   for (let i = 0; i < len; i++) {
@@ -84,9 +109,9 @@ export function renderBitRow(
       cur = transitions[txIdx].value;
       txIdx++;
     }
-    cells[i] = cur === 1 ? glyphs.high : glyphs.low;
+    out[i] = cur;
   }
-  return cells.join("");
+  return out;
 }
 
 /**
@@ -181,4 +206,43 @@ export function renderBusValueRow(
     }
   }
   return cells.join("");
+}
+
+/** A contiguous run of a rendered row sharing one styling state. */
+export interface RowSegment {
+  text: string;
+  /** `true` ⇒ render dimmed (e.g. a DRAM-refresh address). */
+  dim: boolean;
+}
+
+/**
+ * Split a rendered row string into contiguous runs by a per-cell boolean
+ * `mask` (`true` ⇒ dim this cell). Used to dim `addr` cells during DRAM
+ * refresh without abandoning the one-string-per-row render: adjacent
+ * cells with equal mask value coalesce, so the addr row costs O(refresh
+ * toggles) spans, not O(cells). All HW-trace glyphs are single UTF-16
+ * units, so `text[i]` indexes cell `i` directly.
+ *
+ * Cells past `mask.length` (or an empty mask) are treated as not dimmed —
+ * a row with no refresh activity collapses to a single non-dim run.
+ */
+export function segmentByMask(
+  text: string,
+  mask: ReadonlyArray<boolean>,
+): RowSegment[] {
+  const len = text.length;
+  if (len === 0) return [];
+  const segs: RowSegment[] = [];
+  let start = 0;
+  let curDim = mask[0] === true;
+  for (let i = 1; i < len; i++) {
+    const dim = mask[i] === true;
+    if (dim !== curDim) {
+      segs.push({ text: text.slice(start, i), dim: curDim });
+      start = i;
+      curDim = dim;
+    }
+  }
+  segs.push({ text: text.slice(start), dim: curDim });
+  return segs;
 }

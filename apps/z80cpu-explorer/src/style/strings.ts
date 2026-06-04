@@ -221,14 +221,16 @@ export const STR = {
       `capture: ${capture} · viewing ${viewing}`,
     foldedSummaryWithLast: (lastHc: string, capture: string, viewing: string) =>
       `last HC: ${lastHc} · capture: ${capture} · viewing ${viewing}`,
-    captureModeLabel: "Capture:",
-    captureModeAriaLabel: "HW-trace capture mode",
+    // Capture is a single enable checkbox: checked ⇒ ring capture,
+    // unchecked ⇒ off. Unchecking discards the ring (a save/export
+    // prompt lands in M8c), so the tooltip warns about the clear.
+    captureToggleLabel: "Capture",
+    captureToggleAriaLabel: "Enable HW-trace capture",
+    captureToggleTooltip:
+      "Capture bus activity into the ring. Unchecking stops capture and discards the captured ring.",
+    // Still used by the folded summary's "capture: …" clause.
     captureModeRing: "ring",
     captureModeDisabled: "off",
-    captureModeRingTooltip:
-      "Capture into a per-frame ring of recent bus transitions (default)",
-    captureModeDisabledTooltip:
-      "Disable capture — diff loop short-circuits, zero per-edge cost",
     viewingLive: "live",
     viewingDetached: (anchor: string) => `HC=${anchor}`,
     snapToLive: "Snap to live",
@@ -237,6 +239,12 @@ export const STR = {
     detachedBadgeTooltip: (anchor: string) =>
       `Pinned at HC=${anchor} — scroll back to history`,
     bodyEmpty: "(no transitions captured yet)",
+    // Shown instead of bodyEmpty when capture is OFF and nothing is in the
+    // buffer — distinguishes "intentionally not recording" from "running
+    // but nothing yet," so an empty pane in disabled mode reads as expected
+    // rather than broken. Disabling capture clears the ring (see
+    // setHwTraceMode), so in practice a disabled pane always lands here.
+    bodyDisabled: "(capture off — enable Capture to record bus activity)",
     // Per-signal row labels — the left header column. Keep short so the
     // fixed-width column stays narrow. Tooltip-only for the long name.
     signalLabels: {

@@ -1395,6 +1395,24 @@ describe("createAppStore", () => {
       expect(store.hwTrace.getMode()).toBe("ring");
     });
 
+    it("HW trace — disabling capture zeroes the ring and snaps the cursor to live", async () => {
+      const { store } = await freshStore();
+      const { makeBusSample, recordSample } = await import(
+        "../runloop/busSampleTestUtil.ts"
+      );
+      recordSample(store.hwTrace, makeBusSample(), 1);
+      recordSample(store.hwTrace, { ...makeBusSample(), nM1: 0 }, 5);
+      expect(store.hwTrace.isEmpty()).toBe(false);
+      store.detachHwTraceCursor(5);
+      expect(store.cursors.hwTrace.mode).toBe("detached");
+
+      store.setHwTraceMode("disabled");
+      // Ring zeroed (after the save placeholder); the now-meaningless
+      // detached anchor snaps back to live.
+      expect(store.hwTrace.isEmpty()).toBe(true);
+      expect(store.cursors.hwTrace).toEqual({ mode: "live" });
+    });
+
     it("HW trace — setHwTraceMode rejects bogus literals at the boundary", async () => {
       const { store } = await freshStore();
       expect(() =>

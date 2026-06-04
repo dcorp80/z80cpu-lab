@@ -895,10 +895,30 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
         );
       }
       hwTrace.setMode(mode);
+      if (mode === "disabled") {
+        // Disabling capture discards the live ring. If it holds anything,
+        // this is where a "save this trace first?" modal will hook in
+        // before we zero it (M8c: VCD export). Placeholder until then —
+        // for now we drop straight through to the clear.
+        if (!hwTrace.isEmpty()) {
+          // TODO(M8c): prompt to save/export the captured ring here, and
+          // only clear on the user's confirm/discard.
+        }
+        // Zero the ring (head/tail reset) so the display shows nothing
+        // rather than carrying a stale level across a window that a later
+        // run advances past — the "dead lines" bug.
+        hwTrace.clear();
+        // A detached anchor HC is meaningless against an emptied ring.
+        setCursors(
+          produce((s) => {
+            s.hwTrace = { mode: "live" };
+          }),
+        );
+      }
       setHwTraceModeSig(mode);
-      // setMode bumps the buffer's version; bring the reactive mirror
-      // along immediately so consumers see the mode flip and any
-      // dependent rendering without waiting for the next tick.
+      // setMode/clear bump the buffer's version; bring the reactive mirror
+      // along immediately so consumers see the mode flip and the cleared
+      // buffer without waiting for the next tick.
       lastSeenHwTraceVersion = hwTrace.version();
       setHwTraceVersion(lastSeenHwTraceVersion);
     },
