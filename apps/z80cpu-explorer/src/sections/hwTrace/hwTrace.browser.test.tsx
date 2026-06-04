@@ -13,6 +13,7 @@ import { page } from "@vitest/browser/context";
 import { render } from "solid-js/web";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type BootedApp, bootApp } from "../../boot.tsx";
+import { STR } from "../../style/strings.ts";
 import "../../styles.css";
 
 let booted: BootedApp;
@@ -88,5 +89,49 @@ describe("HW trace (browser smoke)", () => {
     expect(
       scrollEl.scrollWidth - scrollEl.scrollLeft - scrollEl.clientWidth,
     ).toBeLessThan(8);
+  });
+});
+
+// The whole HW-trace layout rests on "1 glyph = 1 HC cell": rows are
+// single joined strings (no per-cell box), so vertical alignment across
+// rows holds only if EVERY glyph advances the same width as the hex
+// digits used in bus rows. The original scan-line rails (⎺/⎽) rendered
+// narrower than a cell in the bundled monospace font, so bus rows drifted
+// ahead of oscilloscope rows by ~1 cell per few hundred HC. This guards
+// against any future glyph swap reintroducing a sub-cell advance. Needs
+// real paint metrics, so it lives in the browser tier (happy-dom fakes
+// getBoundingClientRect width).
+describe("HW trace glyph width invariant", () => {
+  // Render `count` copies of `ch` inside the real waveform span (same
+  // font-family/size + letter-spacing:0 as production) and return the
+  // laid-out width.
+  function measureWidth(ch: string, count: number): number {
+    const body = document.createElement("div");
+    body.className = "hwt-body";
+    const row = document.createElement("div");
+    row.className = "hwt-row";
+    const span = document.createElement("span");
+    span.className = "hwt-row-waveform";
+    span.textContent = ch.repeat(count);
+    row.append(span);
+    body.append(row);
+    document.body.append(body);
+    const w = span.getBoundingClientRect().width;
+    body.remove();
+    return w;
+  }
+
+  it("every waveform glyph advances exactly one monospace cell", () => {
+    // 300 cells = roughly the scale at which the old rails slipped a full
+    // cell, so any residual sub-cell mismatch shows up amplified ×300.
+    const N = 300;
+    const ref = measureWidth("0", N); // hex digit = canonical 1ch
+    expect(ref).toBeGreaterThan(0); // sanity: real layout happened
+    for (const [name, ch] of Object.entries(STR.hwTrace.glyphs)) {
+      const w = measureWidth(ch, N);
+      // Total drift across 300 cells must stay sub-pixel — i.e. the
+      // per-cell advance is indistinguishable from the hex digit's.
+      expect(Math.abs(w - ref), `glyph "${name}" (${ch})`).toBeLessThan(1);
+    }
   });
 });

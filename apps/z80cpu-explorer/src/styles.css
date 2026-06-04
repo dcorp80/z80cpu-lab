@@ -1078,7 +1078,12 @@ body {
 .hwt-row-waveform {
   /* Pre-rendered single string of glyphs — one DOM node per row, not
      per cell, regardless of waveform width. */
-  letter-spacing: 0.05em;
+  /* letter-spacing MUST be 0: the block-element rails (▔/▁) are
+     edge-to-edge, so any inter-glyph gap would (a) break a HIGH/LOW
+     span into dashes and (b) make the cell pitch (1ch + spacing)
+     non-integral, which the future M1 grid relies on staying exactly
+     1ch. See STR.hwTrace.glyphs width-invariant note. */
+  letter-spacing: 0;
   color: var(--fg);
   flex: 0 0 auto;
 }

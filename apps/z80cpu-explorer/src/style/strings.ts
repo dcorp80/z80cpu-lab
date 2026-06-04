@@ -190,13 +190,25 @@ export const STR = {
   },
   hwTrace: {
     title: "Hardware trace",
-    // Glyph table — REQ §6.4, pinned during M8a planning. Lives in
-    // strings.ts (and not the section component) so any later restyle
-    // is a single-file change. See feedback-hw-trace-glyphs in memory
-    // for the rationale.
+    // Glyph table — REQ §6.4. Lives in strings.ts (and not the section
+    // component) so any later restyle is a single-file change. See
+    // feedback-hw-trace-glyphs in memory for the rationale.
+    //
+    // WIDTH INVARIANT: every glyph here MUST advance exactly one
+    // monospace cell (1ch), because rows are rendered as a single joined
+    // string with one glyph per HC — there is no per-cell box to force
+    // alignment. The original rails used the "technical" scan-lines
+    // ⎺/⎽ (U+23BA/U+23BD), which several monospace fonts render at LESS
+    // than a full cell; over a few hundred HCs the bus rows (hex digits,
+    // always 1ch) drifted ahead of the oscilloscope rows by a whole
+    // cell. Block elements and box-drawing chars are guaranteed
+    // full-cell-width in any TUI-capable monospace font, so they hold
+    // the invariant — and, being edge-to-edge, render HIGH/LOW spans as
+    // continuous lines (paired with letter-spacing:0 on .hwt-row-waveform).
+    // hwTrace.browser.test.tsx asserts equal advance width as a guard.
     glyphs: {
-      high: "⎺", // ⎺  HORIZONTAL SCAN LINE-1 (top rail)
-      low: "⎽", // ⎽  HORIZONTAL SCAN LINE-9 (bottom rail)
+      high: "▔", // ▔  U+2594 UPPER ONE EIGHTH BLOCK — full-cell top rail
+      low: "▁", // ▁  U+2581 LOWER ONE EIGHTH BLOCK — full-cell bottom rail
       tristate: "┈", // ┈  BOX DRAWINGS LIGHT QUADRUPLE DASH HORIZONTAL
       busHoldFiller: "·", // ·  MIDDLE DOT — bus value held until next change
     },
