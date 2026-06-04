@@ -112,3 +112,45 @@ export const BYTES_PER_ROW_OPTIONS = [16, 32, 64] as const;
 export type BytesPerRow = (typeof BYTES_PER_ROW_OPTIONS)[number];
 export const DEFAULT_MEMORY_BYTES_PER_ROW: BytesPerRow = 16;
 export const DEFAULT_IO_BYTES_PER_ROW: BytesPerRow = 16;
+
+// ── HW trace buffer (DESIGN §3.2) ────────────────────────────────
+
+/**
+ * Capture model is binary: `'disabled'` short-circuits `record()`
+ * (zero per-edge cost — see DESIGN §3.2), `'ring'` retains the most
+ * recent state changes.
+ *
+ * The buffer is a ring of `ringChunks` chunks; each chunk holds up
+ * to `chunkSize` per-edge snapshots. Chunks are decoupled from rAF
+ * frames — a chunk advances only when its snapshot count hits
+ * `chunkSize`, and the ring evicts the oldest chunk when the next
+ * rotation would overrun. Step-mode accumulates into one chunk
+ * across many steps; full-speed run fills chunks quickly.
+ */
+export interface HwTraceConfig {
+  mode: "disabled" | "ring";
+  /** Ring capacity in chunks. */
+  ringChunks: number;
+  /** Positions per chunk — drives chunk-rotation threshold. */
+  chunkSize: number;
+}
+
+export const DEFAULT_HW_TRACE_CONFIG: HwTraceConfig = {
+  mode: "ring",
+  // ~1 MB total at chunkSize=4096 (each position ≈ 30 bytes across the
+  // per-signal TypedArrays). For a typical Z80 workload that's seconds
+  // of bus history; at full-speed continuous run it's milliseconds.
+  // Both numbers are tunable per machine via the future settings UI.
+  ringChunks: 16,
+  chunkSize: 4096,
+};
+
+/**
+ * Maximum HC range the HW-trace section renders into the DOM at once.
+ * The waveform fills the body's scrollable area; the visible viewport
+ * is a subset (~viewport width / cell width). Capping prevents the
+ * DOM from blowing up on very long runs — older history still lives
+ * in the buffer until it ages out the ring, but is invisible past
+ * this cap. The gear-modal exposure of this knob lands in M8b.
+ */
+export const DEFAULT_HW_TRACE_RENDER_MAX_HCS = 10_000;

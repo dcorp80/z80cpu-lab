@@ -39,8 +39,10 @@ export interface HexAddrInputProps {
   maxValue?: number;
   /** Called with the parsed value on a successful commit attempt. Return
    *  `false` to reject (cross-field violation); the component treats this
-   *  as invalid and reverts local text. */
-  commit: (value: number) => boolean | undefined;
+   *  as invalid and reverts local text. Returning nothing (`void`) — the
+   *  common case — counts as accepted. */
+  // biome-ignore lint/suspicious/noConfusingVoidType: `void` in the union lets void-returning handlers (the common case) satisfy the type while still allowing `false` to reject.
+  commit: (value: number) => boolean | void;
   /** Optional hook called after a successful Enter commit. Memory/IO use
    *  this to fire the watch-jump request (scroll the row back into view). */
   onJumpAfterEnter?: () => void;

@@ -77,12 +77,14 @@ export function registerDefaultHotkeys(
   registry.register({
     key: "g",
     scope: "global",
-    // M8 extends this to also snap the hw-trace cursor. For M6 there's
-    // only one detachable cursor, so single-call is the whole job.
-    // Runnable regardless of pause state — a detached cursor can pile
-    // up history during a long run, snapping to live must work without
-    // requiring the user to pause first.
-    action: () => store.snapInstructionTraceCursorToLive(),
+    // Snaps BOTH cursors in one call (DESIGN §3.6: "M8 extends the same
+    // handler to snap both"). Runnable regardless of pause state — a
+    // detached cursor can pile up history during a long run; snap-to-
+    // live must work without requiring the user to pause first.
+    action: () => {
+      store.snapInstructionTraceCursorToLive();
+      store.snapHwTraceCursorToLive();
+    },
     description: "Snap detached trace cursor(s) to live",
     category: "navigation",
   });

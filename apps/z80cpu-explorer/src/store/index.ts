@@ -9,6 +9,7 @@ import {
 import { createStore, produce, unwrap } from "solid-js/store";
 import {
   BYTES_PER_ROW_OPTIONS,
+  DEFAULT_HW_TRACE_CONFIG,
   DEFAULT_INSTRUCTION_RING_CAP,
   DEFAULT_IO_BYTES_PER_ROW,
   DEFAULT_MEMORY_BYTES_PER_ROW,
@@ -17,6 +18,7 @@ import {
 } from "../config/defaults.ts";
 import type { Bus64k } from "../runloop/bus.ts";
 import { MEM_SIZE } from "../runloop/bus.ts";
+import { HwTraceBuffer } from "../runloop/hwTrace.ts";
 import type { PauseReason, RunLoop, RunStatus } from "../runloop/loop.ts";
 import { defaultSectionIds } from "../sections/sectionRegistry.ts";
 import {
@@ -114,10 +116,19 @@ export interface CreateStoreDeps {
    * the reactive `cpuState` accessor; tests inject a minimal stub.
    */
   dbg: Pick<Z80DebugContext, "state">;
+  /**
+   * HW-trace buffer (DESIGN §3.2). Optional — when absent the store
+   * default-constructs a fresh `HwTraceBuffer` from
+   * `DEFAULT_HW_TRACE_CONFIG`, which keeps tests that don't care about
+   * HW-trace state from having to plumb a buffer through. Boot.tsx
+   * passes the same instance it gives to `createRunLoop`.
+   */
+  hwTrace?: HwTraceBuffer;
 }
 
 export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
   const { backend, loop, bus, dbg } = deps;
+  const hwTrace = deps.hwTrace ?? new HwTraceBuffer(DEFAULT_HW_TRACE_CONFIG);
   const loaded = await backend.loadUiState();
   const initialSections = loaded?.sections
     ? reconcileSections(loaded.sections)
@@ -196,6 +207,17 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
   const [traceRingVersionThrottled, setTraceRingVersionThrottled] =
     createSignal(0);
   const [insnCountThrottled, setInsnCountThrottled] = createSignal(0);
+
+  // HW-trace reactive mirrors (DESIGN §3.2). `hwTraceVersion` follows
+  // the buffer's own `version()` — only bumped when it advances, so
+  // `'disabled'` mode produces zero signal churn. `hwTraceMode`
+  // mirrors `buffer.getMode()` so section UI can render reactively;
+  // setHwTraceMode keeps both in sync.
+  const [hwTraceVersion, setHwTraceVersion] = createSignal(hwTrace.version());
+  const [hwTraceMode, setHwTraceModeSig] = createSignal<"disabled" | "ring">(
+    hwTrace.getMode(),
+  );
+  let lastSeenHwTraceVersion = hwTrace.version();
   let runFlushScheduled = false;
   // Set on `dispose()`; the rAF callback checks it so a frame queued
   // before teardown can't fire a signal write after the consuming
@@ -253,10 +275,12 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     scheduleFrame(tick);
   }
 
-  // View cursors (DESIGN §3.6, REQ §7.2). Only the instruction-trace
-  // cursor exists in M6 — `hwTrace` lands with M8.
+  // View cursors (DESIGN §3.6, REQ §7.2). Both cursors default to live;
+  // detach/snap actions follow the same pattern. zeroHC snaps both back
+  // since the rebased HC counter would invalidate any pinned anchor.
   const [cursors, setCursors] = createStore<CursorsState>({
     instructionTrace: { mode: "live" },
+    hwTrace: { mode: "live" },
   });
 
   // Memory / IO read paths. The `memByte` / `ioByte` accessors track
@@ -461,7 +485,18 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     bumpMemVersion();
     bumpIoVersion();
   });
-  loop.onTick((h) => setHc(h));
+  loop.onTick((h) => {
+    setHc(h);
+    // HW-trace buffer advances `version()` on each endFrame (and on
+    // clear/setMode). Only bump the reactive mirror when it actually
+    // changed — keeps `'disabled'` mode free of signal churn and avoids
+    // re-running consumer memos on no-change frames.
+    const v = hwTrace.version();
+    if (v !== lastSeenHwTraceVersion) {
+      lastSeenHwTraceVersion = v;
+      setHwTraceVersion(v);
+    }
+  });
   loop.onInstruction((trace, hcAtComplete) => {
     instructionFiredSinceLastPause = true;
     setInsnCount((n) => n + 1);
@@ -828,23 +863,44 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       loop.zeroHC();
       setHc(0);
       setInsnCount(0);
-      // Time-stamped buffers clear on zero-HC (REQ §7.3). HW-trace +
-      // snapshot logs land in M8 / M9; the instruction-trace ring is
-      // the only one alive in M6.
+      // Time-stamped buffers clear on zero-HC (REQ §7.3). HW-trace was
+      // a placeholder in M6; from M8a onward it shares the same clear
+      // path as the instruction-trace ring. Snapshot log lands in M9.
       traceRing.clear();
       setTraceRingVersion((v) => v + 1);
+      hwTrace.clear();
+      lastSeenHwTraceVersion = hwTrace.version();
+      setHwTraceVersion(lastSeenHwTraceVersion);
       // zeroHC is paused-only (gated by the Breakpoints header), so
       // the throttle bypass would fire anyway — still, be explicit.
       // Drops both the trace-ring throttle AND insnCountThrottled to
       // 0 in one shot.
       flushRunState();
-      // Cursor snaps back to live — its anchor HC would no longer mean
+      // Cursors snap back to live — anchor HCs would no longer mean
       // anything against the rebased counter.
       setCursors(
         produce((s) => {
           s.instructionTrace = { mode: "live" };
+          s.hwTrace = { mode: "live" };
         }),
       );
+    },
+    hwTrace,
+    hwTraceVersion,
+    hwTraceMode,
+    setHwTraceMode(mode: "disabled" | "ring") {
+      if (mode !== "disabled" && mode !== "ring") {
+        throw new RangeError(
+          `setHwTraceMode: 'disabled' | 'ring' required, got ${mode}`,
+        );
+      }
+      hwTrace.setMode(mode);
+      setHwTraceModeSig(mode);
+      // setMode bumps the buffer's version; bring the reactive mirror
+      // along immediately so consumers see the mode flip and any
+      // dependent rendering without waiting for the next tick.
+      lastSeenHwTraceVersion = hwTrace.version();
+      setHwTraceVersion(lastSeenHwTraceVersion);
     },
     traceRing,
     traceRingVersion,
@@ -864,6 +920,23 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       setCursors(
         produce((s) => {
           s.instructionTrace = { mode: "live" };
+        }),
+      );
+    },
+    detachHwTraceCursor(anchorHc: number) {
+      // Same `produce` wholesale-replace pattern as the instruction-trace
+      // cursor — a plain path write would deep-merge and leave a stale
+      // `anchorHc` after a live→detached→live cycle.
+      setCursors(
+        produce((s) => {
+          s.hwTrace = { mode: "detached", anchorHc };
+        }),
+      );
+    },
+    snapHwTraceCursorToLive() {
+      setCursors(
+        produce((s) => {
+          s.hwTrace = { mode: "live" };
         }),
       );
     },

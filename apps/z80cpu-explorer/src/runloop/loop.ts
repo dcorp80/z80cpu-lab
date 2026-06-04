@@ -52,8 +52,19 @@ export interface RunLoopDeps {
    */
   cpu: Z80Cpu;
   dbg: Z80DebugContext;
-  /** Called once per edge, BEFORE `dbg.clockEdge()`. Owns mem/IO resolution. */
-  busTick: () => void;
+  /**
+   * Called once per edge, BEFORE `dbg.clockEdge()`. Owns mem/IO
+   * resolution (and in M8b, level-pin assertion onto cpu.bus).
+   */
+  preEdge: () => void;
+  /**
+   * Called once per edge, AFTER `dbg.clockEdge()` and AFTER `hc++`.
+   * Owns HW-trace recording — samples `cpu.bus` (the state post-edge,
+   * at the now-incremented HC) and hands the sample to the buffer.
+   * Receives the post-increment HC so transitions land at the
+   * correct stamp.
+   */
+  postEdge: (hc: number) => void;
   config: LoopConfig;
   /**
    * Wallclock source — defaults to `performance.now`. Tests inject a
@@ -83,7 +94,7 @@ const defaultNow = (): number =>
 const CLAIMED_DBGS = new WeakSet<Z80DebugContext>();
 
 export function createRunLoop(deps: RunLoopDeps): RunLoop {
-  const { cpu, dbg, busTick, config } = deps;
+  const { cpu, dbg, preEdge, postEdge, config } = deps;
   const now = deps.now ?? defaultNow;
   const schedule = deps.schedule ?? defaultSchedule;
   const breakpoints = createBreakpointEvaluator();
@@ -163,10 +174,14 @@ export function createRunLoop(deps: RunLoopDeps): RunLoop {
     // would be dead defensive code — and TS narrows `status` past the
     // early-return above so the comparison reads as unreachable.
     while (true) {
-      // Per-edge work: bus resolution + CPU clock edge + hc bookkeeping.
-      busTick();
+      // Per-edge work: preEdge runs the bus resolver (and in M8b,
+      // level-pin assertion) BEFORE clockEdge; postEdge runs the
+      // HW-trace sampler AFTER clockEdge + hc++ so it captures the
+      // post-edge state at the correct HC.
+      preEdge();
       dbg.clockEdge();
       hc++;
+      postEdge(hc);
       if (stepHcRemaining > 0) stepHcRemaining--;
       // Breakpoints take precedence over step-complete: when a user
       // steps N instructions and a BP fires at instruction M<N, the

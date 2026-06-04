@@ -3,6 +3,7 @@ import type { Accessor } from "solid-js";
 import type { Store as SolidStore } from "solid-js/store";
 import type { UiConfig } from "../config/defaults.ts";
 import type { BusAccessRecord } from "../runloop/bus.ts";
+import type { HwTraceBuffer } from "../runloop/hwTrace.ts";
 import type { PauseReason, RunStatus } from "../runloop/loop.ts";
 import type {
   Breakpoint,
@@ -30,11 +31,14 @@ export type ViewCursor =
   | { mode: "detached"; anchorHc: number };
 
 /**
- * Cursor slice — one entry per traced section. M6 instantiates only
- * `instructionTrace`; the `hwTrace` key arrives with M8.
+ * Cursor slice — one entry per traced section (DESIGN §3.6). Both
+ * cursors default to `live` on boot and snap back to `live` on
+ * `zeroHC` (rebased HC counter would invalidate any pinned anchor).
+ * The `g` hotkey + section snap-to-live buttons drive these.
  */
 export interface CursorsState {
   instructionTrace: ViewCursor;
+  hwTrace: ViewCursor;
 }
 
 export interface InputPinsState {
@@ -108,6 +112,18 @@ export interface Store {
   stepHC(n: number): void;
   zeroHC(): void;
 
+  // ── HW trace (DESIGN §3.2, M8a — outputs only). The buffer itself is
+  // exposed for the section's `rangeView` queries; `hwTraceVersion`
+  // bumps each frame that recorded any transitions, so consumers'
+  // createMemo re-runs without polling. `hwTraceMode` mirrors
+  // `buffer.getMode()` reactively. `setHwTraceMode` validates the
+  // literal at the boundary; cursors and the throttled mirror land in
+  // later M8a sub-tasks alongside the section UI.
+  readonly hwTrace: HwTraceBuffer;
+  readonly hwTraceVersion: Accessor<number>;
+  readonly hwTraceMode: Accessor<"disabled" | "ring">;
+  setHwTraceMode(mode: "disabled" | "ring"): void;
+
   // ── instruction trace (DESIGN §3.1). Ring is the canonical buffer;
   // `traceRingVersion` bumps on push/clear so sections re-render via a
   // memo keyed on the version rather than tracking each record.
@@ -121,10 +137,13 @@ export interface Store {
   readonly traceRingVersionThrottled: Accessor<number>;
 
   // ── view cursors (DESIGN §3.6, REQ §7.2). Default `live`; detached
-  // by scroll-back; snap-to-live button (and `g` hotkey) reattaches.
+  // by scroll-back; snap-to-live button (and `g` hotkey, which snaps
+  // both at once) reattaches.
   readonly cursors: SolidStore<CursorsState>;
   detachInstructionTraceCursor(anchorHc: number): void;
   snapInstructionTraceCursorToLive(): void;
+  detachHwTraceCursor(anchorHc: number): void;
+  snapHwTraceCursorToLive(): void;
 
   // ── memory & IO read/write (REQ §6.6 / §6.7). Sections read through
   // `memByte` / `ioByte`; the createMemo tracking the matching version

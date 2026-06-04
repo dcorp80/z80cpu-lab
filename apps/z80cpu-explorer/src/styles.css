@@ -987,3 +987,98 @@ body {
   outline: 1px solid var(--accent);
   border-color: var(--accent);
 }
+
+/* Hardware trace section. Layout: fixed-width left column for signal
+   names + a monospace waveform pane to the right. One row per signal;
+   strict 1-cell-per-HC inside the waveform (no expansion at edges). */
+.hwt-header-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.hwt-capture-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.hwt-capture-mode-label {
+  user-select: none;
+}
+.hwt-detached-badge {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--warning);
+  color: var(--warning);
+  background: var(--warning-bg);
+}
+.hwt-snap {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.hwt-snap:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.hwt-folded-summary {
+  color: var(--muted);
+}
+.hwt-body {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  /* The waveform extends beyond the section's viewport so the user can
+     scroll back through buffer history; `overflow-x: auto` activates
+     CSS scrolling, `max-height` keeps vertical layout sane. */
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 60vh;
+  /* Anchor the scroll viewport so sticky labels position against it. */
+  position: relative;
+}
+.hwt-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  white-space: nowrap;
+  /* Rows must expand to fit their full waveform width, not shrink to
+     the body's clientWidth. `max-content` lets each row reach its
+     natural width which is what triggers horizontal overflow on the
+     body container. */
+  width: max-content;
+  min-width: 100%;
+}
+.hwt-row-label {
+  flex: 0 0 80px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: right;
+  padding-right: 4px;
+  border-right: 1px solid var(--border);
+  /* Pin the signal name to the left edge of the viewport while the
+     waveform scrolls under it — keeps the row identifiable at any
+     scroll position. */
+  position: sticky;
+  left: 0;
+  background: var(--bg);
+  z-index: 1;
+}
+.hwt-row-waveform {
+  /* Pre-rendered single string of glyphs — one DOM node per row, not
+     per cell, regardless of waveform width. */
+  letter-spacing: 0.05em;
+  color: var(--fg);
+  flex: 0 0 auto;
+}

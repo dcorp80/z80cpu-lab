@@ -5,6 +5,8 @@ import { DEFAULT_BUS_CONFIG } from "../config/defaults.ts";
 import { makeBus64k } from "./bus.ts";
 import { createRunLoop, type PauseReason, type RunLoop } from "./loop.ts";
 
+const noopPostEdge = (_hc: number): void => {};
+
 // Build a real CPU + dbg + bus. Force memInit=0 so the code path is
 // NOPs (opcode 00 = NOP) — keeps step/HC arithmetic predictable instead
 // of relying on whatever opcode the default fill (0xFF = RST 38h) implies.
@@ -20,7 +22,8 @@ function buildLoop() {
   const loop = createRunLoop({
     cpu,
     dbg,
-    busTick: bus.resolve,
+    preEdge: bus.resolve,
+    postEdge: noopPostEdge,
     config: { frameBudgetMs: 1, budgetCheckEveryEdges: 1_000_000 },
     now: () => 0,
     schedule: () => {
@@ -189,6 +192,41 @@ describe("RunLoop", () => {
     expect(pauses).toEqual([{ kind: "hc-target", target: 5 }]);
   });
 
+  describe("preEdge / postEdge ordering", () => {
+    it("calls preEdge before clockEdge and postEdge after, once per HC", () => {
+      const cpu = new Z80Cpu();
+      const dbg = new Z80DebugContext(cpu);
+      const bus = makeBus64k(cpu, { ...DEFAULT_BUS_CONFIG, memInit: 0 });
+      const calls: string[] = [];
+      const preEdge = (): void => {
+        calls.push("pre");
+        bus.resolve();
+      };
+      const postEdge = (hc: number): void => {
+        calls.push(`post:${hc}`);
+      };
+      const loop = createRunLoop({
+        cpu,
+        dbg,
+        preEdge,
+        postEdge,
+        config: { frameBudgetMs: 1, budgetCheckEveryEdges: 1_000_000 },
+        now: () => 0,
+        schedule: () => {},
+      });
+      loop.stepHC(3);
+      sync(loop);
+      expect(calls).toEqual([
+        "pre",
+        "post:1",
+        "pre",
+        "post:2",
+        "pre",
+        "post:3",
+      ]);
+    });
+  });
+
   it("warns when a second RunLoop is built against the same dbg", () => {
     const cpu = new Z80Cpu();
     const dbg = new Z80DebugContext(cpu);
@@ -197,7 +235,8 @@ describe("RunLoop", () => {
     createRunLoop({
       cpu,
       dbg,
-      busTick: bus.resolve,
+      preEdge: bus.resolve,
+      postEdge: noopPostEdge,
       config: { frameBudgetMs: 1, budgetCheckEveryEdges: 1 },
       now: () => 0,
       schedule: () => {},
@@ -206,7 +245,8 @@ describe("RunLoop", () => {
     createRunLoop({
       cpu,
       dbg,
-      busTick: bus.resolve,
+      preEdge: bus.resolve,
+      postEdge: noopPostEdge,
       config: { frameBudgetMs: 1, budgetCheckEveryEdges: 1 },
       now: () => 0,
       schedule: () => {},

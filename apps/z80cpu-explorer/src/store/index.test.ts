@@ -1,5 +1,9 @@
 import { InstructionTrace } from "@dcorp80/z80cpu-debug";
 import { describe, expect, it } from "vitest";
+import { DEFAULT_HW_TRACE_CONFIG } from "../config/defaults.ts";
+import { registerDefaultHotkeys } from "../hotkeys/defaults.ts";
+import { createHotkeyRegistry } from "../hotkeys/registry.ts";
+import { HwTraceBuffer } from "../runloop/hwTrace.ts";
 import { defaultSectionIds } from "../sections/sectionRegistry.ts";
 import { MemoryBackend } from "../storage/memory.ts";
 import { createAppStore } from "./index.ts";
@@ -258,6 +262,62 @@ describe("createAppStore", () => {
       store.detachInstructionTraceCursor(999);
       store.zeroHC();
       expect(store.cursors.instructionTrace).toEqual({ mode: "live" });
+    });
+
+    it("hw-trace cursor defaults to live", async () => {
+      const { store } = await freshStore();
+      expect(store.cursors.hwTrace).toEqual({ mode: "live" });
+    });
+
+    it("hw-trace cursor: detach + snap actions update the slice", async () => {
+      const { store } = await freshStore();
+      store.detachHwTraceCursor(4242);
+      expect(store.cursors.hwTrace).toEqual({
+        mode: "detached",
+        anchorHc: 4242,
+      });
+      store.snapHwTraceCursorToLive();
+      expect(store.cursors.hwTrace).toEqual({ mode: "live" });
+    });
+
+    it("hw-trace cursor: live→detached→live wholesale-replaces (no stale anchorHc)", async () => {
+      const { store } = await freshStore();
+      store.detachHwTraceCursor(123);
+      store.snapHwTraceCursorToLive();
+      // produce() wholesale replacement should leave NO anchorHc key —
+      // the live variant of ViewCursor doesn't carry one. A merging
+      // setter would have left it behind.
+      expect(Object.keys(store.cursors.hwTrace)).toEqual(["mode"]);
+    });
+
+    it("zeroHC snaps the hw-trace cursor back to live", async () => {
+      const { store } = await freshStore();
+      store.detachHwTraceCursor(7777);
+      store.zeroHC();
+      expect(store.cursors.hwTrace).toEqual({ mode: "live" });
+    });
+
+    it("zeroHC snaps BOTH cursors in one shot", async () => {
+      const { store } = await freshStore();
+      store.detachInstructionTraceCursor(100);
+      store.detachHwTraceCursor(200);
+      store.zeroHC();
+      expect(store.cursors.instructionTrace).toEqual({ mode: "live" });
+      expect(store.cursors.hwTrace).toEqual({ mode: "live" });
+    });
+
+    it("g hotkey action snaps BOTH cursors (default-hotkey wiring)", async () => {
+      const { store } = await freshStore();
+      const registry = createHotkeyRegistry();
+      registerDefaultHotkeys(registry, store);
+      const g = registry.list().find((b) => b.key === "g");
+      expect(g).toBeDefined();
+      // Detach both cursors, fire the hotkey's action, both come back.
+      store.detachInstructionTraceCursor(42);
+      store.detachHwTraceCursor(43);
+      g?.action();
+      expect(store.cursors.instructionTrace).toEqual({ mode: "live" });
+      expect(store.cursors.hwTrace).toEqual({ mode: "live" });
     });
 
     it("insnCountThrottled coalesces per-instruction bumps during run, flushes on pause", async () => {
@@ -622,9 +682,7 @@ describe("createAppStore", () => {
     it("persisted true restores the bus state at boot", async () => {
       const backend = new MemoryBackend();
       await backend.saveUiState({
-        sections: [
-          { id: "io", folded: false, config: { writeProtect: true } },
-        ],
+        sections: [{ id: "io", folded: false, config: { writeProtect: true } }],
       });
       const loop = makeStubLoop();
       const bus = makeStubBus();
@@ -1301,6 +1359,94 @@ describe("createAppStore", () => {
       );
       // BP unchanged after each failed edit.
       expect(store.breakpoints[0]).toMatchObject({ lo: 0x100, hi: 0x200 });
+    });
+
+    it("HW trace — exposes the same buffer instance passed in deps", async () => {
+      const backend = new MemoryBackend();
+      const loop = makeStubLoop();
+      const bus = makeStubBus();
+      const dbg = makeStubDbg();
+      const hwTrace = new HwTraceBuffer(DEFAULT_HW_TRACE_CONFIG);
+      const store = await createAppStore({
+        backend,
+        loop,
+        bus,
+        dbg,
+        hwTrace,
+      });
+      expect(store.hwTrace).toBe(hwTrace);
+      expect(store.hwTraceMode()).toBe("ring");
+    });
+
+    it("HW trace — default-constructs a buffer when none is provided", async () => {
+      const { store } = await freshStore();
+      expect(store.hwTrace).toBeInstanceOf(HwTraceBuffer);
+      expect(store.hwTraceMode()).toBe(DEFAULT_HW_TRACE_CONFIG.mode);
+    });
+
+    it("HW trace — setHwTraceMode flips both buffer and reactive mirror", async () => {
+      const { store } = await freshStore();
+      expect(store.hwTraceMode()).toBe("ring");
+      store.setHwTraceMode("disabled");
+      expect(store.hwTraceMode()).toBe("disabled");
+      expect(store.hwTrace.getMode()).toBe("disabled");
+      store.setHwTraceMode("ring");
+      expect(store.hwTraceMode()).toBe("ring");
+      expect(store.hwTrace.getMode()).toBe("ring");
+    });
+
+    it("HW trace — setHwTraceMode rejects bogus literals at the boundary", async () => {
+      const { store } = await freshStore();
+      expect(() =>
+        store.setHwTraceMode("capture" as unknown as "ring"),
+      ).toThrow(RangeError);
+      expect(store.hwTraceMode()).toBe("ring");
+    });
+
+    it("HW trace — zeroHC clears the buffer and bumps the reactive version", async () => {
+      const { store, loop } = await freshStore();
+      // Seed a record directly — we're not testing the loop integration
+      // here, just the store's clear contract.
+      const { makeBusSample, recordSample } = await import(
+        "../runloop/busSampleTestUtil.ts"
+      );
+      recordSample(store.hwTrace, makeBusSample(), 1);
+      recordSample(store.hwTrace, { ...makeBusSample(), nM1: 0 }, 5);
+      expect(store.hwTrace.size()).toBe(1);
+      // zeroHC is paused-only — the stub starts paused.
+      loop.setStatus("paused");
+      const vBefore = store.hwTraceVersion();
+      store.zeroHC();
+      expect(store.hwTrace.size()).toBe(0);
+      expect(store.hwTrace.oldestHc()).toBeUndefined();
+      // Version advanced (clear + the subsequent setHwTraceVersion).
+      expect(store.hwTraceVersion()).toBeGreaterThan(vBefore);
+    });
+
+    it("HW trace — hwTraceVersion bumps on a tick after the buffer advanced", async () => {
+      const { store, loop } = await freshStore();
+      const vBefore = store.hwTraceVersion();
+      const { makeBusSample, recordSample } = await import(
+        "../runloop/busSampleTestUtil.ts"
+      );
+      recordSample(store.hwTrace, makeBusSample(), 1);
+      recordSample(store.hwTrace, { ...makeBusSample(), nM1: 0 }, 2);
+      loop.emitTick(2);
+      expect(store.hwTraceVersion()).toBeGreaterThan(vBefore);
+    });
+
+    it("HW trace — hwTraceVersion does not bump on a tick when buffer didn't advance", async () => {
+      const { store, loop } = await freshStore();
+      const { makeBusSample, recordSample } = await import(
+        "../runloop/busSampleTestUtil.ts"
+      );
+      // Advance the buffer once, then deliver a tick — that bumps.
+      recordSample(store.hwTrace, makeBusSample(), 1);
+      loop.emitTick(1);
+      const vAfterFirst = store.hwTraceVersion();
+      // Deliver another tick without touching the buffer — no bump.
+      loop.emitTick(2);
+      expect(store.hwTraceVersion()).toBe(vAfterFirst);
     });
 
     it("restores stored breakpoints on boot and pushes them to the loop", async () => {

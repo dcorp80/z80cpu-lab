@@ -190,7 +190,59 @@ export const STR = {
   },
   hwTrace: {
     title: "Hardware trace",
-    foldedEmpty: "capture: off · viewing live",
-    bodyPlaceholder: "Hardware trace section — milestone 8.",
+    // Glyph table — REQ §6.4, pinned during M8a planning. Lives in
+    // strings.ts (and not the section component) so any later restyle
+    // is a single-file change. See feedback-hw-trace-glyphs in memory
+    // for the rationale.
+    glyphs: {
+      high: "⎺", // ⎺  HORIZONTAL SCAN LINE-1 (top rail)
+      low: "⎽", // ⎽  HORIZONTAL SCAN LINE-9 (bottom rail)
+      tristate: "┈", // ┈  BOX DRAWINGS LIGHT QUADRUPLE DASH HORIZONTAL
+      busHoldFiller: "·", // ·  MIDDLE DOT — bus value held until next change
+    },
+    // Folded summary — DESIGN §6.4 example:
+    //   "last HC: 124 M1↓ addr=0042 · capture: ring · viewing live"
+    // We elide the last-edge clause when the buffer is empty so a fresh
+    // boot reads cleanly. `viewingState` is "live" or "HC=NNNN" when
+    // detached.
+    foldedSummaryEmpty: (capture: string, viewing: string) =>
+      `capture: ${capture} · viewing ${viewing}`,
+    foldedSummaryWithLast: (lastHc: string, capture: string, viewing: string) =>
+      `last HC: ${lastHc} · capture: ${capture} · viewing ${viewing}`,
+    captureModeLabel: "Capture:",
+    captureModeAriaLabel: "HW-trace capture mode",
+    captureModeRing: "ring",
+    captureModeDisabled: "off",
+    captureModeRingTooltip:
+      "Capture into a per-frame ring of recent bus transitions (default)",
+    captureModeDisabledTooltip:
+      "Disable capture — diff loop short-circuits, zero per-edge cost",
+    viewingLive: "live",
+    viewingDetached: (anchor: string) => `HC=${anchor}`,
+    snapToLive: "Snap to live",
+    snapToLiveTooltip: "Re-attach the HW-trace cursor to live (g)",
+    detachedBadge: "detached",
+    detachedBadgeTooltip: (anchor: string) =>
+      `Pinned at HC=${anchor} — scroll back to history`,
+    bodyEmpty: "(no transitions captured yet)",
+    // Per-signal row labels — the left header column. Keep short so the
+    // fixed-width column stays narrow. Tooltip-only for the long name.
+    signalLabels: {
+      nM1: "nM1",
+      nMREQ: "nMREQ",
+      nIORQ: "nIORQ",
+      nRD: "nRD",
+      nWR: "nWR",
+      nRFSH: "nRFSH",
+      nHALT: "nHALT",
+      nBUSACK: "nBUSACK",
+      nINT: "nINT",
+      nNMI: "nNMI",
+      nRESET: "nRESET",
+      nBUSRQ: "nBUSRQ",
+      nWAIT: "nWAIT",
+      addr: "addr",
+      data: "data",
+    },
   },
 };

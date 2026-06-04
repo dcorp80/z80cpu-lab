@@ -9,11 +9,16 @@ import { Z80Cpu } from "@dcorp80/z80cpu";
 import { Z80DebugContext } from "@dcorp80/z80cpu-debug";
 import type { JSX } from "solid-js";
 import { App } from "./app.tsx";
-import { DEFAULT_BUS_CONFIG, DEFAULT_LOOP_CONFIG } from "./config/defaults.ts";
+import {
+  DEFAULT_BUS_CONFIG,
+  DEFAULT_HW_TRACE_CONFIG,
+  DEFAULT_LOOP_CONFIG,
+} from "./config/defaults.ts";
 import { registerDefaultHotkeys } from "./hotkeys/defaults.ts";
 import { installHotkeyDispatcher } from "./hotkeys/dispatch.ts";
 import { createHotkeyRegistry } from "./hotkeys/registry.ts";
 import { makeBus64k } from "./runloop/bus.ts";
+import { HwTraceBuffer } from "./runloop/hwTrace.ts";
 import { createRunLoop } from "./runloop/loop.ts";
 import { MemoryBackend } from "./storage/memory.ts";
 import type { StorageBackend } from "./storage/types.ts";
@@ -38,11 +43,25 @@ export async function bootApp(opts: BootOptions = {}): Promise<BootedApp> {
   const cpu = new Z80Cpu();
   const dbg = new Z80DebugContext(cpu);
   const bus = makeBus64k(cpu, { ...DEFAULT_BUS_CONFIG });
+  const hwTrace = new HwTraceBuffer(DEFAULT_HW_TRACE_CONFIG);
+
+  const preEdge = (): void => {
+    bus.resolve();
+  };
+  const postEdge = (hc: number): void => {
+    // Record straight off the live bus — no intermediate sample. `record`
+    // short-circuits before touching anything when capture is disabled
+    // (DESIGN §3.2). `nNMI` is injected separately (it isn't on cpu.bus —
+    // DESIGN §2.1); M8b sources it from `store.inputPins.nNMI`, in M8a the
+    // user can't trigger NMI yet so it stays deasserted (1).
+    hwTrace.record(cpu.bus, 1, hc);
+  };
 
   const loop = createRunLoop({
     cpu,
     dbg,
-    busTick: bus.resolve,
+    preEdge,
+    postEdge,
     config: { ...DEFAULT_LOOP_CONFIG },
   });
 
@@ -57,6 +76,7 @@ export async function bootApp(opts: BootOptions = {}): Promise<BootedApp> {
     // dbg is the snapshot source for the cpuState section's reactive
     // accessors (REQ §6.5); store calls `dbg.state()` on each pause.
     dbg,
+    hwTrace,
   });
 
   const registry = createHotkeyRegistry();
