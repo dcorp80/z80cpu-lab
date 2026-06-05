@@ -829,6 +829,16 @@ describe("createAppStore", () => {
       expect(() => store.setIoBytesPerRow(8)).toThrow(RangeError);
     });
 
+    it("128 bytes-per-row is memory-only (IO's 8-bit grid caps at 64)", async () => {
+      const { store } = await freshStore();
+      // Memory spans 64K — 128 is a valid width.
+      store.setMemBytesPerRow(128);
+      expect(store.memBytesPerRow()).toBe(128);
+      // IO runs in 256-port space; 128 would render duplicate rows, so
+      // it's rejected (the IO width <select> never offers it either).
+      expect(() => store.setIoBytesPerRow(128)).toThrow(RangeError);
+    });
+
     it("restores stored bytes-per-row from UI state on boot; clamps unknowns", async () => {
       const backend = new MemoryBackend();
       await backend.saveUiState({
@@ -1496,5 +1506,87 @@ describe("createAppStore", () => {
       // Loop got the persisted set before any user action.
       expect(loop.lastBreakpoints.length).toBe(2);
     });
+  });
+});
+
+describe("createAppStore — effective clock-speed indicator (REQ §11)", () => {
+  // Controllable wallclock so the measured rate is deterministic.
+  async function clockStore() {
+    let t = 0;
+    const loop = makeStubLoop();
+    const store = await createAppStore({
+      backend: new MemoryBackend(),
+      loop,
+      bus: makeStubBus(),
+      dbg: makeStubDbg(),
+      now: () => t,
+    });
+    return {
+      store,
+      loop,
+      setT: (v: number) => {
+        t = v;
+      },
+    };
+  }
+
+  it("shows no value (null → '—') before the first run", async () => {
+    const { store } = await clockStore();
+    expect(store.effectiveClockMHz()).toBeNull();
+  });
+
+  it("reports MHz from an in-band frame's (Δhc, Δt)", async () => {
+    const { store, loop, setT } = await clockStore();
+    setT(0);
+    store.run(); // baseline @ t=0, hc=0
+    setT(16); // 16 ms frame
+    loop.emitTick(32_000); // (32000/2 T) / 0.016 s = 1e6 Hz = 1.0 MHz
+    expect(store.effectiveClockMHz()).toBeCloseTo(1.0, 6);
+  });
+
+  it("holds the last value on an over-ceiling (idle/think-time) frame", async () => {
+    const { store, loop, setT } = await clockStore();
+    store.run();
+    setT(16);
+    loop.emitTick(32_000);
+    expect(store.effectiveClockMHz()).toBeCloseTo(1.0, 6);
+    // 300 ms gap > ceiling (a single step after think-time): skip, hold.
+    setT(16 + 300);
+    loop.emitTick(96_000);
+    expect(store.effectiveClockMHz()).toBeCloseTo(1.0, 6);
+  });
+
+  it("holds the last value on a sub-floor (Δt≈0) frame — no divide-by-zero", async () => {
+    const { store, loop, setT } = await clockStore();
+    store.run();
+    setT(16);
+    loop.emitTick(32_000);
+    // Same-ms tick: dt=0 < floor → skip, value unchanged, no Infinity.
+    loop.emitTick(48_000);
+    expect(store.effectiveClockMHz()).toBeCloseTo(1.0, 6);
+  });
+
+  it("resets to null ('—') on zeroHC", async () => {
+    const { store, loop, setT } = await clockStore();
+    store.run();
+    setT(16);
+    loop.emitTick(32_000);
+    expect(store.effectiveClockMHz()).not.toBeNull();
+    store.zeroHC();
+    expect(store.effectiveClockMHz()).toBeNull();
+  });
+
+  it("holds the run-speed value across step frames (not 'running')", async () => {
+    const { store, loop, setT } = await clockStore();
+    store.run();
+    setT(16);
+    loop.emitTick(32_000); // baseline run measurement: 1.0 MHz
+    expect(store.effectiveClockMHz()).toBeCloseTo(1.0, 6);
+    // A step frame ticks with an in-band (Δhc, Δt), but status is
+    // 'stepping' — the clock is run-speed only, so the held value stands.
+    store.stepHC(1);
+    setT(32);
+    loop.emitTick(64_000);
+    expect(store.effectiveClockMHz()).toBeCloseTo(1.0, 6);
   });
 });

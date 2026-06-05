@@ -98,6 +98,16 @@ export interface Store {
   readonly insnCountThrottled: Accessor<number>;
   readonly lastPauseReason: Accessor<PauseReason | null>;
 
+  /**
+   * Effective clock-speed indicator (REQ §11): host throughput expressed
+   * as an emulated Z80 T-state clock (MHz). Measured frame-to-frame in the
+   * loop's `onTick` from `(hc, now)` deltas, guarded to a sane dt band so
+   * idle / sub-resolution frames don't skew it. `null` before the first
+   * valid measurement and after `zeroHC` (the view shows "—"); the last
+   * value is held across a pause (the view greys it).
+   */
+  readonly effectiveClockMHz: Accessor<number | null>;
+
   // ── CPU state (REQ §6.5). Sampled on every pause; the boundary flag
   // is true only when the pause landed exactly on M1_T3_1 (then the
   // register file is fully valid and the section paints diff highlights;
@@ -190,9 +200,12 @@ export interface Store {
   requestIoWatchJump(): void;
 
   /**
-   * Bytes-per-row for each hex grid (16 / 32 / 64). Persisted via
-   * `SectionUiState.config.bytesPerRow`. Setters validate against
-   * `BYTES_PER_ROW_OPTIONS`; an invalid value throws `RangeError`.
+   * Bytes-per-row for each hex grid. Persisted via
+   * `SectionUiState.config.bytesPerRow`. Setters validate against the
+   * grid's allowed set — `MEMORY_BYTES_PER_ROW_OPTIONS` (16…128) for
+   * memory, `IO_BYTES_PER_ROW_OPTIONS` (16…64) for IO, which caps lower
+   * because the 8-bit view would otherwise render duplicate rows. An
+   * invalid value throws `RangeError`.
    */
   readonly memBytesPerRow: Accessor<number>;
   setMemBytesPerRow(n: number): void;

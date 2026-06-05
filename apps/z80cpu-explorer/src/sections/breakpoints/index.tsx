@@ -58,6 +58,14 @@ const Header = () => {
     const n = Number.parseInt(stepHcN(), 10);
     if (Number.isFinite(n) && n > 0) store.stepHC(n);
   };
+  // Effective clock-speed read-out (REQ §11): fixed MHz / 1 decimal, or "—"
+  // when there's no valid measurement (before the first run, after zeroHC).
+  const clockText = () => {
+    const v = store.effectiveClockMHz();
+    return v === null
+      ? STR.breakpoints.clockIdle
+      : STR.breakpoints.clock(v.toFixed(1));
+  };
   return (
     <>
       <div class="bp-controls">
@@ -147,6 +155,13 @@ const Header = () => {
           reasonToText(store.lastPauseReason),
         )}
       </div>
+      <span
+        class="bp-clock"
+        classList={{ "bp-clock-idle": store.status() !== "running" }}
+        title={STR.breakpoints.clockTooltip}
+      >
+        {clockText()}
+      </span>
     </>
   );
 };

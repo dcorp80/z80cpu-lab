@@ -4,12 +4,14 @@
 
 import type { Accessor, Component } from "solid-js";
 import { For } from "solid-js";
-import { BYTES_PER_ROW_OPTIONS } from "../config/defaults.ts";
 import { STR } from "../style/strings.ts";
 
 export interface BytesPerRowSelectProps {
   value: Accessor<number>;
   setValue: (n: number) => void;
+  /** Allowed widths for this grid — Memory and IO pass different sets
+   *  (the IO 8-bit view caps lower; see `*_BYTES_PER_ROW_OPTIONS`). */
+  options: ReadonlyArray<number>;
 }
 
 export const BytesPerRowSelect: Component<BytesPerRowSelectProps> = (props) => {
@@ -22,7 +24,7 @@ export const BytesPerRowSelect: Component<BytesPerRowSelectProps> = (props) => {
         value={String(props.value())}
         onChange={(e) => props.setValue(Number(e.currentTarget.value))}
       >
-        <For each={BYTES_PER_ROW_OPTIONS}>
+        <For each={props.options}>
           {(n) => <option value={String(n)}>{n}</option>}
         </For>
       </select>

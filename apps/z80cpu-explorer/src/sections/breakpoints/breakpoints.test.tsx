@@ -106,6 +106,21 @@ describe("Breakpoints section — header", () => {
     );
   });
 
+  it("effective-clock indicator reads '—' and greys before any run", async () => {
+    harness = await mount();
+    const clock = req(
+      harness.container.querySelector<HTMLElement>(".bp-clock"),
+      "clock",
+    );
+    expect(clock.textContent).toBe(STR.breakpoints.clockIdle);
+    expect(clock.classList.contains("bp-clock-idle")).toBe(true);
+    // Entering 'running' drops the greyed treatment (the value itself stays
+    // '—' until a tick lands a measurement).
+    harness.store.run();
+    await flush();
+    expect(clock.classList.contains("bp-clock-idle")).toBe(false);
+  });
+
   it("step buttons disabled while running, Run/Pause stays clickable", async () => {
     harness = await mount();
     // Force the stub into running state, then re-read button state.

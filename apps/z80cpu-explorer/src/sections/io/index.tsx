@@ -2,6 +2,7 @@ import { type Component, Show } from "solid-js";
 import {
   DEFAULT_IO_ROWS_AFTER,
   DEFAULT_IO_ROWS_BEFORE,
+  IO_BYTES_PER_ROW_OPTIONS,
 } from "../../config/defaults.ts";
 import { useStore } from "../../store/index.ts";
 import { STR } from "../../style/strings.ts";
@@ -82,6 +83,7 @@ const Header: Component = () => {
       <BytesPerRowSelect
         value={store.ioBytesPerRow}
         setValue={(n) => store.setIoBytesPerRow(n)}
+        options={IO_BYTES_PER_ROW_OPTIONS}
       />
     </>
   );

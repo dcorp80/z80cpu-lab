@@ -8,12 +8,13 @@ import {
 } from "solid-js";
 import { createStore, produce, unwrap } from "solid-js/store";
 import {
-  BYTES_PER_ROW_OPTIONS,
   DEFAULT_HW_TRACE_CONFIG,
   DEFAULT_INSTRUCTION_RING_CAP,
   DEFAULT_IO_BYTES_PER_ROW,
   DEFAULT_MEMORY_BYTES_PER_ROW,
   DEFAULT_UI_CONFIG,
+  IO_BYTES_PER_ROW_OPTIONS,
+  MEMORY_BYTES_PER_ROW_OPTIONS,
   type UiConfig,
 } from "../config/defaults.ts";
 import type { Bus64k } from "../runloop/bus.ts";
@@ -85,6 +86,15 @@ function reconcileFiles(
   return ordered;
 }
 
+// Effective-clock indicator band (REQ §11). A frame's (Δhc, Δt) yields a
+// meaningful T-state rate only when it did a measurable, non-idle chunk of
+// work: dt below the floor is at/under `performance.now()` resolution (and
+// risks divide-by-zero); dt above the ceiling means the frame was mostly
+// idle/think-time (a single step, a backgrounded tab) — skip it and hold
+// the last value rather than flash a misleading dip.
+const CLOCK_DT_FLOOR_MS = 1;
+const CLOCK_DT_CEILING_MS = 250;
+
 export interface CreateStoreDeps {
   backend: StorageBackend;
   loop: RunLoop;
@@ -124,11 +134,18 @@ export interface CreateStoreDeps {
    * passes the same instance it gives to `createRunLoop`.
    */
   hwTrace?: HwTraceBuffer;
+  /**
+   * Wallclock source for the effective-clock indicator (REQ §11). Defaults
+   * to `performance.now`. Injected by tests so the measured rate is
+   * deterministic.
+   */
+  now?: () => number;
 }
 
 export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
   const { backend, loop, bus, dbg } = deps;
   const hwTrace = deps.hwTrace ?? new HwTraceBuffer(DEFAULT_HW_TRACE_CONFIG);
+  const now = deps.now ?? (() => performance.now());
   const loaded = await backend.loadUiState();
   const initialSections = loaded?.sections
     ? reconcileSections(loaded.sections)
@@ -175,6 +192,15 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
   const [status, setStatus] = createSignal<RunStatus>(loop.status());
   const [hc, setHc] = createSignal(loop.hc());
   const [insnCount, setInsnCount] = createSignal(0);
+  // Effective clock-speed indicator (REQ §11). `null` until the first valid
+  // frame measurement (and after zeroHC) → the view shows "—". The value is
+  // held across a pause (the view greys it): it's the speed of the run that
+  // just ended. Baseline locals track the previous tick's (hc, now) for the
+  // frame-to-frame delta; reseeded in `run()`.
+  const [effClockMHz, setEffClockMHz] = createSignal<number | null>(null);
+  let clockBaseHc = 0;
+  let clockBaseNow = 0;
+  let clockBaselined = false;
   const [lastPauseReason, setLastPauseReason] =
     createSignal<PauseReason | null>(null);
 
@@ -318,19 +344,25 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
   // values (corrupt backend, downgrade) fall back to the default.
   const bytesPerRowFromConfig = (
     sectionId: string,
+    options: ReadonlyArray<number>,
     fallback: number,
   ): number => {
     const s = sections.find((sec) => sec.id === sectionId);
     const v = s?.config.bytesPerRow;
-    return typeof v === "number" &&
-      (BYTES_PER_ROW_OPTIONS as ReadonlyArray<number>).includes(v)
-      ? v
-      : fallback;
+    return typeof v === "number" && options.includes(v) ? v : fallback;
   };
   const memBytesPerRow: Accessor<number> = () =>
-    bytesPerRowFromConfig("memory", DEFAULT_MEMORY_BYTES_PER_ROW);
+    bytesPerRowFromConfig(
+      "memory",
+      MEMORY_BYTES_PER_ROW_OPTIONS,
+      DEFAULT_MEMORY_BYTES_PER_ROW,
+    );
   const ioBytesPerRow: Accessor<number> = () =>
-    bytesPerRowFromConfig("io", DEFAULT_IO_BYTES_PER_ROW);
+    bytesPerRowFromConfig(
+      "io",
+      IO_BYTES_PER_ROW_OPTIONS,
+      DEFAULT_IO_BYTES_PER_ROW,
+    );
 
   // IO render mode (REQ §6.7). '16bit' renders the default 64K-port grid;
   // '8bit' renders 256 cells where each write broadcasts to all 256
@@ -354,10 +386,14 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
   // resolver allocation- and accessor-free while still honoring the
   // user's last toggle across reloads.
   bus.setIoWriteProtect(ioWriteProtect());
-  function assertBytesPerRow(n: number, label: string): void {
-    if (!(BYTES_PER_ROW_OPTIONS as ReadonlyArray<number>).includes(n)) {
+  function assertBytesPerRow(
+    n: number,
+    options: ReadonlyArray<number>,
+    label: string,
+  ): void {
+    if (!options.includes(n)) {
       throw new RangeError(
-        `${label}: must be one of ${BYTES_PER_ROW_OPTIONS.join(", ")}; got ${n}`,
+        `${label}: must be one of ${options.join(", ")}; got ${n}`,
       );
     }
   }
@@ -487,6 +523,29 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
   });
   loop.onTick((h) => {
     setHc(h);
+    // Effective clock (REQ §11): frame-to-frame T-state rate, measured
+    // only across genuine *run* frames. The indicator is "host throughput
+    // at run speed" — stepping is not run speed, so we gate on
+    // `loop.status() === "running"` and hold the last value through step
+    // frames (a step-complete pause flips status before this tick fires).
+    // We also require a measurable, non-idle chunk of work (dt band; the
+    // band's floor guards against divide-by-zero, the ceiling against
+    // idle/think-time dips). `zeroHC` clears `clockBaselined`, so the
+    // first post-zeroHC frame reseeds rather than measuring against a
+    // rebased counter. The baseline advances every tick, so a measured
+    // frame always compares against the immediately-previous one.
+    const tNow = now();
+    if (clockBaselined && loop.status() === "running") {
+      const dHc = h - clockBaseHc;
+      const dt = tNow - clockBaseNow;
+      if (dHc > 0 && dt >= CLOCK_DT_FLOOR_MS && dt <= CLOCK_DT_CEILING_MS) {
+        // clock Hz = (dHc / 2 T-states) / (dt / 1000 s); ÷1e6 → MHz.
+        setEffClockMHz(dHc / 2 / (dt / 1000) / 1e6);
+      }
+    }
+    clockBaseHc = h;
+    clockBaseNow = tNow;
+    clockBaselined = true;
     // HW-trace buffer advances `version()` on each endFrame (and on
     // clear/setMode). Only bump the reactive mirror when it actually
     // changed — keeps `'disabled'` mode free of signal churn and avoids
@@ -834,6 +893,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     insnCount,
     insnCountThrottled,
     lastPauseReason,
+    effectiveClockMHz: effClockMHz,
     cpuState,
     prevCpuStateAtBoundary,
     atInstructionBoundary,
@@ -841,6 +901,12 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       // Clear stale pause reason so the next paused-state render shows
       // the reason for the upcoming pause, not the previous one.
       setLastPauseReason(null);
+      // Reseed the effective-clock baseline (REQ §11) so the first frame of
+      // this run measures against run-start, not the last tick before the
+      // (possibly long) pause.
+      clockBaseHc = loop.hc();
+      clockBaseNow = now();
+      clockBaselined = true;
       loop.run();
       setStatus("running");
     },
@@ -863,6 +929,10 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       loop.zeroHC();
       setHc(0);
       setInsnCount(0);
+      // Effective-clock indicator resets (REQ §11): the HC rebase
+      // invalidates any in-flight measurement; show "—" until the next run.
+      setEffClockMHz(null);
+      clockBaselined = false;
       // Time-stamped buffers clear on zero-HC (REQ §7.3). HW-trace was
       // a placeholder in M6; from M8a onward it shares the same clear
       // path as the instruction-trace ring. Snapshot log lands in M9.
@@ -1030,12 +1100,12 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     },
     memBytesPerRow,
     setMemBytesPerRow(n: number) {
-      assertBytesPerRow(n, "setMemBytesPerRow");
+      assertBytesPerRow(n, MEMORY_BYTES_PER_ROW_OPTIONS, "setMemBytesPerRow");
       updateSectionConfig("memory", { bytesPerRow: n });
     },
     ioBytesPerRow,
     setIoBytesPerRow(n: number) {
-      assertBytesPerRow(n, "setIoBytesPerRow");
+      assertBytesPerRow(n, IO_BYTES_PER_ROW_OPTIONS, "setIoBytesPerRow");
       updateSectionConfig("io", { bytesPerRow: n });
     },
     ioViewMode,

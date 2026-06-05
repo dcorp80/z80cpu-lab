@@ -2,6 +2,7 @@ import type { Component } from "solid-js";
 import {
   DEFAULT_MEMORY_ROWS_AFTER,
   DEFAULT_MEMORY_ROWS_BEFORE,
+  MEMORY_BYTES_PER_ROW_OPTIONS,
 } from "../../config/defaults.ts";
 import { useStore } from "../../store/index.ts";
 import { STR } from "../../style/strings.ts";
@@ -26,6 +27,7 @@ const Header: Component = () => {
       <BytesPerRowSelect
         value={store.memBytesPerRow}
         setValue={(n) => store.setMemBytesPerRow(n)}
+        options={MEMORY_BYTES_PER_ROW_OPTIONS}
       />
     </>
   );

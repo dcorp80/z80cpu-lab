@@ -104,12 +104,18 @@ export const DEFAULT_IO_ROWS_BEFORE = 1;
 export const DEFAULT_IO_ROWS_AFTER = 1;
 
 /**
- * Allowed bytes-per-row values for the hex grid. Restricted to powers
+ * Allowed bytes-per-row values for the hex grids. Restricted to powers
  * of two so row-base alignment is a single mask (`addr & ~(bpr - 1)`)
  * and CSS column tracks can be enumerated as a small fixed set.
+ *
+ * Split by grid: Memory spans the 16-bit (64K) address space and goes up
+ * to 128. The IO grid's 8-bit view runs in 256-port space, where a 128
+ * width would make `rowsBefore + 1 + rowsAfter` rows overrun 256 ports
+ * and render duplicate rows — so IO caps at 64.
  */
-export const BYTES_PER_ROW_OPTIONS = [16, 32, 64] as const;
-export type BytesPerRow = (typeof BYTES_PER_ROW_OPTIONS)[number];
+export const MEMORY_BYTES_PER_ROW_OPTIONS = [16, 32, 64, 128] as const;
+export const IO_BYTES_PER_ROW_OPTIONS = [16, 32, 64] as const;
+export type BytesPerRow = (typeof MEMORY_BYTES_PER_ROW_OPTIONS)[number];
 export const DEFAULT_MEMORY_BYTES_PER_ROW: BytesPerRow = 16;
 export const DEFAULT_IO_BYTES_PER_ROW: BytesPerRow = 16;
 

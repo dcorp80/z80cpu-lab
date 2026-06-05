@@ -228,6 +228,20 @@ body {
   white-space: nowrap;
   padding-right: 8px;
 }
+/* Effective clock-speed indicator (REQ §11) — sits next to .bp-status
+   (same order group), greyed when not actively running. */
+.bp-clock {
+  order: 1;
+  flex: 0 0 auto;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+  padding-right: 8px;
+}
+.bp-clock-idle {
+  opacity: 0.45;
+}
 
 /* Breakpoint list (body) */
 .bp-list {
@@ -804,6 +818,9 @@ body {
 .hex-row-cells.cells-64 {
   grid-template-columns: repeat(64, 2.5ch);
 }
+.hex-row-cells.cells-128 {
+  grid-template-columns: repeat(128, 2.5ch);
+}
 
 .hex-cell {
   /* Rendered as <button> for native click/keyboard semantics; reset
@@ -914,6 +931,9 @@ body {
 }
 .hex-row-ascii.cells-64 {
   grid-template-columns: repeat(64, 1.2ch);
+}
+.hex-row-ascii.cells-128 {
+  grid-template-columns: repeat(128, 1.2ch);
 }
 .hex-ascii-cell {
   /* See .hex-cell — same <button> UA reset. */

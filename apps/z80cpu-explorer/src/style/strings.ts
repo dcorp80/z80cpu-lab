@@ -45,6 +45,13 @@ export const STR = {
     reasonStepComplete: "step done",
     reasonPcBreakpoint: (pc: string) => `BP PC=${pc}`,
     reasonHcTarget: (target: string) => `HC target ${target}`,
+    // Effective clock-speed indicator (REQ §11). Host throughput as an
+    // emulated Z80 clock; fixed MHz, 1 decimal. Em-dash before the first
+    // run / after zeroHC.
+    clock: (mhz: string) => `${mhz} MHz`,
+    clockIdle: "—",
+    clockTooltip:
+      "Effective emulated clock — host T-state throughput at run speed",
     // Body — list rows + add stub
     foldedEmpty: "no breakpoints",
     foldedSummary: (total: number, enabled: number) =>
