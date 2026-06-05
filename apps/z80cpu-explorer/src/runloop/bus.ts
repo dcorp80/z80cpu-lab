@@ -1,7 +1,16 @@
-// 64K mem + 64K IO bus resolver with INT-ack injection. Per DESIGN §2.1
-// duty 1 of busTick: on memory read/write resolve against mem[]; on IO
-// read/write resolve against io[]; on INT acknowledge (`nM1` low +
-// `nIORQ` low) place the configured INT vector byte on `cpu.bus.data`.
+// 64K mem + (one or two) 64K IO planes bus resolver with INT-ack
+// injection. Per DESIGN §2.1 duty 1 of busTick: on memory read/write
+// resolve against mem[]; on IO read/write resolve against ioRead[] /
+// ioWrite[] per split mode; on INT acknowledge (`nM1` low + `nIORQ`
+// low) place the configured INT vector byte on `cpu.bus.data`.
+//
+// IO split mode (REQ §11): when `splitIo` is true, IN cycles read from
+// `ioRead` (user-editable, pre-loaded) and OUT cycles land in `ioWrite`
+// (passive record, never user-edited). When false, both directions
+// target `ioRead` — the original single-plane behavior. Allocation is
+// lazy: `ioWrite` is null when `splitIo` is false, so the joined
+// configuration costs 64 KB rather than 128 KB. The flag is fixed at
+// construction; toggling it routes through reinit (page reload).
 //
 // Input pins are NOT applied here — level pins (`nINT`/`nRESET`/`nBUSRQ`/
 // `nWAIT`) are written eagerly to `cpu.bus` by store actions (DESIGN
@@ -26,28 +35,33 @@ export interface BusAccessRecord {
 
 export interface Bus64k {
   mem: Uint8Array;
-  io: Uint8Array;
+  /**
+   * Plane services CPU IN cycles. In joined mode (`splitIo === false`)
+   * also receives CPU OUT cycles — i.e. the canonical IO array in the
+   * unsplit configuration. Always allocated.
+   */
+  ioRead: Uint8Array;
+  /**
+   * Plane services CPU OUT cycles in split mode. `null` in joined mode
+   * — checked by `resolve()` and `splitIo`-aware consumers. Never edited
+   * by the user (the IO section renders it read-only).
+   */
+  ioWrite: Uint8Array | null;
+  /** Fixed at construction; mirrors `BusConfig.splitIo`. */
+  splitIo: boolean;
   /** Byte placed on `cpu.bus.data` during INT-acknowledge cycles (REQ §6.4). */
   intVector(): number;
   /** Updates the INT vector. Value is masked to 8 bits at the boundary. */
   setIntVector(byte: number): void;
   /**
-   * Write `value` into all 256 high-byte aliases of `port` in the IO
-   * array (`io[(hi<<8) | port] = value` for hi in 0..255). Used by the
+   * Write `value` into all 256 high-byte aliases of `port` in `ioRead`
+   * (`ioRead[(hi<<8) | port] = value` for hi in 0..255). Used by the
    * IO section's 8-bit view (REQ §6.7) so the user can seed an
    * A0–A7-only-decoded port without minding the upper address bits.
-   * Inputs are masked at the boundary; caller bumps `ioVersion`.
+   * Always targets the RD plane — the WR plane is not user-editable.
+   * Inputs are masked at the boundary; caller bumps the version signal.
    */
   broadcastIoLowByte(port: number, value: number): void;
-  /**
-   * When true, CPU IO write cycles are suppressed at the bus — io[]
-   * state stays unchanged. `lastIoWrite` still records the cycle so
-   * the IO section can surface the CPU's attempted write. User edits
-   * (`io[…] =` via the store, `broadcastIoLowByte`) bypass this gate.
-   * Default false.
-   */
-  ioWriteProtect(): boolean;
-  setIoWriteProtect(on: boolean): void;
   resolve(): void;
   /**
    * Most recent mem/IO accesses, captured inside `resolve()`. Returns
@@ -66,9 +80,12 @@ export function makeBus64k(cpu: Z80Cpu, config: BusConfig): Bus64k {
   // a config value from a user-facing surface mustn't trust upstream masking).
   const memInit = config.memInit & 0xff;
   const ioInit = config.ioInit & 0xff;
+  const splitIo = config.splitIo === true;
   const mem = new Uint8Array(MEM_SIZE).fill(memInit);
-  const io = new Uint8Array(IO_SIZE).fill(ioInit);
-  // INT vector storage is owned by the bus, just like mem and io.
+  const ioRead = new Uint8Array(IO_SIZE).fill(ioInit);
+  // Lazy: 64 KB of WR-plane backing store only exists when split is on.
+  const ioWrite = splitIo ? new Uint8Array(IO_SIZE).fill(ioInit) : null;
+  // INT vector storage is owned by the bus, just like the IO planes.
   // Accessors keep the byte authoritative inside the bus closure.
   let intVector = config.intVectorInit & 0xff;
   // Last-touched trackers — sentinel of -1 means "no such cycle yet,"
@@ -83,7 +100,6 @@ export function makeBus64k(cpu: Z80Cpu, config: BusConfig): Bus64k {
   let lastIoReadValue = 0;
   let lastIoWriteAddr = -1;
   let lastIoWriteValue = 0;
-  let ioWriteProtect = false;
   const resolve = () => {
     const { nM1, nMREQ, nIORQ, nRD, nWR, addr, data } = cpu.bus;
     if (nMREQ === 0) {
@@ -102,20 +118,28 @@ export function makeBus64k(cpu: Z80Cpu, config: BusConfig): Bus64k {
     if (nIORQ === 0) {
       // INT acknowledge: M1 + IORQ asserted together. Place the vector
       // byte; the CPU samples it during the IM1/IM2 fetch. NOT counted
-      // as an IO read — the byte comes from intVector, not io[].
+      // as an IO read — the byte comes from intVector, not ioRead.
       if (nM1 === 0) {
         cpu.bus.data = intVector;
       } else {
         if (nRD === 0) {
-          const v = io[addr];
+          // IN always reads the RD plane (joined or split — RD is the
+          // user-facing readable plane in both modes).
+          const v = ioRead[addr];
           cpu.bus.data = v;
           lastIoReadAddr = addr;
           lastIoReadValue = v;
         }
         if (nWR === 0) {
-          // Track the cycle even when WP gates the side-effect, so the
-          // user sees what the program tried to write at the port.
-          if (!ioWriteProtect) io[addr] = data;
+          // OUT lands in WR in split mode, otherwise back into RD (the
+          // joined single-plane). `ioWrite` is non-null exactly when
+          // `splitIo` is true; the null check on the same boolean is
+          // what TS narrowing needs to type-check the array access.
+          if (splitIo && ioWrite) {
+            ioWrite[addr] = data;
+          } else {
+            ioRead[addr] = data;
+          }
           lastIoWriteAddr = addr;
           lastIoWriteValue = data;
         }
@@ -124,7 +148,9 @@ export function makeBus64k(cpu: Z80Cpu, config: BusConfig): Bus64k {
   };
   return {
     mem,
-    io,
+    ioRead,
+    ioWrite,
+    splitIo,
     resolve,
     intVector: () => intVector,
     setIntVector(byte) {
@@ -134,12 +160,8 @@ export function makeBus64k(cpu: Z80Cpu, config: BusConfig): Bus64k {
       const p = port & 0xff;
       const v = value & 0xff;
       for (let hi = 0; hi < 256; hi++) {
-        io[(hi << 8) | p] = v;
+        ioRead[(hi << 8) | p] = v;
       }
-    },
-    ioWriteProtect: () => ioWriteProtect,
-    setIoWriteProtect(on) {
-      ioWriteProtect = on === true;
     },
     lastMemRead: () =>
       lastMemReadAddr < 0

@@ -66,12 +66,23 @@ export interface BusConfig {
   ioInit: number;
   /** Initial INT vector byte; user can edit at runtime (REQ §6.4). */
   intVectorInit: number;
+  /**
+   * When true, IO is split into two 64K planes (REQ §11): IN cycles
+   * resolve against the RD plane (user-editable, pre-loaded), OUT cycles
+   * land in the WR plane (passive record). When false, a single plane
+   * services both — the original behavior. Allocation is lazy: only the
+   * RD plane exists when false. Switching is a destructive op routed
+   * through reinit (page reload) so allocation matches the persisted
+   * flag at boot.
+   */
+  splitIo: boolean;
 }
 
 export const DEFAULT_BUS_CONFIG: BusConfig = {
   memInit: 0xff,
   ioInit: 0xff,
   intVectorInit: 0xff,
+  splitIo: true,
 };
 
 // ── Instruction trace ring ────────────────────────────────────────

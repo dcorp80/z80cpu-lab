@@ -561,15 +561,15 @@ describe("createAppStore", () => {
       expect(() => store.setMemByte(0, 1.5)).toThrow(RangeError);
     });
 
-    it("ioByte reads from bus.io masked to 16 bits; ioVersion bumps on setIoByte", async () => {
+    it("ioByte reads from bus.ioRead masked to 16 bits; ioVersion bumps on setIoByte", async () => {
       const { store, bus } = await freshStore();
-      bus.io[0x00fe] = 0xbf;
+      bus.ioRead[0x00fe] = 0xbf;
       expect(store.ioByte(0x00fe)).toBe(0xbf);
       // Mask: 0x100fe → 0x00fe
       expect(store.ioByte(0x100fe)).toBe(0xbf);
       const v0 = store.ioVersion();
       store.setIoByte(0x00fe, 0x07);
-      expect(bus.io[0x00fe]).toBe(0x07);
+      expect(bus.ioRead[0x00fe]).toBe(0x07);
       expect(store.ioByte(0x00fe)).toBe(0x07);
       expect(store.ioVersion()).toBeGreaterThan(v0);
     });
@@ -580,7 +580,7 @@ describe("createAppStore", () => {
       store.run();
       const v0 = store.ioVersion();
       store.setIoByte(0x00fe, 0x07);
-      expect(bus.io[0x00fe]).toBe(0xff);
+      expect(bus.ioRead[0x00fe]).toBe(0xff);
       expect(store.ioVersion()).toBe(v0);
     });
 
@@ -597,7 +597,7 @@ describe("createAppStore", () => {
       store.setIoBytePort8(0x80, 0x5a);
       // Every alias holds the byte.
       for (let hi = 0; hi < 256; hi++) {
-        expect(bus.io[(hi << 8) | 0x80]).toBe(0x5a);
+        expect(bus.ioRead[(hi << 8) | 0x80]).toBe(0x5a);
       }
       // Single bump regardless of how many aliases were touched.
       expect(store.ioVersion()).toBe(v0 + 1);
@@ -606,12 +606,12 @@ describe("createAppStore", () => {
     it("setIoBytePort8 no-ops while running", async () => {
       const { store, bus, loop } = await freshStore();
       // Plant a non-default value so we can tell the call no-opped.
-      bus.io.fill(0xee);
+      bus.ioRead.fill(0xee);
       loop.setStatus("running");
       store.run();
       store.setIoBytePort8(0x80, 0x11);
-      expect(bus.io[0x0080]).toBe(0xee);
-      expect(bus.io[0xff80]).toBe(0xee);
+      expect(bus.ioRead[0x0080]).toBe(0xee);
+      expect(bus.ioRead[0xff80]).toBe(0xee);
     });
 
     it("setIoBytePort8 rejects out-of-range port and value", async () => {
@@ -662,51 +662,81 @@ describe("createAppStore", () => {
     });
   });
 
-  describe("IO write protect (REQ §6.7)", () => {
+  describe("IO split RD/WR (REQ §11)", () => {
     it("defaults to false on a fresh store", async () => {
-      const { store, bus } = await freshStore();
-      expect(store.ioWriteProtect()).toBe(false);
-      expect(bus.ioWriteProtect()).toBe(false);
+      const { store } = await freshStore();
+      expect(store.splitIo()).toBe(false);
     });
 
-    it("setIoWriteProtect mirrors into the bus and persists", async () => {
-      const { store, bus, backend } = await freshStore();
-      store.setIoWriteProtect(true);
-      expect(store.ioWriteProtect()).toBe(true);
-      expect(bus.ioWriteProtect()).toBe(true);
-      const persisted = await backend.loadUiState();
-      const ioSec = persisted?.sections.find((s) => s.id === "io");
-      expect(ioSec?.config.writeProtect).toBe(true);
-    });
-
-    it("persisted true restores the bus state at boot", async () => {
-      const backend = new MemoryBackend();
-      await backend.saveUiState({
-        sections: [{ id: "io", folded: false, config: { writeProtect: true } }],
+    it("setSplitIo persists into the io section config", async () => {
+      const { store, backend } = await freshStore();
+      // Hijack window.location.reload so the test doesn't try to navigate.
+      const origReload = window.location.reload;
+      let reloadCalls = 0;
+      Object.defineProperty(window.location, "reload", {
+        configurable: true,
+        value: () => {
+          reloadCalls++;
+        },
       });
-      const loop = makeStubLoop();
-      const bus = makeStubBus();
-      const dbg = makeStubDbg();
-      const store = await createAppStore({ backend, loop, bus, dbg });
-      expect(store.ioWriteProtect()).toBe(true);
-      expect(bus.ioWriteProtect()).toBe(true);
-      store.dispose();
+      try {
+        store.setSplitIo(true);
+        expect(store.splitIo()).toBe(true);
+        // saveUiState is awaited inside setSplitIo before the reload — wait
+        // a microtask tick so the persist resolves.
+        await Promise.resolve();
+        await Promise.resolve();
+        const persisted = await backend.loadUiState();
+        const ioSec = persisted?.sections.find((s) => s.id === "io");
+        expect(ioSec?.config.splitIo).toBe(true);
+        expect(reloadCalls).toBe(1);
+      } finally {
+        Object.defineProperty(window.location, "reload", {
+          configurable: true,
+          value: origReload,
+        });
+      }
     });
 
     it("malformed persisted value falls back to false", async () => {
       const backend = new MemoryBackend();
       await backend.saveUiState({
-        sections: [
-          { id: "io", folded: false, config: { writeProtect: "yes" } },
-        ],
+        sections: [{ id: "io", folded: false, config: { splitIo: "yes" } }],
       });
       const loop = makeStubLoop();
       const bus = makeStubBus();
       const dbg = makeStubDbg();
       const store = await createAppStore({ backend, loop, bus, dbg });
-      expect(store.ioWriteProtect()).toBe(false);
-      expect(bus.ioWriteProtect()).toBe(false);
+      expect(store.splitIo()).toBe(false);
       store.dispose();
+    });
+
+    it("ioByteWrite reads from bus.ioWrite when split, zeros when joined", async () => {
+      // Joined: WR plane absent, accessor returns 0.
+      const joined = await freshStore();
+      expect(joined.bus.ioWrite).toBeNull();
+      expect(joined.store.ioByteWrite(0x00fe)).toBe(0);
+      joined.store.dispose();
+      // Split: stub bus exposes ioWrite, store accessor reads it.
+      const backend = new MemoryBackend();
+      const loop = makeStubLoop();
+      const bus = makeStubBus({ splitIo: true });
+      const dbg = makeStubDbg();
+      const store = await createAppStore({ backend, loop, bus, dbg });
+      if (!bus.ioWrite) throw new Error("expected split-mode stub");
+      bus.ioWrite[0x00fe] = 0x07;
+      expect(store.ioByteWrite(0x00fe)).toBe(0x07);
+      store.dispose();
+    });
+
+    it("ioWatchAddrWrite + setIoWatchAddrWrite round-trip via section config", async () => {
+      const { store, backend } = await freshStore();
+      expect(store.ioWatchAddrWrite()).toBe(0);
+      store.setIoWatchAddrWrite(0x4080);
+      expect(store.ioWatchAddrWrite()).toBe(0x4080);
+      const persisted = await backend.loadUiState();
+      const ioSec = persisted?.sections.find((s) => s.id === "io");
+      expect(ioSec?.config.watchAddrWrite).toBe(0x4080);
     });
   });
 

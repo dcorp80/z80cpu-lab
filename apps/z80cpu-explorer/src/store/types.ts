@@ -167,12 +167,28 @@ export interface Store {
   setIoByte(addr: number, value: number): void;
   /**
    * 8-bit-decoded IO write (REQ §6.7). Writes `value` to all 256
-   * high-byte aliases of `port` in `bus.io` so subsequent CPU reads
-   * return the same value regardless of the upper address byte.
+   * high-byte aliases of `port` in the RD plane so subsequent CPU
+   * reads return the same value regardless of the upper address byte.
    * `port` is 0..0xFF; out-of-range throws `RangeError`. Paused-only;
    * calls during run no-op (same gate as `setIoByte`).
    */
   setIoBytePort8(port: number, value: number): void;
+
+  /**
+   * WR-plane read paths (REQ §11 split mode). The IO section's
+   * second pane renders these. In joined mode (`splitIo() === false`)
+   * the WR plane is not allocated; `ioByteWrite` returns 0 and the
+   * pane is hidden — consumers must gate on `splitIo()`.
+   * `ioVersionWrite` bumps on each pause (the run that just ended
+   * may have OUTed) and on zeroHC. No user setter — the WR plane is
+   * a passive record of what the program emitted, not an input.
+   */
+  ioByteWrite(addr: number): number;
+  readonly ioVersionWrite: Accessor<number>;
+  readonly ioWatchAddrWrite: Accessor<number>;
+  setIoWatchAddrWrite(addr: number): void;
+  readonly ioWatchJumpVersionWrite: Accessor<number>;
+  requestIoWatchJumpWrite(): void;
 
   // ── bus last-touched (REQ §6.6 / §6.7 folded summaries). Sampled
   // from the bus on every `loop.onPause`, so they reflect what the
@@ -222,14 +238,21 @@ export interface Store {
   setIoViewMode(mode: "16bit" | "8bit"): void;
 
   /**
-   * IO write protect (REQ §6.7). When true, CPU OUT cycles are
-   * suppressed at the bus — io[] stays unchanged, but `lastIoWrite`
-   * still tracks the attempted write. User edits (`setIoByte`,
-   * `setIoBytePort8`) bypass the gate. Persisted via the IO section's
-   * config; malformed values fall back to false.
+   * IO split mode (REQ §11). When true the IO space is split into two
+   * 64K planes: CPU IN cycles read the RD plane (user-editable,
+   * pre-loaded), OUT cycles land in the WR plane (passive record,
+   * read-only to the user). When false a single plane services both
+   * — the original behavior. Persisted via the IO section's config;
+   * when the persisted value is absent or malformed this falls back to
+   * the bus's runtime authority (`bus.splitIo`, fixed at construction),
+   * so the UI always matches the actual IO-plane allocation.
+   *
+   * Toggling is destructive (the bus's WR plane is allocated lazily
+   * at construction based on this flag) so `setSplitIo` persists and
+   * then reloads the page. Paused-only.
    */
-  readonly ioWriteProtect: Accessor<boolean>;
-  setIoWriteProtect(on: boolean): void;
+  readonly splitIo: Accessor<boolean>;
+  setSplitIo(on: boolean): void;
 
   // ── input pins
   readonly inputPins: SolidStore<InputPinsState>;

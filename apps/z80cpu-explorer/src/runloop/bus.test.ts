@@ -4,8 +4,16 @@ import { type BusConfig, DEFAULT_BUS_CONFIG } from "../config/defaults.ts";
 import { IO_SIZE, MEM_SIZE, makeBus64k } from "./bus.ts";
 
 function freshBus(overrides: Partial<BusConfig> = {}) {
+  // Pin splitIo to false here so the bulk of the suite tests the joined
+  // path even when the shipped `DEFAULT_BUS_CONFIG.splitIo` is flipped
+  // on for in-app smoke-testing (REQ §11 — IndexedDB-backed persistence
+  // is post-MVP). Split-mode tests opt in explicitly via overrides.
   const cpu = new Z80Cpu();
-  const bus = makeBus64k(cpu, { ...DEFAULT_BUS_CONFIG, ...overrides });
+  const bus = makeBus64k(cpu, {
+    ...DEFAULT_BUS_CONFIG,
+    splitIo: false,
+    ...overrides,
+  });
   return { cpu, bus };
 }
 
@@ -37,9 +45,9 @@ describe("makeBus64k", () => {
   it("fills mem and IO with the configured init bytes (default FF per REQ §6.6/§6.7)", () => {
     const { bus } = freshBus();
     expect(bus.mem.length).toBe(MEM_SIZE);
-    expect(bus.io.length).toBe(IO_SIZE);
+    expect(bus.ioRead.length).toBe(IO_SIZE);
     expect(bus.mem.every((b) => b === 0xff)).toBe(true);
-    expect(bus.io.every((b) => b === 0xff)).toBe(true);
+    expect(bus.ioRead.every((b) => b === 0xff)).toBe(true);
   });
 
   it("honors override config for each space independently", () => {
@@ -49,7 +57,7 @@ describe("makeBus64k", () => {
       intVectorInit: 0x42,
     });
     expect(bus.mem.every((b) => b === 0x00)).toBe(true);
-    expect(bus.io.every((b) => b === 0xa5)).toBe(true);
+    expect(bus.ioRead.every((b) => b === 0xa5)).toBe(true);
     expect(bus.intVector()).toBe(0x42);
   });
 
@@ -60,7 +68,7 @@ describe("makeBus64k", () => {
       intVectorInit: 0x1ab,
     });
     expect(bus.mem[0]).toBe(0xff);
-    expect(bus.io[0]).toBe(0xaa);
+    expect(bus.ioRead[0]).toBe(0xaa);
     expect(bus.intVector()).toBe(0xab);
   });
 
@@ -96,7 +104,7 @@ describe("makeBus64k", () => {
 
   it("services IO read/write against the io array", () => {
     const { cpu, bus } = freshBus({ ioInit: 0 });
-    bus.io[0xfe] = 0xbf;
+    bus.ioRead[0xfe] = 0xbf;
     // IO read at 0xfe
     cpu.bus.nM1 = 1;
     cpu.bus.nIORQ = 0;
@@ -112,7 +120,7 @@ describe("makeBus64k", () => {
     cpu.bus.nWR = 0;
     cpu.bus.data = 0x07;
     bus.resolve();
-    expect(bus.io[0x00fe]).toBe(0x07);
+    expect(bus.ioRead[0x00fe]).toBe(0x07);
   });
 
   it("places INT vector on cpu.bus.data when M1 + IORQ are both asserted", () => {
@@ -132,7 +140,7 @@ describe("makeBus64k", () => {
   it("does NOT inject INT vector during a plain IO cycle (M1 high)", () => {
     const { cpu, bus } = freshBus({ ioInit: 0 });
     bus.setIntVector(0x42);
-    bus.io[0x00] = 0x99;
+    bus.ioRead[0x00] = 0x99;
     cpu.bus.nM1 = 1;
     cpu.bus.nIORQ = 0;
     cpu.bus.nMREQ = 1;
@@ -159,31 +167,31 @@ describe("makeBus64k", () => {
       const { bus } = freshBus();
       bus.broadcastIoLowByte(0x80, 0x5a);
       for (let hi = 0; hi < 256; hi++) {
-        expect(bus.io[(hi << 8) | 0x80]).toBe(0x5a);
+        expect(bus.ioRead[(hi << 8) | 0x80]).toBe(0x5a);
       }
     });
 
     it("does not touch other ports", () => {
       const { bus } = freshBus();
-      bus.io.fill(0xee); // sentinel
+      bus.ioRead.fill(0xee); // sentinel
       bus.broadcastIoLowByte(0x10, 0x11);
       // Aliases of 0x10 changed; aliases of every other port untouched.
       for (let hi = 0; hi < 256; hi++) {
-        expect(bus.io[(hi << 8) | 0x10]).toBe(0x11);
-        expect(bus.io[(hi << 8) | 0x11]).toBe(0xee);
+        expect(bus.ioRead[(hi << 8) | 0x10]).toBe(0x11);
+        expect(bus.ioRead[(hi << 8) | 0x11]).toBe(0xee);
       }
     });
 
     it("masks port and value to 8 bits at the boundary", () => {
       const { bus } = freshBus();
-      bus.io.fill(0); // zero so the mask check has a clean baseline
+      bus.ioRead.fill(0); // zero so the mask check has a clean baseline
       // 0x1180 → port 0x80; 0x1ff → value 0xff.
       bus.broadcastIoLowByte(0x1180, 0x1ff);
-      expect(bus.io[0x0080]).toBe(0xff);
-      expect(bus.io[0xff80]).toBe(0xff);
+      expect(bus.ioRead[0x0080]).toBe(0xff);
+      expect(bus.ioRead[0xff80]).toBe(0xff);
       // Confirms port mask: nothing landed at port 0x11 aliases.
-      expect(bus.io[0x0011]).toBe(0);
-      expect(bus.io[0xff11]).toBe(0);
+      expect(bus.ioRead[0x0011]).toBe(0);
+      expect(bus.ioRead[0xff11]).toBe(0);
     });
   });
 
@@ -243,7 +251,7 @@ describe("makeBus64k", () => {
 
     it("captures IO reads and writes; doesn't conflate with mem trackers", () => {
       const { cpu, bus } = freshBus({ ioInit: 0 });
-      bus.io[0x00fe] = 0xbf;
+      bus.ioRead[0x00fe] = 0xbf;
       setPins(cpu, { nIORQ: 0, nRD: 0, addr: 0x00fe });
       bus.resolve();
       setPins(cpu, { nIORQ: 0, nWR: 0, addr: 0x00fe, data: 0x07 });
@@ -289,66 +297,62 @@ describe("makeBus64k", () => {
     });
   });
 
-  describe("ioWriteProtect", () => {
-    it("defaults to false on a fresh bus", () => {
-      const { bus } = freshBus();
-      expect(bus.ioWriteProtect()).toBe(false);
-    });
-
-    it("when on, CPU IO writes do not update io[]", () => {
-      const { cpu, bus } = freshBus({ ioInit: 0 });
-      bus.setIoWriteProtect(true);
+  describe("split IO (REQ §11)", () => {
+    it("joined mode: ioWrite null, single plane services both directions", () => {
+      const { cpu, bus } = freshBus({ ioInit: 0, splitIo: false });
+      expect(bus.splitIo).toBe(false);
+      expect(bus.ioWrite).toBeNull();
+      // OUT lands in the joined plane (which is ioRead), so a follow-up
+      // IN at the same port reads it back.
       setPins(cpu, { nIORQ: 0, nWR: 0, addr: 0x00fe, data: 0xa5 });
       bus.resolve();
-      expect(bus.io[0x00fe]).toBe(0);
-    });
-
-    it("when on, lastIoWrite still records the attempted cycle", () => {
-      // The CPU cycle still happened; the bus gates the side-effect, not
-      // the observation. Lets the IO section surface what the program tried.
-      const { cpu, bus } = freshBus({ ioInit: 0 });
-      bus.setIoWriteProtect(true);
-      setPins(cpu, { nIORQ: 0, nWR: 0, addr: 0x00fe, data: 0xa5 });
+      expect(bus.ioRead[0x00fe]).toBe(0xa5);
+      setPins(cpu, { nIORQ: 0, nRD: 0, addr: 0x00fe });
       bus.resolve();
-      expect(bus.lastIoWrite()).toEqual({ addr: 0x00fe, value: 0xa5 });
+      expect(cpu.bus.data).toBe(0xa5);
     });
 
-    it("does not gate IO reads", () => {
-      const { cpu, bus } = freshBus({ ioInit: 0 });
-      bus.io[0x00fe] = 0xbf;
-      bus.setIoWriteProtect(true);
+    it("split: both planes fill to ioInit on construction", () => {
+      const { bus } = freshBus({ ioInit: 0xa5, splitIo: true });
+      expect(bus.splitIo).toBe(true);
+      expect(bus.ioWrite).not.toBeNull();
+      expect(bus.ioRead.every((b) => b === 0xa5)).toBe(true);
+      expect(bus.ioWrite?.every((b) => b === 0xa5)).toBe(true);
+    });
+
+    it("split: IN reads RD plane, OUT lands in WR plane, RD untouched by OUT", () => {
+      const { cpu, bus } = freshBus({ ioInit: 0, splitIo: true });
+      // Pre-load RD plane the way a user would.
+      bus.ioRead[0x00fe] = 0xbf;
+      // CPU OUT should NOT touch RD; it should land in WR.
+      setPins(cpu, { nIORQ: 0, nWR: 0, addr: 0x00fe, data: 0x07 });
+      bus.resolve();
+      expect(bus.ioRead[0x00fe]).toBe(0xbf);
+      expect(bus.ioWrite?.[0x00fe]).toBe(0x07);
+      // CPU IN should still read the RD-plane byte, not the WR-plane one.
       setPins(cpu, { nIORQ: 0, nRD: 0, addr: 0x00fe });
       bus.resolve();
       expect(cpu.bus.data).toBe(0xbf);
     });
 
-    it("does not gate mem writes", () => {
-      const { cpu, bus } = freshBus({ memInit: 0 });
-      bus.setIoWriteProtect(true);
-      setPins(cpu, { nMREQ: 0, nWR: 0, addr: 0x8000, data: 0x42 });
+    it("split: lastIoRead samples from RD, lastIoWrite from WR", () => {
+      const { cpu, bus } = freshBus({ ioInit: 0, splitIo: true });
+      bus.ioRead[0x00fe] = 0xbf;
+      setPins(cpu, { nIORQ: 0, nRD: 0, addr: 0x00fe });
       bus.resolve();
-      expect(bus.mem[0x8000]).toBe(0x42);
+      setPins(cpu, { nIORQ: 0, nWR: 0, addr: 0x00fe, data: 0x07 });
+      bus.resolve();
+      expect(bus.lastIoRead()).toEqual({ addr: 0x00fe, value: 0xbf });
+      expect(bus.lastIoWrite()).toEqual({ addr: 0x00fe, value: 0x07 });
     });
 
-    it("does not gate broadcastIoLowByte — user edits bypass WP", () => {
-      const { bus } = freshBus({ ioInit: 0 });
-      bus.setIoWriteProtect(true);
+    it("split: broadcastIoLowByte still targets RD (user only edits RD plane)", () => {
+      const { bus } = freshBus({ ioInit: 0, splitIo: true });
       bus.broadcastIoLowByte(0x80, 0x5a);
       for (let hi = 0; hi < 256; hi++) {
-        expect(bus.io[(hi << 8) | 0x80]).toBe(0x5a);
+        expect(bus.ioRead[(hi << 8) | 0x80]).toBe(0x5a);
+        expect(bus.ioWrite?.[(hi << 8) | 0x80]).toBe(0); // untouched
       }
-    });
-
-    it("toggling off restores CPU writes", () => {
-      const { cpu, bus } = freshBus({ ioInit: 0 });
-      bus.setIoWriteProtect(true);
-      setPins(cpu, { nIORQ: 0, nWR: 0, addr: 0x00fe, data: 0xa5 });
-      bus.resolve();
-      expect(bus.io[0x00fe]).toBe(0);
-      bus.setIoWriteProtect(false);
-      setPins(cpu, { nIORQ: 0, nWR: 0, addr: 0x00fe, data: 0xa5 });
-      bus.resolve();
-      expect(bus.io[0x00fe]).toBe(0xa5);
     });
   });
 });

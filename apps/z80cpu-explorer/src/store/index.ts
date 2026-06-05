@@ -111,10 +111,10 @@ export interface CreateStoreDeps {
     | "setIntVector"
     | "intVector"
     | "mem"
-    | "io"
+    | "ioRead"
+    | "ioWrite"
+    | "splitIo"
     | "broadcastIoLowByte"
-    | "ioWriteProtect"
-    | "setIoWriteProtect"
     | "lastMemRead"
     | "lastMemWrite"
     | "lastIoRead"
@@ -140,13 +140,23 @@ export interface CreateStoreDeps {
    * deterministic.
    */
   now?: () => number;
+  /**
+   * Pre-fetched UI state. Boot reads `backend.loadUiState()` before
+   * `makeBus64k` (it needs `splitIo` from persistence to size the IO
+   * planes), so passing the same result through avoids a second
+   * round-trip on real backends. When omitted the store loads itself.
+   */
+  preloadedUi?: UiState | null;
 }
 
 export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
   const { backend, loop, bus, dbg } = deps;
   const hwTrace = deps.hwTrace ?? new HwTraceBuffer(DEFAULT_HW_TRACE_CONFIG);
   const now = deps.now ?? (() => performance.now());
-  const loaded = await backend.loadUiState();
+  const loaded =
+    deps.preloadedUi !== undefined
+      ? deps.preloadedUi
+      : await backend.loadUiState();
   const initialSections = loaded?.sections
     ? reconcileSections(loaded.sections)
     : defaultSections();
@@ -322,6 +332,15 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
   const bumpIoVersion = (): void => {
     setIoVersion((v) => v + 1);
   };
+  // WR-plane version signal (REQ §11 split mode). Only meaningful when
+  // `splitIo()` is true; in joined mode the WR plane isn't allocated and
+  // the section's WR pane is hidden, so harmless bumps just trigger
+  // no-op re-renders the consumer doesn't subscribe to. Bumped on every
+  // pause (CPU may have OUTed during run) and on zeroHC.
+  const [ioVersionWrite, setIoVersionWrite] = createSignal(0);
+  const bumpIoVersionWrite = (): void => {
+    setIoVersionWrite((v) => v + 1);
+  };
 
   // Watch-window state for Memory and IO sections (M7). Persisted via
   // `SectionUiState.config.watchAddr`, read through plain accessors
@@ -336,8 +355,16 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
   };
   const memWatchAddr: Accessor<number> = () => watchAddrFromConfig("memory");
   const ioWatchAddr: Accessor<number> = () => watchAddrFromConfig("io");
+  // WR-plane watch lives under its own config key so split-mode users
+  // can park each pane at a different port without one fighting the other.
+  const ioWatchAddrWrite: Accessor<number> = () => {
+    const s = sections.find((sec) => sec.id === "io");
+    const v = s?.config.watchAddrWrite;
+    return typeof v === "number" ? v : 0;
+  };
   const [memWatchJumpVersion, setMemWatchJumpVersion] = createSignal(0);
   const [ioWatchJumpVersion, setIoWatchJumpVersion] = createSignal(0);
+  const [ioWatchJumpVersionWrite, setIoWatchJumpVersionWrite] = createSignal(0);
 
   // Bytes-per-row — same storage path as watchAddr (section config).
   // Defaults to the matching `DEFAULT_*_BYTES_PER_ROW`; invalid stored
@@ -374,18 +401,20 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     return v === "8bit" ? "8bit" : "16bit";
   };
 
-  // IO write protect (REQ §6.7). Persisted via the IO section's config;
-  // section config is the persistence root, the bus owns the runtime
-  // flag the resolver reads on every cycle. Setters keep both in sync.
-  // Malformed persisted values fall back to false.
-  const ioWriteProtect: Accessor<boolean> = () => {
+  // IO split mode (REQ §11). Persisted via the IO section's config; the
+  // bus's `splitIo` is fixed at construction (boot reads the same key
+  // and passes it to `makeBus64k`). When the config is present, this
+  // accessor returns it — so a fresh `setSplitIo` updates the checkbox
+  // immediately, before the reload completes. When absent (fresh boot
+  // with no prior persist) we fall back to `bus.splitIo`, the runtime
+  // authority — this is what lets `DEFAULT_BUS_CONFIG.splitIo: true`
+  // light up the UI without needing a stored config to back it.
+  // Malformed persisted values (non-boolean) also take the fallback.
+  const splitIo: Accessor<boolean> = () => {
     const s = sections.find((sec) => sec.id === "io");
-    return s?.config.writeProtect === true;
+    const v = s?.config.splitIo;
+    return typeof v === "boolean" ? v : bus.splitIo;
   };
-  // Sync persisted state into the bus once at boot — keeps the hot-path
-  // resolver allocation- and accessor-free while still honoring the
-  // user's last toggle across reloads.
-  bus.setIoWriteProtect(ioWriteProtect());
   function assertBytesPerRow(
     n: number,
     options: ReadonlyArray<number>,
@@ -517,9 +546,12 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     // pause so the Memory and IO grids re-read. The grids are frozen
     // during run (§7.5), so one bump per pause is the right cadence
     // — even when no write occurred, the cost is a re-render that
-    // produces identical DOM.
+    // produces identical DOM. In joined mode the RD plane catches CPU
+    // OUT cycles, so `bumpIoVersion` covers both directions; in split
+    // mode `bumpIoVersionWrite` brings the WR pane along.
     bumpMemVersion();
     bumpIoVersion();
+    bumpIoVersionWrite();
   });
   loop.onTick((h) => {
     setHc(h);
@@ -1050,7 +1082,9 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     },
     ioByte(addr: number) {
       ioVersion();
-      return bus.io[addr & 0xffff];
+      // Always the RD plane — that's the user-editable, IN-serviced
+      // plane in both joined and split modes (REQ §11).
+      return bus.ioRead[addr & 0xffff];
     },
     ioVersion,
     setIoByte(addr: number, value: number) {
@@ -1058,9 +1092,19 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       if (status() !== "paused") return;
       assertAddr16(addr, "setIoByte");
       assertByte(value, "setIoByte value");
-      bus.io[addr] = value;
+      bus.ioRead[addr] = value;
       bumpIoVersion();
     },
+    ioByteWrite(addr: number) {
+      ioVersionWrite();
+      // In joined mode the WR plane isn't allocated; the WR pane is
+      // hidden, but a stray read still has to return something — 0 is
+      // the simplest sentinel and the section gates on `splitIo()`
+      // before subscribing anyway.
+      const w = bus.ioWrite;
+      return w ? w[addr & 0xffff] : 0;
+    },
+    ioVersionWrite,
     setIoBytePort8(port: number, value: number) {
       // Paused-only — same gate as setIoByte. `port` is an 8-bit value
       // (0..0xff); the bus handles the mask + broadcast across the
@@ -1098,6 +1142,15 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     requestIoWatchJump() {
       setIoWatchJumpVersion((v) => v + 1);
     },
+    ioWatchAddrWrite,
+    setIoWatchAddrWrite(addr: number) {
+      assertAddr16(addr, "setIoWatchAddrWrite");
+      updateSectionConfig("io", { watchAddrWrite: addr });
+    },
+    ioWatchJumpVersionWrite,
+    requestIoWatchJumpWrite() {
+      setIoWatchJumpVersionWrite((v) => v + 1);
+    },
     memBytesPerRow,
     setMemBytesPerRow(n: number) {
       assertBytesPerRow(n, MEMORY_BYTES_PER_ROW_OPTIONS, "setMemBytesPerRow");
@@ -1115,28 +1168,59 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
           `setIoViewMode: '16bit' | '8bit' required, got ${mode}`,
         );
       }
-      // Switching to 8-bit mode masks the persisted watch address to
+      // Switching to 8-bit mode masks the persisted watch addresses to
       // the low byte — the 8-bit view's address space is 0..0xFF, so a
-      // stale 16-bit value (4080) would be unreachable. Single config
-      // write so reload restores both fields atomically.
+      // stale 16-bit value (4080) would be unreachable. Both RD and WR
+      // watch fields are masked in a single config write so reload
+      // restores them atomically.
       if (mode === "8bit") {
+        const patch: Record<string, unknown> = { viewMode: mode };
         const wa = ioWatchAddr();
-        if (wa > 0xff) {
-          updateSectionConfig("io", { viewMode: mode, watchAddr: wa & 0xff });
-          return;
-        }
+        if (wa > 0xff) patch.watchAddr = wa & 0xff;
+        const waw = ioWatchAddrWrite();
+        if (waw > 0xff) patch.watchAddrWrite = waw & 0xff;
+        updateSectionConfig("io", patch);
+        return;
       }
       updateSectionConfig("io", { viewMode: mode });
     },
-    ioWriteProtect,
-    setIoWriteProtect(on: boolean) {
-      // Paused-only — toggling WP mid-run has confusing semantics (some
-      // OUTs already landed, the next one is suppressed). Matches the
-      // checkbox's `disabled` gate in WriteProtectToggle.
+    splitIo,
+    setSplitIo(on: boolean) {
+      // Paused-only — toggling the IO layout mid-run could leave OUT
+      // cycles split across modes. We bypass the usual updateSectionConfig
+      // path (which fires its own fire-and-forget persistUi) because we
+      // need a single save whose resolution gates the page reload, plus
+      // a catch hook that rolls back the in-memory flip if persistence
+      // fails — otherwise the UI would render the new mode while the
+      // bus (unchanged until reload) stays in the old one.
       if (status() !== "paused") return;
       const v = on === true;
-      bus.setIoWriteProtect(v);
-      updateSectionConfig("io", { writeProtect: v });
+      const prev = splitIo();
+      if (v === prev) return;
+      const idx = sections.findIndex((s) => s.id === "io");
+      if (idx < 0) return;
+      setSections(idx, "config", (cfg) => ({ ...cfg, splitIo: v }));
+      const state: UiState = {
+        sections: unwrap(sections),
+        fileOrder: files.map((f) => f.id),
+        uiConfig: uiConfig(),
+      };
+      backend.saveUiState(state).then(
+        () => {
+          // Page reload is the allocation event: on boot, the bus reads
+          // the persisted `splitIo` flag and either skips or allocates
+          // the WR plane. Matches the existing Reinit semantics in
+          // sections/breakpoints/index.tsx (REQ §7.3).
+          window.location.reload();
+        },
+        (err: unknown) => {
+          // Roll the UI back so it matches the bus that the user still
+          // has. Without this the checkbox would stay flipped while
+          // OUT cycles continue to land in the original plane.
+          console.error("setSplitIo: persistence failed; reverting", err);
+          setSections(idx, "config", (cfg) => ({ ...cfg, splitIo: prev }));
+        },
+      );
     },
     inputPins,
     setIntVector(byte: number) {

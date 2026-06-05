@@ -40,9 +40,24 @@ export interface BootedApp {
 export async function bootApp(opts: BootOptions = {}): Promise<BootedApp> {
   const backend = opts.backend ?? new MemoryBackend();
 
+  // Persistence is read once up-front so the bus's `splitIo` allocation
+  // (REQ §11) matches the user's last toggle, then handed to the store
+  // via `preloadedUi` so `createAppStore` doesn't issue a second load.
+  // When nothing is persisted (fresh boot, MemoryBackend, corrupt value),
+  // fall back to the shipped `DEFAULT_BUS_CONFIG.splitIo` — flipping
+  // that default is the intended escape hatch for testing the split
+  // mode before the IndexedDB backend lands (M10).
+  const preloadedUi = await backend.loadUiState();
+  const persistedSplitIo = preloadedUi?.sections?.find((s) => s.id === "io")
+    ?.config?.splitIo;
+  const splitIo =
+    typeof persistedSplitIo === "boolean"
+      ? persistedSplitIo
+      : DEFAULT_BUS_CONFIG.splitIo;
+
   const cpu = new Z80Cpu();
   const dbg = new Z80DebugContext(cpu);
-  const bus = makeBus64k(cpu, { ...DEFAULT_BUS_CONFIG });
+  const bus = makeBus64k(cpu, { ...DEFAULT_BUS_CONFIG, splitIo });
   const hwTrace = new HwTraceBuffer(DEFAULT_HW_TRACE_CONFIG);
 
   const preEdge = (): void => {
@@ -77,6 +92,7 @@ export async function bootApp(opts: BootOptions = {}): Promise<BootedApp> {
     // accessors (REQ §6.5); store calls `dbg.state()` on each pause.
     dbg,
     hwTrace,
+    preloadedUi,
   });
 
   const registry = createHotkeyRegistry();

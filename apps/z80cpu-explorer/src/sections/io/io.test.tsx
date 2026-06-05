@@ -97,7 +97,7 @@ describe("IO section", () => {
     ) as HTMLInputElement;
     fireEvent.input(input, { target: { value: "07" } });
     fireEvent.keyDown(input, { key: "Enter" });
-    expect(harness.bus.io[0x00f0]).toBe(0x07);
+    expect(harness.bus.ioRead[0x00f0]).toBe(0x07);
     // Mem at the same address untouched.
     expect(harness.bus.mem[0x00f0]).toBe(0xff);
   });
@@ -149,7 +149,7 @@ describe("IO section — 8-bit view (REQ §6.7)", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     // Every alias holds the byte.
     for (let hi = 0; hi < 256; hi++) {
-      expect(harness.bus.io[(hi << 8) | 0x42]).toBe(0xa5);
+      expect(harness.bus.ioRead[(hi << 8) | 0x42]).toBe(0xa5);
     }
   });
 
@@ -275,8 +275,8 @@ describe("IO section — 8-bit view (REQ §6.7)", () => {
   it("alias-mismatch tint lights when high-byte aliases disagree with io[port]", async () => {
     harness = await mount("Body");
     // Seed: io[0x0010]=0x11, io[0x4010]=0x22 → aliases disagree at port 0x10.
-    harness.bus.io[0x0010] = 0x11;
-    harness.bus.io[0x4010] = 0x22;
+    harness.bus.ioRead[0x0010] = 0x11;
+    harness.bus.ioRead[0x4010] = 0x22;
     harness.store.setIoViewMode("8bit");
     const mismatched = harness.container.querySelector(
       '.hex-cell[data-addr="10"]',
@@ -328,51 +328,59 @@ describe("IO section — 8-bit view (REQ §6.7)", () => {
   });
 });
 
-describe("IO section — write protect (REQ §6.7)", () => {
+describe("IO section — split RD/WR (REQ §11)", () => {
   it("checkbox renders in the header and reflects store state", async () => {
     harness = await mount("Header");
     const cb = harness.container.querySelector(
-      ".io-wp-checkbox",
+      ".io-split-checkbox",
     ) as HTMLInputElement;
     expect(cb).not.toBeNull();
     expect(cb.checked).toBe(false);
-    harness.store.setIoWriteProtect(true);
+    // splitIo() reads from persisted section config; updating the config
+    // directly simulates the post-reload state without actually reloading.
+    harness.store.updateSectionConfig("io", { splitIo: true });
     expect(cb.checked).toBe(true);
-  });
-
-  it("toggling the checkbox mirrors into store + bus", async () => {
-    harness = await mount("Header");
-    const cb = harness.container.querySelector(
-      ".io-wp-checkbox",
-    ) as HTMLInputElement;
-    fireEvent.click(cb);
-    expect(harness.store.ioWriteProtect()).toBe(true);
-    expect(harness.bus.ioWriteProtect()).toBe(true);
-    fireEvent.click(cb);
-    expect(harness.store.ioWriteProtect()).toBe(false);
-    expect(harness.bus.ioWriteProtect()).toBe(false);
   });
 
   it("checkbox is disabled while the CPU is not paused", async () => {
     harness = await mount("Header");
     const cb = harness.container.querySelector(
-      ".io-wp-checkbox",
+      ".io-split-checkbox",
     ) as HTMLInputElement;
     expect(cb.disabled).toBe(false);
     expect(
       harness.container
-        .querySelector(".io-wp")
+        .querySelector(".io-split")
         ?.classList.contains("is-disabled"),
     ).toBe(false);
     harness.store.run();
     expect(cb.disabled).toBe(true);
     expect(
       harness.container
-        .querySelector(".io-wp")
+        .querySelector(".io-split")
         ?.classList.contains("is-disabled"),
     ).toBe(true);
-    // Pausing re-enables the toggle.
     harness.loop.emitPause({ kind: "user" });
     expect(cb.disabled).toBe(false);
+  });
+
+  it("body renders side-by-side RD/WR panes when split", async () => {
+    harness = await mount("Body");
+    expect(harness.container.querySelector(".io-split-body")).toBeNull();
+    harness.store.updateSectionConfig("io", { splitIo: true });
+    expect(harness.container.querySelector(".io-split-body")).not.toBeNull();
+    expect(harness.container.querySelector(".io-pane-rd")).not.toBeNull();
+    expect(harness.container.querySelector(".io-pane-wr")).not.toBeNull();
+  });
+
+  it("folded summary surfaces both watch addresses in split mode", async () => {
+    harness = await mount("FoldedSummary");
+    harness.store.setIoWatchAddr(0x4080);
+    harness.store.updateSectionConfig("io", { splitIo: true });
+    harness.store.setIoWatchAddrWrite(0x00fe);
+    const text = harness.container.textContent ?? "";
+    expect(text).toContain("split");
+    expect(text).toContain("RD=4080");
+    expect(text).toContain("WR=00FE");
   });
 });

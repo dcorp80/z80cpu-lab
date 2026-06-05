@@ -168,12 +168,22 @@ export const STR = {
     title: "IO",
     foldedHeader: (watch: string) => `64K ports · watch=${watch}`,
     foldedHeader8b: (watch: string) => `256 ports · 8-bit · watch=${watch}`,
+    foldedHeaderSplit: (watchRd: string, watchWr: string) =>
+      `64K ports · split · RD=${watchRd} · WR=${watchWr}`,
+    foldedHeaderSplit8b: (watchRd: string, watchWr: string) =>
+      `256 ports · 8-bit split · RD=${watchRd} · WR=${watchWr}`,
     foldedLastOut: (addr: string, value: string) => `last out ${addr}=${value}`,
     foldedLastIn: (addr: string, value: string) => `last in ${addr}=${value}`,
     foldedNoActivity: "no activity",
     watchLabel: "Watch:",
     watchTooltip: "Hex port to watch — press Enter to jump back to this row",
     watchAriaLabel: "IO watch address",
+    watchLabelRd: "RD watch:",
+    watchAriaLabelRd: "IO RD-plane watch address",
+    watchLabelWr: "WR watch:",
+    watchAriaLabelWr: "IO WR-plane watch address",
+    paneTitleRd: "RD (CPU IN, user-editable)",
+    paneTitleWr: "WR (CPU OUT, read-only)",
     viewModeLabel: "Decode:",
     viewModeAriaLabel: "IO address decoding mode",
     viewMode16b: "16-bit",
@@ -182,10 +192,12 @@ export const STR = {
       "16-bit: full 64K port view. 8-bit: 256 ports, edits broadcast to all upper-byte aliases.",
     aliasMismatchTooltip: (port: string) =>
       `Port ${port}: high-byte aliases hold different values; cell shows io[00${port}]. Editing rewrites all 256 aliases.`,
-    writeProtectLabel: "WP",
-    writeProtectAriaLabel: "IO write protect",
-    writeProtectTooltip:
-      "Write protect — block CPU OUT writes from updating IO state. User edits still apply.",
+    aliasMismatchTooltipReadOnly: (port: string) =>
+      `Port ${port}: high-byte aliases hold different values; cell shows io[00${port}].`,
+    splitLabel: "Split RD/WR",
+    splitAriaLabel: "Split IO read/write spaces",
+    splitTooltip:
+      "Split IO into two 64K planes: CPU IN reads RD (user-editable), CPU OUT lands in WR (read-only). Toggling reloads the page.",
   },
   hexGrid: {
     cellEditAriaLabel: (addr: string) => `Edit byte at ${addr}`,
