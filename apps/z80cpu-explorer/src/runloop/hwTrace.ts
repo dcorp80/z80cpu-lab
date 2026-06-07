@@ -16,11 +16,16 @@
 // driven by record volume, not time. Step mode accumulates into one
 // chunk across many steps; full-speed run fills a chunk in milliseconds.
 //
-// Physical layout: each chunk stores one TypedArray per signal,
-// parallel-indexed by position. Semantically per-position (each position
-// holds a full snapshot); under the hood a row-store would have looked
-// the same. Per-signal columns keep `equals()` and `writeSnapshot()`
-// cache-friendly without changing the API.
+// Physical layout per chunk: one Float64Array for HCs, plus three
+// parallel TypedArrays indexed by position:
+//   - `state` (Uint32Array) — every 1-bit and tri-bit signal AND the
+//     addr/data tristate flags packed into a single integer (see
+//     `packBusState`). One compare per record replaces fifteen
+//     TypedArray reads on the hot path.
+//   - `addr` (Uint16Array), `data` (Uint8Array) — bus values. During a
+//     bus grant the value is `undefined`; the corresponding slot is left
+//     stale and the tristate flag in `state` selects between "use slot"
+//     and "report undefined" on read.
 //
 // HC=0 is never recorded — the very first `record(curr, hc)` call comes
 // from the loop AFTER its first clockEdge with hc ≥ 1.
@@ -133,9 +138,9 @@ export interface BusReadout {
 
 /**
  * One chunk = `chunkSize` positions, each holding a full bus snapshot.
- * Per-signal TypedArrays are parallel-indexed by position. `pointer`
- * is the index of the **last** written position; `-1` means the chunk
- * is empty. Valid positions are `[0..pointer]`.
+ * Parallel arrays are indexed by position. `pointer` is the index of the
+ * **last** written position; `-1` means the chunk is empty. Valid
+ * positions are `[0..pointer]`.
  *
  * Recycling on rotation overwrites from position 0; we don't clear
  * trailing data because readers honor `pointer` as the bound.
@@ -143,51 +148,24 @@ export interface BusReadout {
 class FrameChunk {
   pointer = -1;
   readonly hcs: Float64Array;
-  // 1-bit and tri-bit values fit in u8. Tri uses 0|1|2.
-  readonly nM1: Uint8Array;
-  readonly nRFSH: Uint8Array;
-  readonly nHALT: Uint8Array;
-  readonly nBUSACK: Uint8Array;
-  readonly nMREQ: Uint8Array;
-  readonly nIORQ: Uint8Array;
-  readonly nRD: Uint8Array;
-  readonly nWR: Uint8Array;
-  readonly nINT: Uint8Array;
-  readonly nNMI: Uint8Array;
-  readonly nRESET: Uint8Array;
-  readonly nBUSRQ: Uint8Array;
-  readonly nWAIT: Uint8Array;
-  // 16-bit addr + tristate flag; 8-bit data + tristate flag.
+  /** Every 1-bit / tri-bit signal plus the addr/data tristate flags
+   *  packed into one integer per position. Layout owned by
+   *  `packBusState`; `readSnapshot` inlines the inverse. */
+  readonly state: Uint32Array;
+  /** Bus values. Slots are only written when the bus is driven; during
+   *  a tristate the slot is left stale and `state`'s addrTri/dataTri
+   *  bit selects "report undefined" on read. */
   readonly addr: Uint16Array;
-  readonly addrTri: Uint8Array;
   readonly data: Uint8Array;
-  readonly dataTri: Uint8Array;
 
   constructor(chunkSize: number) {
     // hcs uses Float64 so we never wrap at 2^32 HCs (~3.5 min at 20MHz
     // HC). Float64 holds exact integers up to 2^53 — effectively
     // unlimited. The 8-byte cost is tiny at MVP chunk sizes.
     this.hcs = new Float64Array(chunkSize);
-    this.nM1 = new Uint8Array(chunkSize);
-    this.nRFSH = new Uint8Array(chunkSize);
-    this.nHALT = new Uint8Array(chunkSize);
-    this.nBUSACK = new Uint8Array(chunkSize);
-    this.nMREQ = new Uint8Array(chunkSize);
-    this.nIORQ = new Uint8Array(chunkSize);
-    this.nRD = new Uint8Array(chunkSize);
-    this.nWR = new Uint8Array(chunkSize);
-    this.nINT = new Uint8Array(chunkSize);
-    this.nNMI = new Uint8Array(chunkSize);
-    this.nRESET = new Uint8Array(chunkSize);
-    this.nBUSRQ = new Uint8Array(chunkSize);
-    this.nWAIT = new Uint8Array(chunkSize);
+    this.state = new Uint32Array(chunkSize);
     this.addr = new Uint16Array(chunkSize);
-    // Parallel tristate flag — Uint typed arrays can't hold `undefined`,
-    // so we burn a u8 per position for addr and data each. 1 = tristate,
-    // 0 = numeric value valid.
-    this.addrTri = new Uint8Array(chunkSize);
     this.data = new Uint8Array(chunkSize);
-    this.dataTri = new Uint8Array(chunkSize);
   }
 
   reset(): void {
@@ -196,102 +174,123 @@ class FrameChunk {
   }
 }
 
+// ── Packed bus state ─────────────────────────────────────────────
+//
+// The 13 single/tri-bit signals plus the addr/data tristate flags are
+// packed into one integer per position. The hot path does ONE compare
+// per record (`state[pos] !== packed`) instead of fifteen TypedArray
+// reads, which is where the bulk of the recorder's speedup comes from.
+//
 // `nMREQ|nIORQ|nRD|nWR` arrive as `0|1|undefined` (the CPU's tristate
-// encoding); we store them as `Tri` with `undefined → 2`. Inlining this
-// at the read sites (vs a `tri()` helper call) keeps the per-edge compare
-// branch-light.
+// encoding) and occupy 2 bits each (`undefined → 2`). The other nine
+// signals are 1-bit (0|1). Two more 1-bit fields encode whether
+// addr/data are currently tristated (1 = tristate, 0 = driven). Total
+// = 4 + 4·2 + 5·1 + 2 = 19 bits, well within the V8 SMI range, so each
+// `state[pos]` stays a tagged int.
+//
+// Bit layout, MSB→LSB:
+//   nM1 | nRFSH | nHALT | nBUSACK | nMREQ(2) | nIORQ(2) | nRD(2) | nWR(2) |
+//   nINT | nNMI | nRESET | nBUSRQ | nWAIT | addrTri | dataTri
+
+function packBusState(bus: BusReadout, nNMI: 0 | 1): number {
+  let st: number = bus.nM1;
+  st = (st << 1) | bus.nRFSH;
+  st = (st << 1) | bus.nHALT;
+  st = (st << 1) | bus.nBUSACK;
+  st = (st << 2) | (bus.nMREQ === undefined ? 2 : bus.nMREQ);
+  st = (st << 2) | (bus.nIORQ === undefined ? 2 : bus.nIORQ);
+  st = (st << 2) | (bus.nRD === undefined ? 2 : bus.nRD);
+  st = (st << 2) | (bus.nWR === undefined ? 2 : bus.nWR);
+  st = (st << 1) | bus.nINT;
+  st = (st << 1) | nNMI;
+  st = (st << 1) | bus.nRESET;
+  st = (st << 1) | bus.nBUSRQ;
+  st = (st << 1) | bus.nWAIT;
+  st = (st << 1) | (bus.addr === undefined ? 1 : 0);
+  st = (st << 1) | (bus.data === undefined ? 1 : 0);
+  return st;
+}
+
 function writeSnapshot(
   chunk: FrameChunk,
   pos: number,
   bus: BusReadout,
-  nNMI: 0 | 1,
   hc: number,
+  packedState: number,
 ): void {
   chunk.hcs[pos] = hc;
-  chunk.nM1[pos] = bus.nM1;
-  chunk.nRFSH[pos] = bus.nRFSH;
-  chunk.nHALT[pos] = bus.nHALT;
-  chunk.nBUSACK[pos] = bus.nBUSACK;
-  chunk.nMREQ[pos] = bus.nMREQ === undefined ? 2 : bus.nMREQ;
-  chunk.nIORQ[pos] = bus.nIORQ === undefined ? 2 : bus.nIORQ;
-  chunk.nRD[pos] = bus.nRD === undefined ? 2 : bus.nRD;
-  chunk.nWR[pos] = bus.nWR === undefined ? 2 : bus.nWR;
-  chunk.nINT[pos] = bus.nINT;
-  chunk.nNMI[pos] = nNMI;
-  chunk.nRESET[pos] = bus.nRESET;
-  chunk.nBUSRQ[pos] = bus.nBUSRQ;
-  chunk.nWAIT[pos] = bus.nWAIT;
-  if (bus.addr === undefined) {
-    chunk.addr[pos] = 0;
-    chunk.addrTri[pos] = 1;
-  } else {
-    chunk.addr[pos] = bus.addr;
-    chunk.addrTri[pos] = 0;
-  }
-  if (bus.data === undefined) {
-    chunk.data[pos] = 0;
-    chunk.dataTri[pos] = 1;
-  } else {
-    chunk.data[pos] = bus.data;
-    chunk.dataTri[pos] = 0;
-  }
+  chunk.state[pos] = packedState;
+  // Tristate slots are left stale on purpose — `readSnapshot` consults
+  // the addrTri/dataTri bits in `state` and returns `undefined` then.
+  if (bus.addr !== undefined) chunk.addr[pos] = bus.addr;
+  if (bus.data !== undefined) chunk.data[pos] = bus.data;
 }
 
 function snapshotEquals(
   chunk: FrameChunk,
   pos: number,
   bus: BusReadout,
-  nNMI: 0 | 1,
+  packedState: number,
 ): boolean {
-  if (chunk.nM1[pos] !== bus.nM1) return false;
-  if (chunk.nRFSH[pos] !== bus.nRFSH) return false;
-  if (chunk.nHALT[pos] !== bus.nHALT) return false;
-  if (chunk.nBUSACK[pos] !== bus.nBUSACK) return false;
-  if (chunk.nMREQ[pos] !== (bus.nMREQ === undefined ? 2 : bus.nMREQ))
-    return false;
-  if (chunk.nIORQ[pos] !== (bus.nIORQ === undefined ? 2 : bus.nIORQ))
-    return false;
-  if (chunk.nRD[pos] !== (bus.nRD === undefined ? 2 : bus.nRD)) return false;
-  if (chunk.nWR[pos] !== (bus.nWR === undefined ? 2 : bus.nWR)) return false;
-  if (chunk.nINT[pos] !== bus.nINT) return false;
-  if (chunk.nNMI[pos] !== nNMI) return false;
-  if (chunk.nRESET[pos] !== bus.nRESET) return false;
-  if (chunk.nBUSRQ[pos] !== bus.nBUSRQ) return false;
-  if (chunk.nWAIT[pos] !== bus.nWAIT) return false;
-  // addr / data — tristate flag must match too.
-  if (bus.addr === undefined) {
-    if (chunk.addrTri[pos] !== 1) return false;
-  } else {
-    if (chunk.addrTri[pos] !== 0) return false;
-    if (chunk.addr[pos] !== bus.addr) return false;
-  }
-  if (bus.data === undefined) {
-    if (chunk.dataTri[pos] !== 1) return false;
-  } else {
-    if (chunk.dataTri[pos] !== 0) return false;
-    if (chunk.data[pos] !== bus.data) return false;
-  }
-  return true;
+  if (chunk.state[pos] !== packedState) return false;
+  // When `bus.addr`/`bus.data` is undefined, `state` already proved the
+  // tristate flag matches, so the stale slot value is irrelevant. Only
+  // compare the numeric value when the bus is currently driven.
+  if (bus.addr !== undefined && chunk.addr[pos] !== bus.addr) return false;
+  return !(bus.data !== undefined && chunk.data[pos] !== bus.data);
+
 }
 
 function readSnapshot(chunk: FrameChunk, pos: number): BusSnapshotRecord {
+  // Unpack in reverse of packBusState — LSB first.
+  let st = chunk.state[pos];
+  const dataTri = (st & 1) as 0 | 1;
+  st >>>= 1;
+  const addrTri = (st & 1) as 0 | 1;
+  st >>>= 1;
+  const nWAIT = (st & 1) as 0 | 1;
+  st >>>= 1;
+  const nBUSRQ = (st & 1) as 0 | 1;
+  st >>>= 1;
+  const nRESET = (st & 1) as 0 | 1;
+  st >>>= 1;
+  const nNMI = (st & 1) as 0 | 1;
+  st >>>= 1;
+  const nINT = (st & 1) as 0 | 1;
+  st >>>= 1;
+  const nWR = (st & 3) as Tri;
+  st >>>= 2;
+  const nRD = (st & 3) as Tri;
+  st >>>= 2;
+  const nIORQ = (st & 3) as Tri;
+  st >>>= 2;
+  const nMREQ = (st & 3) as Tri;
+  st >>>= 2;
+  const nBUSACK = (st & 1) as 0 | 1;
+  st >>>= 1;
+  const nHALT = (st & 1) as 0 | 1;
+  st >>>= 1;
+  const nRFSH = (st & 1) as 0 | 1;
+  st >>>= 1;
+  const nM1 = st as 0 | 1;
+
   return {
     hc: chunk.hcs[pos],
-    nM1: chunk.nM1[pos] as 0 | 1,
-    nRFSH: chunk.nRFSH[pos] as 0 | 1,
-    nHALT: chunk.nHALT[pos] as 0 | 1,
-    nBUSACK: chunk.nBUSACK[pos] as 0 | 1,
-    nMREQ: chunk.nMREQ[pos] as Tri,
-    nIORQ: chunk.nIORQ[pos] as Tri,
-    nRD: chunk.nRD[pos] as Tri,
-    nWR: chunk.nWR[pos] as Tri,
-    nINT: chunk.nINT[pos] as 0 | 1,
-    nNMI: chunk.nNMI[pos] as 0 | 1,
-    nRESET: chunk.nRESET[pos] as 0 | 1,
-    nBUSRQ: chunk.nBUSRQ[pos] as 0 | 1,
-    nWAIT: chunk.nWAIT[pos] as 0 | 1,
-    addr: chunk.addrTri[pos] === 1 ? undefined : chunk.addr[pos],
-    data: chunk.dataTri[pos] === 1 ? undefined : chunk.data[pos],
+    nM1,
+    nRFSH,
+    nHALT,
+    nBUSACK,
+    nMREQ,
+    nIORQ,
+    nRD,
+    nWR,
+    nINT,
+    nNMI,
+    nRESET,
+    nBUSRQ,
+    nWAIT,
+    addr: addrTri ? undefined : chunk.addr[pos],
+    data: dataTri ? undefined : chunk.data[pos],
   };
 }
 
@@ -343,18 +342,19 @@ export class HwTraceBuffer {
    */
   record(bus: BusReadout, nNMI: 0 | 1, hc: number): void {
     if (this.mode === "disabled") return;
+    const packedState = packBusState(bus, nNMI);
     if (this.head < 0) {
       // First-ever record — open chunk[0] and store at position 0.
       this.head = 0;
       this._size = 1;
       this.chunks[0].pointer = 0;
-      writeSnapshot(this.chunks[0], 0, bus, nNMI, hc);
+      writeSnapshot(this.chunks[0], 0, bus, hc, packedState);
       this._version++;
       return;
     }
     const chunk = this.chunks[this.head];
     const pos = chunk.pointer;
-    if (snapshotEquals(chunk, pos, bus, nNMI)) {
+    if (snapshotEquals(chunk, pos, bus, packedState)) {
       // Nothing changed — no record, no version bump. The renderer's
       // "value at HC=X" is unchanged.
       return;
@@ -371,10 +371,10 @@ export class HwTraceBuffer {
       }
       const newChunk = this.chunks[this.head];
       newChunk.pointer = 0;
-      writeSnapshot(newChunk, 0, bus, nNMI, hc);
+      writeSnapshot(newChunk, 0, bus, hc, packedState);
     } else {
       chunk.pointer = newPos;
-      writeSnapshot(chunk, newPos, bus, nNMI, hc);
+      writeSnapshot(chunk, newPos, bus, hc, packedState);
     }
     this._version++;
   }

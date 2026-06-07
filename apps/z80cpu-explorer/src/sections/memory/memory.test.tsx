@@ -9,7 +9,16 @@
 import { fireEvent } from "@solidjs/testing-library";
 import { render } from "solid-js/web";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  DEFAULT_MEMORY_ROWS_AFTER,
+  DEFAULT_MEMORY_ROWS_BEFORE,
+} from "../../config/defaults.ts";
 import { MemoryBackend } from "../../storage/memory.ts";
+
+// Total memory rows = rowsBefore + watch row + rowsAfter. Tied to the
+// config so retuning DEFAULT_MEMORY_ROWS_* doesn't break these tests.
+const DEFAULT_MEMORY_ROWS_TOTAL =
+  DEFAULT_MEMORY_ROWS_BEFORE + 1 + DEFAULT_MEMORY_ROWS_AFTER;
 import {
   createAppStore,
   type Store,
@@ -128,8 +137,7 @@ describe("Memory section — body grid", () => {
   it("renders rowsBefore + 1 + rowsAfter rows by default", async () => {
     harness = await mount("Body");
     const rows = harness.container.querySelectorAll(".hex-row");
-    // Memory defaults: 2 + 1 + 9 = 12.
-    expect(rows.length).toBe(12);
+    expect(rows.length).toBe(DEFAULT_MEMORY_ROWS_TOTAL);
   });
 
   it("renders 16 cells per row at default width", async () => {
@@ -376,15 +384,16 @@ describe("Memory section — rapid entry", () => {
     // Pick a watch addr; figure out the window's bottom-right addr.
     harness.store.setMemWatchAddr(0x4020);
     const bpr = harness.store.memBytesPerRow();
-    const rowsBeforeCount =
-      harness.container.querySelectorAll(".hex-row").length;
-    // start = (watchRowAddr) - rowsBefore*bpr; last addr = start + rowsCount*bpr - 1
-    // For mem defaults (2 + 1 + 9 = 12 rows, bpr=16):
-    //   start = 0x4020 - 32 = 0x4000; last = 0x4000 + 12*16 - 1 = 0x40BF
-    expect(rowsBeforeCount).toBe(12);
+    const rowsCount = harness.container.querySelectorAll(".hex-row").length;
+    // start = watchRowAddr - rowsBefore*bpr;
+    //  last = start + rowsCount*bpr - 1
+    expect(rowsCount).toBe(DEFAULT_MEMORY_ROWS_TOTAL);
     expect(bpr).toBe(16);
+    const startAddr = 0x4020 - DEFAULT_MEMORY_ROWS_BEFORE * bpr;
+    const lastAddr = startAddr + rowsCount * bpr - 1;
+    const lastAddrHex = lastAddr.toString(16).toUpperCase().padStart(4, "0");
     const bottomCell = harness.container.querySelector(
-      '.hex-cell[data-addr="40BF"]',
+      `.hex-cell[data-addr="${lastAddrHex}"]`,
     ) as HTMLElement;
     expect(bottomCell).not.toBeNull();
     fireEvent.click(bottomCell);
@@ -393,7 +402,7 @@ describe("Memory section — rapid entry", () => {
     ) as HTMLInputElement;
     fireEvent.input(input, { target: { value: "AA" } });
     fireEvent.keyDown(input, { key: "Enter" });
-    expect(harness.bus.mem[0x40bf]).toBe(0xaa);
+    expect(harness.bus.mem[lastAddr]).toBe(0xaa);
     // watchAddr bumped by one row → next cell at 0x40C0 is now visible
     // and is in the rendered window.
     expect(harness.store.memWatchAddr()).toBe(0x4030);

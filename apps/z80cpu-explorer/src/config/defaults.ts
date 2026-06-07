@@ -107,9 +107,9 @@ export const DEFAULT_INSTRUCTION_RING_CAP = 10_000;
 // to read structures around the watch byte; IO maps are sparser and
 // users typically watch one port at a time, so 3 rows is plenty.
 
-/** Memory section — rows above watch (default 2 + 1 + 9 = 12 total). */
+/** Memory section — rows above watch (default 2 + 1 + 21 = 24 total). */
 export const DEFAULT_MEMORY_ROWS_BEFORE = 2;
-export const DEFAULT_MEMORY_ROWS_AFTER = 9;
+export const DEFAULT_MEMORY_ROWS_AFTER = 21;
 /** IO section — rows above watch (default 1 + 1 + 1 = 3 total). */
 export const DEFAULT_IO_ROWS_BEFORE = 1;
 export const DEFAULT_IO_ROWS_AFTER = 1;
