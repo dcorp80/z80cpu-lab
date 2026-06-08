@@ -3,6 +3,7 @@ import type { Z80DebugContext } from "@dcorp80/z80cpu-debug";
 import {
   type Accessor,
   createContext,
+  createMemo,
   createSignal,
   useContext,
 } from "solid-js";
@@ -21,7 +22,10 @@ import type { Bus64k } from "../runloop/bus.ts";
 import { MEM_SIZE } from "../runloop/bus.ts";
 import { HwTraceBuffer } from "../runloop/hwTrace.ts";
 import type { PauseReason, RunLoop, RunStatus } from "../runloop/loop.ts";
-import { defaultSectionIds } from "../sections/sectionRegistry.ts";
+import {
+  defaultSectionFolded,
+  defaultSectionIds,
+} from "../sections/sectionRegistry.ts";
 import {
   type Breakpoint,
   MAX_FILE_BYTES,
@@ -47,22 +51,45 @@ import type {
 export type { Store } from "./types.ts";
 
 function defaultSections(): SectionUiState[] {
-  return defaultSectionIds().map((id) => ({ id, folded: false, config: {} }));
+  return defaultSectionIds().map((id) => ({
+    id,
+    folded: defaultSectionFolded(id),
+    config: {},
+  }));
 }
 
 /** Merge a stored section list with the registry's known ids:
  *  - keep stored order for ids the registry still knows about
- *  - append any new registry ids (with default state) at the end
+ *  - inject any new registry ids at their `DEFAULT_SECTION_ORDER` index
+ *    rather than at the end — REQ §11 wants the App-shell to land at
+ *    the top for upgrading users, not at the bottom they'd never look at
  *  - drop any stored ids the registry no longer knows about
  */
 function reconcileSections(stored: SectionUiState[]): SectionUiState[] {
-  const known = new Set(defaultSectionIds());
+  const order = defaultSectionIds();
+  const known = new Set(order);
   const keep = stored.filter((s) => known.has(s.id));
   const seen = new Set(keep.map((s) => s.id));
-  const missing = defaultSectionIds()
-    .filter((id) => !seen.has(id))
-    .map<SectionUiState>((id) => ({ id, folded: false, config: {} }));
-  return [...keep, ...missing];
+  const out: SectionUiState[] = [...keep];
+  for (let i = 0; i < order.length; i++) {
+    const id = order[i];
+    if (seen.has(id)) continue;
+    // Find the insertion index: first kept section whose registry index
+    // is greater than this one. Falls through to the end if none.
+    let insertAt = out.length;
+    for (let j = 0; j < out.length; j++) {
+      if (order.indexOf(out[j].id) > i) {
+        insertAt = j;
+        break;
+      }
+    }
+    out.splice(insertAt, 0, {
+      id,
+      folded: defaultSectionFolded(id),
+      config: {},
+    });
+  }
+  return out;
 }
 
 /** Apply a stored file order on top of the file list from the backend.
@@ -200,6 +227,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     createStore<Record<string, ProgramFileSession>>(initialSessions);
 
   const [status, setStatus] = createSignal<RunStatus>(loop.status());
+  const isPaused: Accessor<boolean> = () => status() === "paused";
   const [hc, setHc] = createSignal(loop.hc());
   const [insnCount, setInsnCount] = createSignal(0);
   // Effective clock-speed indicator (REQ §11). `null` until the first valid
@@ -415,6 +443,18 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     const v = s?.config.splitIo;
     return typeof v === "boolean" ? v : bus.splitIo;
   };
+
+  // App-shell pending value for Split RD/WR (REQ §11). The checkbox in
+  // the App-shell body binds to this, NOT to `splitIo()` directly —
+  // toggling stages a value, Save flushes via `setSplitIo` (which
+  // persists + reloads), Discard reverts to live. `splitIoDirty` drives
+  // the section's fold-lock and Save/Discard visibility. Initialized
+  // from `splitIo()`; the live value is the source of truth on boot,
+  // every subsequent change is a deliberate user edit.
+  const [pendingSplitIo, setPendingSplitIo] = createSignal(splitIo());
+  const splitIoDirty: Accessor<boolean> = createMemo(
+    () => pendingSplitIo() !== splitIo(),
+  );
   function assertBytesPerRow(
     n: number,
     options: ReadonlyArray<number>,
@@ -921,6 +961,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     reorderSections,
     updateSectionConfig,
     status,
+    isPaused,
     hc,
     insnCount,
     insnCountThrottled,
@@ -986,6 +1027,13 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
           s.hwTrace = { mode: "live" };
         }),
       );
+    },
+    coldBoot() {
+      // Paused-only — reloading mid-run would yank an active CPU out
+      // from under the user. TODO(REQ §7.4 / M8c): save-or-skip modal
+      // when snapshot / HW-trace buffers exist.
+      if (!isPaused()) return;
+      window.location.reload();
     },
     hwTrace,
     hwTraceVersion,
@@ -1185,6 +1233,9 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       updateSectionConfig("io", { viewMode: mode });
     },
     splitIo,
+    pendingSplitIo,
+    setPendingSplitIo: (on: boolean) => setPendingSplitIo(on),
+    splitIoDirty,
     setSplitIo(on: boolean) {
       // Paused-only — toggling the IO layout mid-run could leave OUT
       // cycles split across modes. We bypass the usual updateSectionConfig
@@ -1193,7 +1244,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       // a catch hook that rolls back the in-memory flip if persistence
       // fails — otherwise the UI would render the new mode while the
       // bus (unchanged until reload) stays in the old one.
-      if (status() !== "paused") return;
+      if (!isPaused()) return;
       const v = on === true;
       const prev = splitIo();
       if (v === prev) return;
@@ -1216,9 +1267,14 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
         (err: unknown) => {
           // Roll the UI back so it matches the bus that the user still
           // has. Without this the checkbox would stay flipped while
-          // OUT cycles continue to land in the original plane.
+          // OUT cycles continue to land in the original plane. Also
+          // resync pendingSplitIo — otherwise the App-shell would lock
+          // the user with a checkbox stuck on the failed target value
+          // and no way to know the persist failed (REQ §11 staging
+          // dirty-lock).
           console.error("setSplitIo: persistence failed; reverting", err);
           setSections(idx, "config", (cfg) => ({ ...cfg, splitIo: prev }));
+          setPendingSplitIo(prev);
         },
       );
     },

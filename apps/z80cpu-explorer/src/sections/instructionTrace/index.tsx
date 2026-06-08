@@ -2,6 +2,7 @@ import {
   type Component,
   createEffect,
   createMemo,
+  createSignal,
   Index,
   Show,
 } from "solid-js";
@@ -10,6 +11,7 @@ import type { TraceRecord } from "../../store/traceRing.ts";
 import { disasm } from "../../style/disasmStyle.ts";
 import { STR } from "../../style/strings.ts";
 import { formatHex } from "../../util/hex.ts";
+import { parsePositiveInt } from "../../util/num.ts";
 import type { SectionModule } from "../types.ts";
 
 // How many instructions to forward-disassemble after current PC. REQ §6.3:
@@ -65,6 +67,13 @@ function getDisasm(rec: TraceRecord): string {
 
 const Header: Component = () => {
   const store = useStore();
+  // Step / Step N are paused-only (mirrors the equivalent guards in
+  // hotkeys/defaults.ts).
+  const [stepN, setStepN] = createSignal("1");
+  const onStepN = () => {
+    const n = parsePositiveInt(stepN());
+    if (n !== null) store.stepInstructions(n);
+  };
   // Returning the cursor itself (not a boolean) when detached lets
   // `<Show>` hand the narrowed value to its child function. Children
   // are torn down before re-eval when the cursor flips to `live`, so
@@ -74,28 +83,50 @@ const Header: Component = () => {
     return c.mode === "detached" ? c : null;
   };
   return (
-    <Show when={detached()}>
-      {(c) => (
-        <div class="itrace-header-controls">
-          <span
-            class="itrace-detached-badge"
-            title={STR.instructionTrace.detachedBadgeTooltip(
-              formatHex(c().anchorHc, 0),
-            )}
-          >
-            {STR.instructionTrace.detachedBadge}
-          </span>
-          <button
-            type="button"
-            class="itrace-snap"
-            onClick={() => store.snapInstructionTraceCursorToLive()}
-            title={STR.instructionTrace.snapToLiveTooltip}
-          >
-            {STR.instructionTrace.snapToLive}
-          </button>
-        </div>
-      )}
-    </Show>
+    <div class="itrace-header-controls">
+      <button
+        type="button"
+        onClick={() => store.stepInstructions(1)}
+        disabled={!store.isPaused()}
+        title={STR.instructionTrace.stepTooltip}
+      >
+        {STR.instructionTrace.step}
+      </button>
+      <input
+        class="step-n-input"
+        type="text"
+        inputmode="numeric"
+        value={stepN()}
+        onInput={(e) => setStepN(e.currentTarget.value)}
+        aria-label={STR.instructionTrace.stepCountLabel}
+        size={4}
+      />
+      <button type="button" onClick={onStepN} disabled={!store.isPaused()}>
+        {STR.instructionTrace.stepN}
+      </button>
+      <Show when={detached()}>
+        {(c) => (
+          <>
+            <span
+              class="itrace-detached-badge"
+              title={STR.instructionTrace.detachedBadgeTooltip(
+                formatHex(c().anchorHc, 0),
+              )}
+            >
+              {STR.instructionTrace.detachedBadge}
+            </span>
+            <button
+              type="button"
+              class="itrace-snap"
+              onClick={() => store.snapInstructionTraceCursorToLive()}
+              title={STR.instructionTrace.snapToLiveTooltip}
+            >
+              {STR.instructionTrace.snapToLive}
+            </button>
+          </>
+        )}
+      </Show>
+    </div>
   );
 };
 

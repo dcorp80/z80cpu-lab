@@ -81,6 +81,14 @@ export const SectionFrame: Component<SectionFrameProps> = (props) => {
 
   const FoldedSummary = mod.FoldedSummary;
 
+  // Sections opt in to a fold-lock (REQ §11 App-shell) by exporting an
+  // `isCollapseLocked` accessor. The lock blocks *collapse only* —
+  // unfolding a locked section stays allowed so a user who somehow
+  // ended up with a locked-and-folded section (e.g. async persist
+  // failure right after Save) can still reach the body's Save / Discard.
+  const foldLocked = () => mod.isCollapseLocked?.(store) === true;
+  const chevronDisabled = () => foldLocked() && !props.folded;
+
   return (
     <section
       ref={(el) => {
@@ -104,7 +112,12 @@ export const SectionFrame: Component<SectionFrameProps> = (props) => {
           class="fold-chevron"
           aria-label={STR.frame.foldLabel(props.folded)}
           aria-expanded={!props.folded}
-          onClick={() => store.toggleSectionFold(props.id)}
+          disabled={chevronDisabled()}
+          title={chevronDisabled() ? STR.frame.foldLockedTooltip : undefined}
+          onClick={() => {
+            if (chevronDisabled()) return;
+            store.toggleSectionFold(props.id);
+          }}
         >
           {props.folded ? "▶" : "▼"}
         </button>

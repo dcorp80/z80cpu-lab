@@ -84,6 +84,13 @@ export interface Store {
 
   // ── run state
   readonly status: Accessor<RunStatus>;
+  /**
+   * `status() === "paused"` lifted to its own accessor so sections,
+   * hotkeys, and store actions share one predicate. If pause semantics
+   * ever broaden (e.g. treating `stepping` as "safe to act"), this is
+   * the only place that changes.
+   */
+  readonly isPaused: Accessor<boolean>;
   readonly hc: Accessor<number>;
   readonly insnCount: Accessor<number>;
   /**
@@ -121,6 +128,15 @@ export interface Store {
   stepInstructions(n: number): void;
   stepHC(n: number): void;
   zeroHC(): void;
+  /**
+   * Cold-boot the explorer (REQ §11 / §7.3): full page reload — fresh CPU,
+   * mem, IO; persisted files / breakpoints / layout survive; autoload
+   * re-fires. Paused-only; silently no-ops while running so a held hotkey
+   * doesn't yank an active CPU mid-frame. Single owner of the policy so
+   * the App-shell button, Shift+R hotkey, and post-Save reload share one
+   * gate (eventually a save-or-skip modal — REQ §7.4 / M8c).
+   */
+  coldBoot(): void;
 
   // ── HW trace (DESIGN §3.2, M8a — outputs only). The buffer itself is
   // exposed for the section's `rangeView` queries; `hwTraceVersion`
@@ -253,6 +269,18 @@ export interface Store {
    */
   readonly splitIo: Accessor<boolean>;
   setSplitIo(on: boolean): void;
+  /**
+   * App-shell pending value for Split RD/WR (REQ §11). The App-shell
+   * checkbox stages here instead of writing through to `setSplitIo`
+   * directly. `splitIoDirty()` is `true` whenever this differs from
+   * `splitIo()` — the App-shell section uses it to drive its
+   * Save/Discard buttons and to lock the body fold while unsaved.
+   * Initialized from `splitIo()` on boot; Save calls `setSplitIo`,
+   * Discard resets back to `splitIo()`.
+   */
+  readonly pendingSplitIo: Accessor<boolean>;
+  setPendingSplitIo(on: boolean): void;
+  readonly splitIoDirty: Accessor<boolean>;
 
   // ── input pins
   readonly inputPins: SolidStore<InputPinsState>;

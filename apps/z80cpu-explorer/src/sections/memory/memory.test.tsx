@@ -19,6 +19,7 @@ import { MemoryBackend } from "../../storage/memory.ts";
 // config so retuning DEFAULT_MEMORY_ROWS_* doesn't break these tests.
 const DEFAULT_MEMORY_ROWS_TOTAL =
   DEFAULT_MEMORY_ROWS_BEFORE + 1 + DEFAULT_MEMORY_ROWS_AFTER;
+
 import {
   createAppStore,
   type Store,

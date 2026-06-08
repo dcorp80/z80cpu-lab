@@ -5,6 +5,11 @@ import { filterHexInput, formatHex, parseAddr16 } from "../../util/hex.ts";
 import { HexAddrInput } from "../hexAddrInput.tsx";
 import type { SectionModule } from "../types.ts";
 
+// Step / Step N live in Instruction trace header (REQ §6.3); Step HC /
+// Step N HC / Zero HC live in HW trace header (REQ §6.4); Cold boot
+// lives in the App-shell header (REQ §11). Only Run / Pause remain
+// here.
+
 // Compact decimal formatter for HC + instruction counts. Thousands
 // separators help legibility once the numbers get big.
 const fmt = (n: number): string => n.toLocaleString("en-US");
@@ -41,23 +46,6 @@ function reasonToText(
 
 const Header = () => {
   const store = useStore();
-  // Two separate N inputs — instruction vs HC. Same input shared
-  // between Step N and Step N HC would be confusing because the
-  // typical magnitudes differ wildly (5 insns vs 5000 HC).
-  const [stepN, setStepN] = createSignal("1");
-  const [stepHcN, setStepHcN] = createSignal("1");
-  // Step / Step N / Step HC / Step N HC / Zero HC / Reinit are
-  // paused-only. Reinit reloads the page; doing that mid-run would be
-  // surprising. Only Run/Pause stays active across run states.
-  const isPaused = () => store.status() === "paused";
-  const onStepN = () => {
-    const n = Number.parseInt(stepN(), 10);
-    if (Number.isFinite(n) && n > 0) store.stepInstructions(n);
-  };
-  const onStepHcN = () => {
-    const n = Number.parseInt(stepHcN(), 10);
-    if (Number.isFinite(n) && n > 0) store.stepHC(n);
-  };
   // Effective clock-speed read-out (REQ §11): fixed MHz / 1 decimal, or "—"
   // when there's no valid measurement (before the first run, after zeroHC).
   const clockText = () => {
@@ -71,76 +59,9 @@ const Header = () => {
       <div class="bp-controls">
         <button
           type="button"
-          onClick={() => (isPaused() ? store.run() : store.pause())}
+          onClick={() => (store.isPaused() ? store.run() : store.pause())}
         >
-          {isPaused() ? STR.breakpoints.run : STR.breakpoints.pause}
-        </button>
-        <button
-          type="button"
-          onClick={() => store.stepInstructions(1)}
-          disabled={!isPaused()}
-          title={STR.breakpoints.stepTooltip}
-        >
-          {STR.breakpoints.step}
-        </button>
-        <input
-          class="step-n-input"
-          type="text"
-          inputmode="numeric"
-          value={stepN()}
-          onInput={(e) => setStepN(e.currentTarget.value)}
-          aria-label={STR.breakpoints.stepCountLabel}
-          size={4}
-        />
-        <button type="button" onClick={onStepN} disabled={!isPaused()}>
-          {STR.breakpoints.stepN}
-        </button>
-        <button
-          type="button"
-          onClick={() => store.stepHC(1)}
-          disabled={!isPaused()}
-          title={STR.breakpoints.stepHcTooltip}
-        >
-          {STR.breakpoints.stepHc}
-        </button>
-        <input
-          class="step-n-input"
-          type="text"
-          inputmode="numeric"
-          value={stepHcN()}
-          onInput={(e) => setStepHcN(e.currentTarget.value)}
-          aria-label={STR.breakpoints.stepHcCountLabel}
-          size={6}
-        />
-        <button
-          type="button"
-          onClick={onStepHcN}
-          disabled={!isPaused()}
-          title={STR.breakpoints.stepNHcTooltip}
-        >
-          {STR.breakpoints.stepNHc}
-        </button>
-        <button
-          type="button"
-          onClick={() => store.zeroHC()}
-          disabled={!isPaused()}
-          title={STR.breakpoints.zeroHcTooltip}
-        >
-          {STR.breakpoints.zeroHc}
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            // TODO(REQ §7.4): surface save-or-skip modal once snapshot /
-            // HW-trace buffers exist (M8c / M9). For now Reinit goes
-            // straight through — there's nothing in-memory worth saving
-            // at this milestone.
-            window.location.reload();
-          }}
-          disabled={!isPaused()}
-          title={STR.breakpoints.reinitTooltip}
-        >
-          {STR.breakpoints.reinit}
+          {store.isPaused() ? STR.breakpoints.run : STR.breakpoints.pause}
         </button>
       </div>
       <div class="bp-status">

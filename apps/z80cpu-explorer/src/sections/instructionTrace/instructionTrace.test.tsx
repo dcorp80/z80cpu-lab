@@ -6,6 +6,7 @@
 // happy-dom can't honor scrollTop/element heights fairly.
 
 import { InstructionTrace } from "@dcorp80/z80cpu-debug";
+import { fireEvent } from "@solidjs/testing-library";
 import { render } from "solid-js/web";
 import { afterEach, describe, expect, it } from "vitest";
 import { registerDefaultHotkeys } from "../../hotkeys/defaults.ts";
@@ -19,7 +20,41 @@ import {
 import { makeStubBus } from "../../store/testStubBus.ts";
 import { makeStubDbg } from "../../store/testStubDbg.ts";
 import { makeStubLoop, type StubLoop } from "../../store/testStubLoop.ts";
+import { STR } from "../../style/strings.ts";
+import { buttonByText, flush, req } from "../../test/dom.ts";
 import { instructionTrace } from "./index.tsx";
+
+async function mountHeader(): Promise<{
+  container: HTMLElement;
+  store: Store;
+  loop: StubLoop;
+  dispose: () => void;
+}> {
+  const backend = new MemoryBackend();
+  const loop = makeStubLoop();
+  const bus = makeStubBus();
+  const dbg = makeStubDbg();
+  const store = await createAppStore({ backend, loop, bus, dbg });
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const dispose = render(
+    () => (
+      <StoreProvider value={store}>
+        <instructionTrace.Header />
+      </StoreProvider>
+    ),
+    container,
+  );
+  return {
+    container,
+    store,
+    loop,
+    dispose: () => {
+      dispose();
+      container.remove();
+    },
+  };
+}
 
 interface Harness {
   container: HTMLElement;
@@ -244,6 +279,48 @@ describe("instructionTrace section — PC preview", () => {
     });
     harness.store.writeFileToMemory(harness.store.files[0].id);
     expect(harness.container.textContent).toContain("LD A,B");
+  });
+});
+
+describe("instructionTrace section — header step controls (REQ §6.3)", () => {
+  let h: Awaited<ReturnType<typeof mountHeader>> | undefined;
+  afterEach(() => h?.dispose());
+
+  it("Step forwards stepInstructions(1) to the loop", async () => {
+    h = await mountHeader();
+    buttonByText(h.container, STR.instructionTrace.step).click();
+    expect(h.loop.lastCmd).toBe("stepInstructions");
+    expect(h.loop.lastStepN).toBe(1);
+  });
+
+  it("Step N reads the count input and forwards", async () => {
+    h = await mountHeader();
+    const input = req(
+      h.container.querySelector<HTMLInputElement>(
+        `input[aria-label="${STR.instructionTrace.stepCountLabel}"]`,
+      ),
+      "step-N input",
+    );
+    fireEvent.input(input, { target: { value: "7" } });
+    buttonByText(h.container, STR.instructionTrace.stepN).click();
+    expect(h.loop.lastCmd).toBe("stepInstructions");
+    expect(h.loop.lastStepN).toBe(7);
+  });
+
+  it("Step buttons disable while running, snap-to-live appears only when detached", async () => {
+    h = await mountHeader();
+    // Snap button hidden while live; step buttons enabled while paused.
+    expect(h.container.querySelector(".itrace-snap")).toBeNull();
+    const stepBtn = buttonByText(h.container, STR.instructionTrace.step);
+    const stepNBtn = buttonByText(h.container, STR.instructionTrace.stepN);
+    expect(stepBtn.disabled).toBe(false);
+    expect(stepNBtn.disabled).toBe(false);
+    // Enter running — step buttons must disable, snap stays hidden.
+    h.store.run();
+    await flush();
+    expect(stepBtn.disabled).toBe(true);
+    expect(stepNBtn.disabled).toBe(true);
+    expect(h.container.querySelector(".itrace-snap")).toBeNull();
   });
 });
 

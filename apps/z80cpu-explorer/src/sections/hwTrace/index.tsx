@@ -11,7 +11,14 @@
 // (deasserted high) because no UI control drives them yet (8b lands
 // checkboxes + NMI button + INT vector input). VCD export lands in 8c.
 
-import { type Component, createEffect, createMemo, For, Show } from "solid-js";
+import {
+  type Component,
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  Show,
+} from "solid-js";
 import { DEFAULT_HW_TRACE_RENDER_MAX_HCS } from "../../config/defaults.ts";
 import {
   ALL_SIGNALS,
@@ -26,6 +33,7 @@ import {
 import { useStore } from "../../store/index.ts";
 import { STR } from "../../style/strings.ts";
 import { formatHex } from "../../util/hex.ts";
+import { parsePositiveInt } from "../../util/num.ts";
 import type { SectionModule } from "../types.ts";
 import {
   type BitTransition,
@@ -48,6 +56,13 @@ const isBusValue = (name: SignalName): name is BusValueSignal =>
 
 const Header: Component = () => {
   const store = useStore();
+  // Step HC / Step N HC / Zero HC are paused-only (mirrors the
+  // equivalent guards in hotkeys/defaults.ts).
+  const [stepHcN, setStepHcN] = createSignal("1");
+  const onStepHcN = () => {
+    const n = parsePositiveInt(stepHcN());
+    if (n !== null) store.stepHC(n);
+  };
   // Returning the cursor itself when detached lets <Show> hand the
   // narrowed slice to its child — same pattern as the instruction
   // trace section's header. The snap button is detached-only; the
@@ -58,6 +73,39 @@ const Header: Component = () => {
   };
   return (
     <div class="hwt-header-controls">
+      <button
+        type="button"
+        onClick={() => store.stepHC(1)}
+        disabled={!store.isPaused()}
+        title={STR.hwTrace.stepHcTooltip}
+      >
+        {STR.hwTrace.stepHc}
+      </button>
+      <input
+        class="step-n-input"
+        type="text"
+        inputmode="numeric"
+        value={stepHcN()}
+        onInput={(e) => setStepHcN(e.currentTarget.value)}
+        aria-label={STR.hwTrace.stepHcCountLabel}
+        size={6}
+      />
+      <button
+        type="button"
+        onClick={onStepHcN}
+        disabled={!store.isPaused()}
+        title={STR.hwTrace.stepNHcTooltip}
+      >
+        {STR.hwTrace.stepNHc}
+      </button>
+      <button
+        type="button"
+        onClick={() => store.zeroHC()}
+        disabled={!store.isPaused()}
+        title={STR.hwTrace.zeroHcTooltip}
+      >
+        {STR.hwTrace.zeroHc}
+      </button>
       <label class="hwt-capture-mode" title={STR.hwTrace.captureToggleTooltip}>
         <input
           type="checkbox"

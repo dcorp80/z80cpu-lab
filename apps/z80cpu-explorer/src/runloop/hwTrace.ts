@@ -238,7 +238,6 @@ function snapshotEquals(
   // compare the numeric value when the bus is currently driven.
   if (bus.addr !== undefined && chunk.addr[pos] !== bus.addr) return false;
   return !(bus.data !== undefined && chunk.data[pos] !== bus.data);
-
 }
 
 function readSnapshot(chunk: FrameChunk, pos: number): BusSnapshotRecord {

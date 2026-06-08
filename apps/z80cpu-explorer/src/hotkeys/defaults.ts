@@ -9,18 +9,18 @@ export function registerDefaultHotkeys(
   registry: HotkeyRegistry,
   store: Store,
 ): void {
-  // Step / Zero HC / Reinit are paused-only, matching the equivalent
-  // buttons in the Breakpoints header. The buttons set `disabled` on
-  // !paused; the hotkeys silently no-op so a held key during a run
-  // doesn't queue up actions that would surprise the user mid-frame.
+  // Step / Zero HC / Cold boot are paused-only, matching the equivalent
+  // buttons in their sections. The buttons set `disabled` on !paused;
+  // the hotkeys silently no-op so a held key during a run doesn't queue
+  // up actions that would surprise the user mid-frame.
   const ifPaused = (fn: () => void) => () => {
-    if (store.status() === "paused") fn();
+    if (store.isPaused()) fn();
   };
 
   registry.register({
     key: " ",
     scope: "global",
-    action: () => (store.status() === "paused" ? store.run() : store.pause()),
+    action: () => (store.isPaused() ? store.run() : store.pause()),
     description: "Run / pause",
     category: "execution",
   });
@@ -65,13 +65,12 @@ export function registerDefaultHotkeys(
     key: "r",
     shift: true,
     scope: "global",
-    // TODO(REQ §7.4): gate behind save-or-skip modal once buffers exist
-    // (M8c / M9). For now Reinit goes straight through.
-    action: ifPaused(() => {
-      window.location.reload();
-    }),
+    // `store.coldBoot()` is the single owner of the paused-gate and the
+    // (future) save-or-skip modal — see store/index.ts. The App-shell
+    // section's Cold boot button calls the same action.
+    action: () => store.coldBoot(),
     description:
-      "Reinit (page reload — files / breakpoints / layout survive; autoload re-fires)",
+      "Cold boot (page reload — files / breakpoints / layout survive; autoload re-fires)",
     category: "destructive",
   });
   registry.register({

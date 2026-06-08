@@ -16,6 +16,7 @@ import { makeStubBus } from "../../store/testStubBus.ts";
 import { makeStubDbg } from "../../store/testStubDbg.ts";
 import { makeStubLoop, type StubLoop } from "../../store/testStubLoop.ts";
 import { STR } from "../../style/strings.ts";
+import { buttonByText, flush, req } from "../../test/dom.ts";
 import { breakpoints } from "./index.tsx";
 
 interface Harness {
@@ -60,22 +61,6 @@ async function mount(opts: { folded?: boolean } = {}): Promise<Harness> {
   };
 }
 
-function req<T>(x: T | null | undefined, name: string): T {
-  if (x == null) throw new Error(`expected element: ${name}`);
-  return x;
-}
-
-// Flush pending microtasks so persistence + signal propagation settle.
-const flush = () => new Promise<void>((r) => queueMicrotask(r));
-
-const buttonByText = (root: HTMLElement, text: string): HTMLButtonElement =>
-  req(
-    Array.from(root.querySelectorAll<HTMLButtonElement>("button")).find(
-      (b) => b.textContent === text,
-    ),
-    `button "${text}"`,
-  );
-
 let harness: Harness | undefined;
 
 afterEach(() => {
@@ -84,26 +69,15 @@ afterEach(() => {
 });
 
 describe("Breakpoints section — header", () => {
-  it("renders all five step/control buttons + Reinit", async () => {
+  it("renders Run/Pause only (Cold boot now lives in the App-shell section)", async () => {
     harness = await mount();
     const btns = Array.from(
       harness.container.querySelectorAll<HTMLButtonElement>(
         ".bp-controls button",
       ),
     ).map((b) => b.textContent);
-    // Run/Pause label flips with status; while paused (default) it reads
-    // "Run". The full set of operations is present in one row.
-    expect(btns).toEqual(
-      expect.arrayContaining([
-        STR.breakpoints.run,
-        STR.breakpoints.step,
-        STR.breakpoints.stepN,
-        STR.breakpoints.stepHc,
-        STR.breakpoints.stepNHc,
-        STR.breakpoints.zeroHc,
-        STR.breakpoints.reinit,
-      ]),
-    );
+    // Run/Pause label flips with status; while paused (default) it reads "Run".
+    expect(btns).toEqual([STR.breakpoints.run]);
   });
 
   it("effective-clock indicator reads '—' and greys before any run", async () => {
@@ -121,50 +95,14 @@ describe("Breakpoints section — header", () => {
     expect(clock.classList.contains("bp-clock-idle")).toBe(false);
   });
 
-  it("step buttons disabled while running, Run/Pause stays clickable", async () => {
+  it("Run/Pause toggle stays enabled regardless of state", async () => {
     harness = await mount();
-    // Force the stub into running state, then re-read button state.
     harness.loop.setStatus("running");
-    // Click anything reactive so the store's status accessor sees the
-    // change — the stub doesn't fire its own status events, but the
-    // store reads loop.status() inside accessors that re-evaluate on
-    // signal updates. Simpler: trigger a run() through the store so the
-    // store's own internal setStatus fires.
-    harness.store.pause(); // resets to paused so accessors re-sample
+    harness.store.pause();
     harness.store.run();
     await flush();
-    const stepBtn = buttonByText(harness.container, STR.breakpoints.step);
-    const stepHcBtn = buttonByText(harness.container, STR.breakpoints.stepHc);
-    const zeroBtn = buttonByText(harness.container, STR.breakpoints.zeroHc);
-    const reinitBtn = buttonByText(harness.container, STR.breakpoints.reinit);
-    expect(stepBtn.disabled).toBe(true);
-    expect(stepHcBtn.disabled).toBe(true);
-    expect(zeroBtn.disabled).toBe(true);
-    expect(reinitBtn.disabled).toBe(true);
-    // Pause/Run toggle stays enabled regardless of state.
     const pauseBtn = buttonByText(harness.container, STR.breakpoints.pause);
     expect(pauseBtn.disabled).toBe(false);
-  });
-
-  it("Step HC forwards stepHC(1) to the loop", async () => {
-    harness = await mount();
-    buttonByText(harness.container, STR.breakpoints.stepHc).click();
-    expect(harness.loop.lastCmd).toBe("stepHC");
-    expect(harness.loop.lastStepN).toBe(1);
-  });
-
-  it("Step N HC reads the HC-count input and forwards", async () => {
-    harness = await mount();
-    const input = req(
-      harness.container.querySelector<HTMLInputElement>(
-        `input[aria-label="${STR.breakpoints.stepHcCountLabel}"]`,
-      ),
-      "step-hc-N input",
-    );
-    fireEvent.input(input, { target: { value: "42" } });
-    buttonByText(harness.container, STR.breakpoints.stepNHc).click();
-    expect(harness.loop.lastCmd).toBe("stepHC");
-    expect(harness.loop.lastStepN).toBe(42);
   });
 
   it("status line reflects pc-breakpoint reason", async () => {

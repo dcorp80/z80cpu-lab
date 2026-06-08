@@ -51,7 +51,13 @@ describe("createAppStore", () => {
   it("seeds the shipped default section order when storage is empty", async () => {
     const { store } = await freshStore();
     expect(store.sections.map((s) => s.id)).toEqual(defaultSectionIds());
-    expect(store.sections.every((s) => !s.folded)).toBe(true);
+    // App-shell (REQ §11) opts in to defaultFolded; every other section
+    // is unfolded out of the box.
+    expect(
+      store.sections.every((s) =>
+        s.id === "appShell" ? s.folded === true : s.folded === false,
+      ),
+    ).toBe(true);
   });
 
   it("restores stored section order and fold state", async () => {
@@ -68,17 +74,25 @@ describe("createAppStore", () => {
       bus: makeStubBus(),
       dbg: makeStubDbg(),
     });
-    // Stored ids come first in their stored order; remaining registry ids
-    // fill in afterward with defaults.
-    expect(store.sections[0]).toEqual({
+    // Stored ids keep their relative order; remaining registry ids are
+    // injected at their DEFAULT_SECTION_ORDER position rather than
+    // appended at the end. That way new sections like the App-shell
+    // (REQ §11) land at the top for upgrading users, not the bottom.
+    const ids = store.sections.map((s) => s.id);
+    expect(store.sections.length).toBe(defaultSectionIds().length);
+    // memory's persisted fold + config survive intact.
+    expect(store.sections.find((s) => s.id === "memory")).toEqual({
       id: "memory",
       folded: true,
       config: { jumpAddr: 0x8000 },
     });
-    expect(store.sections[1].id).toBe("program");
-    expect(store.sections.length).toBe(defaultSectionIds().length);
+    // Stored relative order is preserved (memory came before program).
+    expect(ids.indexOf("memory")).toBeLessThan(ids.indexOf("program"));
+    // New registry ids slot in by registry position — appShell at the
+    // top, hwTrace at the bottom — interleaved with the kept stored ids.
+    expect(ids[0]).toBe("appShell");
+    expect(ids[ids.length - 1]).toBe("hwTrace");
     // Unknown ids in storage are dropped silently.
-    const ids = store.sections.map((s) => s.id);
     for (const id of ids) expect(defaultSectionIds()).toContain(id);
   });
 

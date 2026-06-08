@@ -42,7 +42,11 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 describe("z80cpu-explorer (browser smoke)", () => {
   it("boots without console errors and shows the initial status line", async () => {
-    await expect.element(page.getByText("z80cpu-explorer")).toBeInTheDocument();
+    // App name lives on the App-shell section's <h2>; there is no page
+    // <h1> (avoiding a duplicate landmark).
+    await expect
+      .element(page.getByRole("heading", { level: 2, name: "z80cpu-explorer" }))
+      .toBeInTheDocument();
     await expect.element(page.getByText(/paused/)).toBeInTheDocument();
     await expect.element(page.getByText(/HC=0/)).toBeInTheDocument();
     await expect.element(page.getByText(/0 insns/)).toBeInTheDocument();

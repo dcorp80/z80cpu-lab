@@ -329,40 +329,10 @@ describe("IO section — 8-bit view (REQ §6.7)", () => {
 });
 
 describe("IO section — split RD/WR (REQ §11)", () => {
-  it("checkbox renders in the header and reflects store state", async () => {
-    harness = await mount("Header");
-    const cb = harness.container.querySelector(
-      ".io-split-checkbox",
-    ) as HTMLInputElement;
-    expect(cb).not.toBeNull();
-    expect(cb.checked).toBe(false);
-    // splitIo() reads from persisted section config; updating the config
-    // directly simulates the post-reload state without actually reloading.
-    harness.store.updateSectionConfig("io", { splitIo: true });
-    expect(cb.checked).toBe(true);
-  });
-
-  it("checkbox is disabled while the CPU is not paused", async () => {
-    harness = await mount("Header");
-    const cb = harness.container.querySelector(
-      ".io-split-checkbox",
-    ) as HTMLInputElement;
-    expect(cb.disabled).toBe(false);
-    expect(
-      harness.container
-        .querySelector(".io-split")
-        ?.classList.contains("is-disabled"),
-    ).toBe(false);
-    harness.store.run();
-    expect(cb.disabled).toBe(true);
-    expect(
-      harness.container
-        .querySelector(".io-split")
-        ?.classList.contains("is-disabled"),
-    ).toBe(true);
-    harness.loop.emitPause({ kind: "user" });
-    expect(cb.disabled).toBe(false);
-  });
+  // The checkbox itself moved to the App-shell section header (REQ §11);
+  // coverage for its in-header behavior lives in appShell.test.tsx.
+  // What's left here is the IO section's reaction to the persisted flag:
+  // body layout and folded-summary text.
 
   it("body renders side-by-side RD/WR panes when split", async () => {
     harness = await mount("Body");

@@ -34,44 +34,20 @@ const ViewModeToggle: Component = () => {
   );
 };
 
-const SplitIoToggle: Component = () => {
-  const store = useStore();
-  // Paused-only — toggling reloads the page (REQ §11), so doing it
-  // mid-run would kill the run anyway; gating on `paused` matches
-  // the Reinit button's policy and avoids accidental clicks during
-  // a long run.
-  const paused = () => store.status() === "paused";
-  return (
-    <label
-      class="io-split"
-      classList={{ "is-disabled": !paused() }}
-      title={STR.io.splitTooltip}
-    >
-      <input
-        type="checkbox"
-        class="io-split-checkbox"
-        aria-label={STR.io.splitAriaLabel}
-        checked={store.splitIo()}
-        disabled={!paused()}
-        onChange={(e) => store.setSplitIo(e.currentTarget.checked)}
-      />
-      <span class="io-split-label">{STR.io.splitLabel}</span>
-    </label>
-  );
-};
-
 const Header: Component = () => {
   const store = useStore();
   // The watch input is present in both modes; in 8-bit it shrinks to
   // 2 hex digits and rejects values > 0xFF. BPR also works in both
   // (16/32/64 → 16/8/4 rows for the 256-port window).
+  // Split RD/WR was moved to the App-shell section (REQ §11) since
+  // toggling it requires a Cold boot; this header only exposes
+  // per-port display controls.
   const padTo = () => (store.ioViewMode() === "8bit" ? 2 : 4);
   const maxValue = () => (store.ioViewMode() === "8bit" ? 0xff : 0xffff);
   const split = () => store.splitIo();
   return (
     <>
       <ViewModeToggle />
-      <SplitIoToggle />
       <WatchAddrInput
         watchAddr={store.ioWatchAddr}
         setWatchAddr={(a) => store.setIoWatchAddr(a)}

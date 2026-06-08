@@ -7,6 +7,7 @@
 // a future Settings UI binds against `DEFAULT_SECTION_ORDER` from this
 // module.
 
+import { appShell } from "./appShell/index.tsx";
 import { breakpoints } from "./breakpoints/index.tsx";
 import { cpuState } from "./cpuState/index.tsx";
 import { hwTrace } from "./hwTrace/index.tsx";
@@ -21,6 +22,7 @@ import type { SectionModule } from "./types.ts";
  *  `reconcileSections` keeps stored order for known ids and appends
  *  any new ids at the end. */
 export const DEFAULT_SECTION_ORDER: SectionModule[] = [
+  appShell,
   cpuState,
   instructionTrace,
   breakpoints,
@@ -40,4 +42,11 @@ export function getSectionModule(id: string): SectionModule | undefined {
 
 export function defaultSectionIds(): string[] {
   return DEFAULT_SECTION_ORDER.map((s) => s.id);
+}
+
+/** Initial `folded` value for a section id on a fresh boot (or when an
+ *  id appears for the first time after a reconcile). Modules opt in to
+ *  starting collapsed via `defaultFolded: true`; everything else opens. */
+export function defaultSectionFolded(id: string): boolean {
+  return REGISTRY.get(id)?.defaultFolded === true;
 }

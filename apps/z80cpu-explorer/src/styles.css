@@ -75,12 +75,6 @@ body {
   }
 }
 
-.app-header h1 {
-  font-size: 16px;
-  font-weight: 600;
-  margin: 4px 0 12px;
-}
-
 .section-column {
   display: flex;
   flex-direction: column;
@@ -136,8 +130,12 @@ body {
   padding: 0 4px;
   line-height: 1;
 }
-.fold-chevron:hover {
+.fold-chevron:hover:not(:disabled) {
   color: var(--accent);
+}
+.fold-chevron:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .drag-handle {
@@ -1181,4 +1179,79 @@ body {
    width change, so the 1ch grid + M1 lines stay aligned). */
 .hwt-bus-refresh {
   opacity: 0.4;
+}
+
+/* App-shell section (REQ §11). Header carries an always-visible Cold
+   boot button; body is collapsed by default and lives behind the
+   section frame's fold-lock when staged settings are dirty. */
+.appshell-header-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.appshell-coldboot {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.appshell-coldboot:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.appshell-coldboot:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.appshell-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 8px 12px;
+}
+.appshell-split {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+}
+.appshell-split.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.appshell-split-label {
+  color: var(--muted);
+  font-size: 0.9em;
+}
+.appshell-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-end;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+.appshell-save,
+.appshell-discard {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 2px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.appshell-save {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.appshell-save:hover:not(:disabled) {
+  background: var(--highlight-bg);
+}
+.appshell-discard:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
 }

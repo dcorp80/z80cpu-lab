@@ -4,6 +4,7 @@
 // SignalRow glyph output. Scroll-detach behavior lives in the browser
 // tier (M8a sub-task 5) — happy-dom can't honor scroll geometry fairly.
 
+import { fireEvent } from "@solidjs/testing-library";
 import { render } from "solid-js/web";
 import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_HW_TRACE_CONFIG } from "../../config/defaults.ts";
@@ -22,6 +23,7 @@ import { makeStubBus } from "../../store/testStubBus.ts";
 import { makeStubDbg } from "../../store/testStubDbg.ts";
 import { makeStubLoop, type StubLoop } from "../../store/testStubLoop.ts";
 import { STR } from "../../style/strings.ts";
+import { buttonByText, flush } from "../../test/dom.ts";
 import { hwTrace } from "./index.tsx";
 
 interface Harness {
@@ -173,6 +175,54 @@ describe("hwTrace section — header", () => {
     const btn = container.querySelector(".hwt-snap") as HTMLButtonElement;
     btn.click();
     expect(store.cursors.hwTrace).toEqual({ mode: "live" });
+  });
+});
+
+describe("hwTrace section — header step / zero controls (REQ §6.4)", () => {
+  it("Step HC forwards stepHC(1)", async () => {
+    const { container, loop } = await open("header");
+    buttonByText(container, STR.hwTrace.stepHc).click();
+    expect(loop.lastCmd).toBe("stepHC");
+    expect(loop.lastStepN).toBe(1);
+  });
+
+  it("Step N HC reads the count input and forwards", async () => {
+    const { container, loop } = await open("header");
+    const input = container.querySelector<HTMLInputElement>(
+      `input[aria-label="${STR.hwTrace.stepHcCountLabel}"]`,
+    );
+    if (!input) throw new Error("step-HC-N input");
+    fireEvent.input(input, { target: { value: "42" } });
+    buttonByText(container, STR.hwTrace.stepNHc).click();
+    expect(loop.lastCmd).toBe("stepHC");
+    expect(loop.lastStepN).toBe(42);
+  });
+
+  it("Zero HC forwards zeroHC", async () => {
+    const { container, loop } = await open("header");
+    buttonByText(container, STR.hwTrace.zeroHc).click();
+    expect(loop.lastCmd).toBe("zeroHC");
+  });
+
+  it("Step / Zero buttons disable while running, capture toggle stays usable", async () => {
+    const { container, store } = await open("header");
+    const stepHcBtn = buttonByText(container, STR.hwTrace.stepHc);
+    const stepNHcBtn = buttonByText(container, STR.hwTrace.stepNHc);
+    const zeroBtn = buttonByText(container, STR.hwTrace.zeroHc);
+    // Paused at boot — all enabled.
+    expect(stepHcBtn.disabled).toBe(false);
+    expect(stepNHcBtn.disabled).toBe(false);
+    expect(zeroBtn.disabled).toBe(false);
+    store.run();
+    await flush();
+    expect(stepHcBtn.disabled).toBe(true);
+    expect(stepNHcBtn.disabled).toBe(true);
+    expect(zeroBtn.disabled).toBe(true);
+    // Capture checkbox is never status-gated.
+    const cb = container.querySelector<HTMLInputElement>(
+      ".hwt-capture-mode input[type=checkbox]",
+    );
+    expect(cb?.disabled).toBeFalsy();
   });
 });
 

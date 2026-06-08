@@ -14,27 +14,31 @@ export const STR = {
   frame: {
     foldLabel: (folded: boolean) =>
       folded ? "Unfold section" : "Fold section",
+    foldLockedTooltip:
+      "Unsaved changes — Save or Discard them before collapsing",
     dragLabel: "Drag to reorder section",
     dragTooltip: "Drag to reorder",
+  },
+  appShell: {
+    // Header is the app name itself (REQ §11) — pulled from STR.app.title
+    // so the name lives in exactly one place.
+    coldBoot: "Cold boot",
+    coldBootTooltip:
+      "Reload the page — fresh CPU, mem, IO; files / breakpoints / layout survive; autoload re-fires (Shift+R)",
+    splitLabel: "Split RD/WR",
+    splitAriaLabel: "Split IO read/write spaces",
+    splitTooltip:
+      "Split IO into two 64K planes: CPU IN reads RD (user-editable), CPU OUT lands in WR (read-only). Saving reloads the page.",
+    save: "Save",
+    saveTooltip:
+      "Persist changes and Cold boot — required for the bus to re-allocate planes",
+    discard: "Discard",
+    discardTooltip: "Revert to the values currently in effect",
   },
   breakpoints: {
     title: "Breakpoints",
     run: "Run",
     pause: "Pause",
-    step: "Step",
-    stepN: "Step N",
-    stepHc: "Step HC",
-    stepNHc: "Step N HC",
-    zeroHc: "Zero HC",
-    reinit: "Reinit",
-    stepTooltip: "Step one instruction (s)",
-    stepHcTooltip: "Step one half-cycle (Shift+S)",
-    stepNHcTooltip: "Step N half-cycles",
-    zeroHcTooltip: "Zero the HC counter (Shift+Z)",
-    reinitTooltip:
-      "Reload the page — fresh CPU, mem, IO; files / breakpoints / layout survive; autoload re-fires (Shift+R)",
-    stepCountLabel: "Step count",
-    stepHcCountLabel: "Half-cycle step count",
     runningStatus: (hc: string, insns: string) =>
       `running · HC=${hc} · ${insns} insns`,
     steppingStatus: (hc: string, insns: string) =>
@@ -142,6 +146,11 @@ export const STR = {
     detachedBadge: "detached",
     detachedBadgeTooltip: (anchor: string) =>
       `Pinned at HC=${anchor} — scroll back to history`,
+    // Step controls — moved from the Breakpoints header (REQ §6.3).
+    step: "Step",
+    stepN: "Step N",
+    stepTooltip: "Step one instruction (s)",
+    stepCountLabel: "Step count",
     executedHeading: "Executed",
     previewHeading: "Preview (next at PC)",
     previewEmpty: "(no bytes at PC)",
@@ -194,10 +203,6 @@ export const STR = {
       `Port ${port}: high-byte aliases hold different values; cell shows io[00${port}]. Editing rewrites all 256 aliases.`,
     aliasMismatchTooltipReadOnly: (port: string) =>
       `Port ${port}: high-byte aliases hold different values; cell shows io[00${port}].`,
-    splitLabel: "Split RD/WR",
-    splitAriaLabel: "Split IO read/write spaces",
-    splitTooltip:
-      "Split IO into two 64K planes: CPU IN reads RD (user-editable), CPU OUT lands in WR (read-only). Toggling reloads the page.",
   },
   hexGrid: {
     cellEditAriaLabel: (addr: string) => `Edit byte at ${addr}`,
@@ -257,6 +262,15 @@ export const STR = {
     detachedBadge: "detached",
     detachedBadgeTooltip: (anchor: string) =>
       `Pinned at HC=${anchor} — scroll back to history`,
+    // Step / Zero HC controls — moved from the Breakpoints header
+    // (REQ §6.4). Zero HC's save-or-skip modal still pending (REQ §7.4).
+    stepHc: "Step HC",
+    stepNHc: "Step N HC",
+    zeroHc: "Zero HC",
+    stepHcTooltip: "Step one half-cycle (Shift+S)",
+    stepNHcTooltip: "Step N half-cycles",
+    zeroHcTooltip: "Zero the HC counter (Shift+Z)",
+    stepHcCountLabel: "Half-cycle step count",
     bodyEmpty: "(no transitions captured yet)",
     // Shown instead of bodyEmpty when capture is OFF and nothing is in the
     // buffer — distinguishes "intentionally not recording" from "running
