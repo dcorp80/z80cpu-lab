@@ -31,6 +31,7 @@
 // from the loop AFTER its first clockEdge with hc ≥ 1.
 
 import type { HwTraceConfig } from "../config/defaults.ts";
+import { INPUT_PIN_NAMES, type InputPinName } from "./bus.ts";
 
 // ── Signal taxonomy ──────────────────────────────────────────────
 
@@ -43,22 +44,19 @@ export const OUTPUT_BIT_SIGNALS = ["nM1", "nRFSH", "nHALT", "nBUSACK"] as const;
 export const OUTPUT_TRI_SIGNALS = ["nMREQ", "nIORQ", "nRD", "nWR"] as const;
 
 /** CPU input pins (always 0|1 on the sample side; the bus surface only
- *  exposes nINT/nRESET/nBUSRQ/nWAIT — nNMI is sampled from
- *  `store.inputPins.nNMI` per DESIGN §2.1). */
-export const INPUT_BIT_SIGNALS = [
-  "nINT",
-  "nNMI",
-  "nRESET",
-  "nBUSRQ",
-  "nWAIT",
-] as const;
+ *  exposes nINT/nRESET/nBUSRQ/nWAIT — nNMI is sampled from the bus's
+ *  authoritative pin state per DESIGN §2.1). Aliased to `INPUT_PIN_NAMES`
+ *  so the trace's signal list and the bus's user-controllable pin set
+ *  stay one definition; if a new input pin lands on the bus it auto-
+ *  appears in the trace's canonical order without touching this file. */
+export const INPUT_BIT_SIGNALS = INPUT_PIN_NAMES;
 
 /** Multi-bit bus values; undefined ⇒ tristate during a bus grant. */
 export const BUS_VALUE_SIGNALS = ["addr", "data"] as const;
 
 export type OutputBitSignal = (typeof OUTPUT_BIT_SIGNALS)[number];
 export type OutputTriSignal = (typeof OUTPUT_TRI_SIGNALS)[number];
-export type InputBitSignal = (typeof INPUT_BIT_SIGNALS)[number];
+export type InputBitSignal = InputPinName;
 export type BusValueSignal = (typeof BUS_VALUE_SIGNALS)[number];
 
 export type BitSignal = OutputBitSignal | InputBitSignal;

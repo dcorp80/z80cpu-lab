@@ -1083,7 +1083,11 @@ body {
      depends on: the waveform's first cell starts at label-w + row-gap
      from the row's left (box-sizing:border-box, so the 80px basis is the
      label's full outer width). Keep these in sync via the vars below. */
-  --hwt-label-w: 80px;
+  /* M8b: label column widened from 80→100px to fit the input-pin
+     checkbox alongside the name without truncating "nBUSACK" etc.
+     The waveform's first cell starts at label-w + row-gap; the M1
+     gridline overlay reads the same vars so it stays in lockstep. */
+  --hwt-label-w: 100px;
   --hwt-row-gap: 8px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
@@ -1099,6 +1103,16 @@ body {
   max-height: 60vh;
   /* Anchor the scroll viewport so sticky labels position against it. */
   position: relative;
+}
+/* Empty-ring status line. Sits above the always-rendered row column so
+   the user sees both the "why nothing's drawn" message AND the input-
+   pin checkboxes pre-step. Sticky-left mirrors the row label column so
+   the message stays readable when the body is wide enough to scroll. */
+.hwt-body-status {
+  position: sticky;
+  left: 0;
+  padding: 4px 8px;
+  font-size: 11px;
 }
 .hwt-row {
   display: flex;
@@ -1131,6 +1145,25 @@ body {
   left: 0;
   background: var(--bg);
   z-index: 1;
+  /* M8b: input rows carry a checkbox next to the label; flexbox keeps
+     them aligned with the text and right-justified together. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+.hwt-row-label-text {
+  /* Suppress extra spacing in pure-text rows; the parent's gap covers
+     the input-bit case. */
+  display: inline-block;
+}
+.hwt-input-checkbox {
+  margin: 0;
+  /* Compact: input pins live in a narrow sticky column. Native checkbox
+     sizing varies by browser; size: 12px gives a consistent baseline. */
+  width: 12px;
+  height: 12px;
+  cursor: pointer;
 }
 .hwt-row-waveform {
   /* Pre-rendered single string of glyphs — one DOM node per row, not
@@ -1254,4 +1287,30 @@ body {
 .appshell-discard:hover:not(:disabled) {
   border-color: var(--danger);
   color: var(--danger);
+}
+
+/* Interrupts section (REQ §11). Minimal — just a labeled INT vector input
+   today; forward-looking generators will land here as additional rows. */
+.interrupts-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 12px;
+}
+.interrupts-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+}
+.interrupts-row-label {
+  color: var(--muted);
+  font-size: 0.9em;
+}
+.interrupts-vector-input {
+  font-family: var(--mono, monospace);
+}
+.interrupts-folded-summary {
+  color: var(--muted);
+  font-size: 0.9em;
 }

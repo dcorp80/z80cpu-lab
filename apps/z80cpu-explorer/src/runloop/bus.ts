@@ -12,12 +12,31 @@
 // configuration costs 64 KB rather than 128 KB. The flag is fixed at
 // construction; toggling it routes through reinit (page reload).
 //
-// Input pins are NOT applied here — level pins (`nINT`/`nRESET`/`nBUSRQ`/
-// `nWAIT`) are written eagerly to `cpu.bus` by store actions (DESIGN
-// §2.5), and `nNMI` is a momentary pulse driven by busTick (milestone 8).
+// Input pins (M8b): the bus owns the authoritative pin state. Level pins
+// (`nINT`/`nRESET`/`nBUSRQ`/`nWAIT`) and `nNMI` are written via
+// `setInputPin`; `resolve()` (preEdge) applies them to `cpu.bus` and, for
+// `nNMI`, calls `cpu.nmi()` while asserted. The bus itself treats nNMI
+// as level-asserted: `cpu.ctl.nmiAck` makes `cpu.nmi()` idempotent
+// within one NMI service, but once a service ends `nmiAck` clears and a
+// still-asserted nNMI would re-fire. The 1-HC-pulse UX comes from
+// boot.tsx's postEdge wrapper, which auto-clears nNMI back to 1 after
+// each record ([[feedback-nmi-pulse-semantics]]) — that's the layer that
+// turns the checkbox into a momentary trigger.
 
 import type { Z80Cpu } from "@dcorp80/z80cpu";
 import type { BusConfig } from "../config/defaults.ts";
+
+/** Input-pin signal names this bus exposes. Lives alongside the
+ *  `getInputPin`/`setInputPin` API so callers stay in lockstep with the
+ *  bus's understanding of which pins are user-controllable. */
+export const INPUT_PIN_NAMES = [
+  "nINT",
+  "nNMI",
+  "nRESET",
+  "nBUSRQ",
+  "nWAIT",
+] as const;
+export type InputPinName = (typeof INPUT_PIN_NAMES)[number];
 
 export const MEM_SIZE = 0x10000;
 export const IO_SIZE = 0x10000;
@@ -49,10 +68,6 @@ export interface Bus64k {
   ioWrite: Uint8Array | null;
   /** Fixed at construction; mirrors `BusConfig.splitIo`. */
   splitIo: boolean;
-  /** Byte placed on `cpu.bus.data` during INT-acknowledge cycles (REQ §6.4). */
-  intVector(): number;
-  /** Updates the INT vector. Value is masked to 8 bits at the boundary. */
-  setIntVector(byte: number): void;
   /**
    * Write `value` into all 256 high-byte aliases of `port` in `ioRead`
    * (`ioRead[(hi<<8) | port] = value` for hi in 0..255). Used by the
@@ -73,6 +88,22 @@ export interface Bus64k {
   lastMemWrite(): BusAccessRecord | null;
   lastIoRead(): BusAccessRecord | null;
   lastIoWrite(): BusAccessRecord | null;
+  /**
+   * Read the current level of a CPU input pin (REQ §6.4 — M8b). All five
+   * pins default to deasserted (1, active-low). `nNMI` is treated as a
+   * level here even though the CPU exposes it as an edge-triggered
+   * method: while `nNMI === 0`, `resolve()` calls `cpu.nmi()` each edge.
+   * The user-visible 1-HC-pulse semantics live one layer up — boot.tsx's
+   * postEdge auto-clears nNMI after recording ([[feedback-nmi-pulse-
+   * semantics]]); the bus alone would keep re-firing across services.
+   */
+  getInputPin(name: InputPinName): 0 | 1;
+  /** Update an input-pin level. Value is masked to 0|1 at the boundary. */
+  setInputPin(name: InputPinName, value: 0 | 1): void;
+  /** Byte placed on `cpu.bus.data` during INT-acknowledge cycles (REQ §6.4). */
+  intVector(): number;
+  /** Updates the INT vector. Value is masked to 8 bits at the boundary. */
+  setIntVector(byte: number): void;
 }
 
 export function makeBus64k(cpu: Z80Cpu, config: BusConfig): Bus64k {
@@ -100,6 +131,17 @@ export function makeBus64k(cpu: Z80Cpu, config: BusConfig): Bus64k {
   let lastIoReadValue = 0;
   let lastIoWriteAddr = -1;
   let lastIoWriteValue = 0;
+
+  // Input-pin levels. Bus owns them authoritatively; resolve() applies
+  // them to cpu.bus on every preEdge. All deasserted (1) at construction.
+  const inputPins: Record<InputPinName, 0 | 1> = {
+    nINT: 1,
+    nNMI: 1,
+    nRESET: 1,
+    nBUSRQ: 1,
+    nWAIT: 1,
+  };
+
   const resolve = () => {
     const { nM1, nMREQ, nIORQ, nRD, nWR, addr, data } = cpu.bus;
     if (nMREQ === 0) {
@@ -145,6 +187,15 @@ export function makeBus64k(cpu: Z80Cpu, config: BusConfig): Bus64k {
         }
       }
     }
+    // Apply input pins. cpu.bus only carries level pins (nINT/nRESET/
+    // nBUSRQ/nWAIT); nNMI is edge-triggered on the CPU side so we call
+    // cpu.nmi() while asserted (cpu.ctl.nmiAck makes the repeat idempotent
+    // within one NMI service).
+    cpu.bus.nINT = inputPins.nINT;
+    cpu.bus.nRESET = inputPins.nRESET;
+    cpu.bus.nBUSRQ = inputPins.nBUSRQ;
+    cpu.bus.nWAIT = inputPins.nWAIT;
+    if (inputPins.nNMI === 0) cpu.nmi();
   };
   return {
     mem,
@@ -152,10 +203,6 @@ export function makeBus64k(cpu: Z80Cpu, config: BusConfig): Bus64k {
     ioWrite,
     splitIo,
     resolve,
-    intVector: () => intVector,
-    setIntVector(byte) {
-      intVector = byte & 0xff;
-    },
     broadcastIoLowByte(port, value) {
       const p = port & 0xff;
       const v = value & 0xff;
@@ -179,5 +226,15 @@ export function makeBus64k(cpu: Z80Cpu, config: BusConfig): Bus64k {
       lastIoWriteAddr < 0
         ? null
         : { addr: lastIoWriteAddr, value: lastIoWriteValue },
+    intVector: () => intVector,
+    setIntVector(byte) {
+      intVector = byte & 0xff;
+    },
+    getInputPin: (name) => inputPins[name],
+    setInputPin(name, value) {
+      // Mask to 0|1 at the boundary — validation-boundary rule for
+      // user-supplied values [[feedback_validation_boundary]].
+      inputPins[name] = (value & 1) as 0 | 1;
+    },
   };
 }

@@ -67,9 +67,14 @@ export async function bootApp(opts: BootOptions = {}): Promise<BootedApp> {
     // Record straight off the live bus — no intermediate sample. `record`
     // short-circuits before touching anything when capture is disabled
     // (DESIGN §3.2). `nNMI` is injected separately (it isn't on cpu.bus —
-    // DESIGN §2.1); M8b sources it from `store.inputPins.nNMI`, in M8a the
-    // user can't trigger NMI yet so it stays deasserted (1).
-    hwTrace.record(cpu.bus, 1, hc);
+    // DESIGN §2.1); the bus owns the pin level. After the record we
+    // auto-clear nNMI so it reads as a 1-HC pulse in the trace (REQ §6.4
+    // / [[feedback-nmi-pulse-semantics]]). The store's reactive mirror
+    // re-syncs on the next `loop.onTick` so the checkbox UI returns to
+    // unchecked.
+    const nNMI = bus.getInputPin("nNMI");
+    hwTrace.record(cpu.bus, nNMI, hc);
+    if (nNMI === 0) bus.setInputPin("nNMI", 1);
   };
 
   const loop = createRunLoop({

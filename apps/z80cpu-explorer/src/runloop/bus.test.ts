@@ -355,4 +355,59 @@ describe("makeBus64k", () => {
       }
     });
   });
+
+  // ── Input pins (M8b, REQ §6.4) ───────────────────────────────────
+
+  describe("input pins (M8b)", () => {
+    it("defaults all five level pins to deasserted (1)", () => {
+      const { bus } = freshBus();
+      for (const name of [
+        "nINT",
+        "nNMI",
+        "nRESET",
+        "nBUSRQ",
+        "nWAIT",
+      ] as const) {
+        expect(bus.getInputPin(name)).toBe(1);
+      }
+    });
+
+    it("setInputPin masks the value to 0|1 at the boundary", () => {
+      const { bus } = freshBus();
+      // Any odd value collapses to 1, any even non-zero to 0 — the bus
+      // doesn't trust upstream masking (validation-boundary rule).
+      bus.setInputPin("nINT", 5 as 0 | 1);
+      expect(bus.getInputPin("nINT")).toBe(1);
+      bus.setInputPin("nINT", 4 as 0 | 1);
+      expect(bus.getInputPin("nINT")).toBe(0);
+    });
+
+    it("resolve() applies level pins to cpu.bus", () => {
+      const { cpu, bus } = freshBus();
+      bus.setInputPin("nINT", 0);
+      bus.setInputPin("nRESET", 0);
+      bus.setInputPin("nBUSRQ", 0);
+      bus.setInputPin("nWAIT", 0);
+      // resolve runs the preEdge hook — drives the pins onto cpu.bus.
+      bus.resolve();
+      expect(cpu.bus.nINT).toBe(0);
+      expect(cpu.bus.nRESET).toBe(0);
+      expect(cpu.bus.nBUSRQ).toBe(0);
+      expect(cpu.bus.nWAIT).toBe(0);
+    });
+
+    it("nNMI asserted fires cpu.nmi() via resolve (sets nmiFf)", () => {
+      const { cpu, bus } = freshBus();
+      expect(cpu.ctl.nmiFf).toBe(false);
+      bus.setInputPin("nNMI", 0);
+      bus.resolve();
+      expect(cpu.ctl.nmiFf).toBe(true);
+    });
+
+    it("nNMI deasserted does NOT call cpu.nmi()", () => {
+      const { cpu, bus } = freshBus();
+      bus.resolve(); // nNMI default 1, should not set nmiFf
+      expect(cpu.ctl.nmiFf).toBe(false);
+    });
+  });
 });

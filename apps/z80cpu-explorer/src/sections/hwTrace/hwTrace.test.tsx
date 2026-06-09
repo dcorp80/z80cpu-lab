@@ -227,21 +227,29 @@ describe("hwTrace section — header step / zero controls (REQ §6.4)", () => {
 });
 
 describe("hwTrace section — body", () => {
-  it("renders the empty-state fallback on a fresh buffer", async () => {
+  it("renders signal rows + the empty-state status line on a fresh buffer", async () => {
     const { container } = await open("body");
+    // M8b: row labels stay visible pre-step so the user can assert input
+    // pins before the first edge. The empty waveforms still convey
+    // "nothing recorded yet" via the status line above the rows.
     expect(container.textContent).toContain(STR.hwTrace.bodyEmpty);
-    expect(container.querySelectorAll(".hwt-row").length).toBe(0);
+    expect(container.querySelectorAll(".hwt-row").length).toBe(15);
+    // Waveform cells stay empty (windowHi < windowLo) — no glyphs land.
+    const wave = container.querySelector(".hwt-row-waveform");
+    expect(wave?.textContent ?? "").toBe("");
   });
 
-  it("shows a capture-off message (not the generic empty one) when disabled and empty", async () => {
+  it("shows the capture-off message and hides rows when capture is disabled", async () => {
     const { container, store } = await open("body");
     store.setHwTraceMode("disabled");
     expect(container.textContent).toContain(STR.hwTrace.bodyDisabled);
     expect(container.textContent).not.toContain(STR.hwTrace.bodyEmpty);
+    // Capture OFF hides the row column entirely — no input pins to
+    // assert toward, and the status line carries the message alone.
     expect(container.querySelectorAll(".hwt-row").length).toBe(0);
   });
 
-  it("clears the ring (and the display) when capture is toggled off", async () => {
+  it("clears the ring AND hides rows when capture is toggled off", async () => {
     const { container, store, loop } = await open("body");
     const sample = makeBusSample();
     recordSample(store.hwTrace, sample, 1);
@@ -254,8 +262,53 @@ describe("hwTrace section — body", () => {
     // a later run can't carry stale levels into the window as dead lines.
     store.setHwTraceMode("disabled");
     expect(store.hwTrace.isEmpty()).toBe(true);
+    // Row column is hidden entirely under capture-OFF.
     expect(container.querySelectorAll(".hwt-row").length).toBe(0);
     expect(container.textContent).toContain(STR.hwTrace.bodyDisabled);
+  });
+
+  it("input rows render label first, checkbox after (M8b UI order)", async () => {
+    const { container } = await open("body");
+    const labels = Array.from(
+      container.querySelectorAll<HTMLSpanElement>(".hwt-row-label"),
+    );
+    const intLabel = labels.find((el) => el.textContent?.includes("nINT"));
+    if (!intLabel) throw new Error("nINT row label not found");
+    const children = Array.from(intLabel.children) as HTMLElement[];
+    expect(children[0]?.classList.contains("hwt-row-label-text")).toBe(true);
+    expect(children[1]?.classList.contains("hwt-input-checkbox")).toBe(true);
+  });
+
+  it("input-pin checkboxes are interactive while paused, disabled while running", async () => {
+    const { container, store } = await open("body");
+    const cb = container.querySelector<HTMLInputElement>(
+      ".hwt-row .hwt-input-checkbox",
+    );
+    if (!cb) throw new Error("input-pin checkbox not found");
+    expect(cb.disabled).toBe(false);
+    store.run();
+    await flush();
+    expect(cb.disabled).toBe(true);
+    store.pause();
+    await flush();
+    expect(cb.disabled).toBe(false);
+  });
+
+  it("toggling an input-pin checkbox writes through store.setInputPin", async () => {
+    const { container, store } = await open("body");
+    const labels = Array.from(
+      container.querySelectorAll<HTMLSpanElement>(".hwt-row-label"),
+    );
+    const intLabel = labels.find((el) => el.textContent?.includes("nINT"));
+    const intCheckbox = intLabel?.querySelector<HTMLInputElement>(
+      ".hwt-input-checkbox",
+    );
+    if (!intCheckbox) throw new Error("nINT checkbox not found");
+    expect(store.inputPins.nINT).toBe(1);
+    fireEvent.click(intCheckbox);
+    expect(store.inputPins.nINT).toBe(0);
+    fireEvent.click(intCheckbox);
+    expect(store.inputPins.nINT).toBe(1);
   });
 
   it("renders one row per signal once activity has been captured", async () => {

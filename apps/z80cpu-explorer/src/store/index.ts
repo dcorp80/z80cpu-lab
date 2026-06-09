@@ -133,20 +133,7 @@ export interface CreateStoreDeps {
    * Reinit lives in the UI as a `window.location.reload()` button; no
    * targeted bus.reset is needed (DESIGN §7.3).
    */
-  bus: Pick<
-    Bus64k,
-    | "setIntVector"
-    | "intVector"
-    | "mem"
-    | "ioRead"
-    | "ioWrite"
-    | "splitIo"
-    | "broadcastIoLowByte"
-    | "lastMemRead"
-    | "lastMemWrite"
-    | "lastIoRead"
-    | "lastIoWrite"
-  >;
+  bus: Omit<Bus64k, "resolve">;
   /**
    * Source of CPU register/flag snapshots for the cpuState section
    * (REQ §6.5). The store calls `dbg.state()` on each pause to refresh
@@ -242,12 +229,32 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
   const [lastPauseReason, setLastPauseReason] =
     createSignal<PauseReason | null>(null);
 
-  // UI mirror of the bus-owned INT vector. Bus is authoritative (the
-  // resolver reads it on every INT-ack); the SolidStore copy exists
-  // only so sections re-render when the user edits the value.
+  // UI mirror of the bus-owned input pins (REQ §6.4). Bus is
+  // authoritative (the resolver applies them to cpu.bus on every
+  // preEdge); the SolidStore copy exists so sections re-render when the
+  // user toggles a checkbox or edits the INT vector byte.
   const [inputPins, setInputPins] = createStore<InputPinsState>({
+    nINT: bus.getInputPin("nINT"),
+    nNMI: bus.getInputPin("nNMI"),
+    nRESET: bus.getInputPin("nRESET"),
+    nBUSRQ: bus.getInputPin("nBUSRQ"),
+    nWAIT: bus.getInputPin("nWAIT"),
     intVector: bus.intVector(),
   });
+  /** Pull the bus's current pin levels into the SolidStore mirror.
+   *  Used after each frame's edges so nNMI's post-edge auto-clear
+   *  ([[feedback-nmi-pulse-semantics]]) propagates to the checkbox
+   *  state without a per-edge subscription. Cheap — five reads + a
+   *  shallow store update, gated on actual change inside Solid. */
+  function syncInputPinsFromBus(): void {
+    setInputPins({
+      nINT: bus.getInputPin("nINT"),
+      nNMI: bus.getInputPin("nNMI"),
+      nRESET: bus.getInputPin("nRESET"),
+      nBUSRQ: bus.getInputPin("nBUSRQ"),
+      nWAIT: bus.getInputPin("nWAIT"),
+    });
+  }
 
   // Instruction-trace ring (DESIGN §3.1). Reactivity rides a version
   // counter — sections createMemo on `traceRingVersion()` and pull
@@ -592,6 +599,11 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     bumpMemVersion();
     bumpIoVersion();
     bumpIoVersionWrite();
+    // nNMI auto-clears in postEdge (1-HC pulse,
+    // [[feedback-nmi-pulse-semantics]]); resync the mirror so the
+    // checkbox UI returns to unchecked. Also catches any other pin
+    // touched by future bus-internal logic.
+    syncInputPinsFromBus();
   });
   loop.onTick((h) => {
     setHc(h);
@@ -627,6 +639,10 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       lastSeenHwTraceVersion = v;
       setHwTraceVersion(v);
     }
+    // Resync input-pin mirror during run too, so a long run that fires
+    // an NMI mid-frame unchecks the checkbox by the next tick (without
+    // waiting for the user to pause).
+    syncInputPinsFromBus();
   });
   loop.onInstruction((trace, hcAtComplete) => {
     instructionFiredSinceLastPause = true;
@@ -1279,6 +1295,18 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       );
     },
     inputPins,
+    setInputPin(name, value) {
+      // Paused-only per REQ §7.5. Same gate as setMemByte/setIoByte —
+      // the UI's checkbox is `disabled={!isPaused()}`, this enforces
+      // the same contract for programmatic callers.
+      if (status() !== "paused") return;
+      // Bus is authoritative; mirror into the UI store so the
+      // HW-trace checkbox + folded summary re-render. Bus masks at
+      // its boundary; we re-read after the write so the mirror
+      // reflects what the bus actually stored.
+      bus.setInputPin(name, value);
+      setInputPins(name, bus.getInputPin(name));
+    },
     setIntVector(byte: number) {
       // Bus is authoritative; mirror into the UI store so dependent
       // sections re-render. Bus masks again at its boundary.

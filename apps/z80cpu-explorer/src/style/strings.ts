@@ -96,6 +96,19 @@ export const STR = {
       "Address changed since last load — click Load to re-write",
     fileTruncatedTooltip: (n: number) => `Truncated — ${n} bytes past FFFF`,
   },
+  interrupts: {
+    title: "Interrupts",
+    // Folded summary: shows the INT vector byte so the user can verify
+    // the active vector without unfolding. Forward-looking: when the
+    // section grows configurable INT-at-HC / NMI-at-HC generators (REQ
+    // §11), they'll fold in here too.
+    foldedSummary: (vector: string) => `INT vector ${vector}`,
+    vectorLabel: "INT vector:",
+    vectorAriaLabel:
+      "Interrupt vector byte (placed on cpu.bus.data during INT acknowledge)",
+    vectorTooltip:
+      "Hex byte placed on cpu.bus.data during INT-acknowledge cycles (nM1 low + nIORQ low). Default FF.",
+  },
   cpuState: {
     title: "CPU state",
     foldedEmpty: "CPU idle",
@@ -278,6 +291,14 @@ export const STR = {
     // rather than broken. Disabling capture clears the ring (see
     // setHwTraceMode), so in practice a disabled pane always lands here.
     bodyDisabled: "(capture off — enable Capture to record bus activity)",
+    // Input-pin row checkbox (M8b, REQ §6.4). Left-header control on
+    // each input signal row. Checked = signal asserted (level 0, active
+    // low). nNMI is special — see [[feedback-nmi-pulse-semantics]].
+    inputPinAriaLabel: (signal: string) => `Assert ${signal}`,
+    inputPinTooltip: (signal: string) =>
+      signal === "nNMI"
+        ? "Check to fire NMI on the next clock edge (1-HC pulse). Auto-clears."
+        : `Check to assert ${signal} (active-low). Stays asserted until unchecked.`,
     // Per-signal row labels — the left header column. Keep short so the
     // fixed-width column stays narrow. Tooltip-only for the long name.
     signalLabels: {

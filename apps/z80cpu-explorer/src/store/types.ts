@@ -2,7 +2,7 @@ import type { CpuState } from "@dcorp80/z80cpu";
 import type { Accessor } from "solid-js";
 import type { Store as SolidStore } from "solid-js/store";
 import type { UiConfig } from "../config/defaults.ts";
-import type { BusAccessRecord } from "../runloop/bus.ts";
+import type { BusAccessRecord, InputPinName } from "../runloop/bus.ts";
 import type { HwTraceBuffer } from "../runloop/hwTrace.ts";
 import type { PauseReason, RunStatus } from "../runloop/loop.ts";
 import type {
@@ -41,7 +41,23 @@ export interface CursorsState {
   hwTrace: ViewCursor;
 }
 
+/**
+ * Reactive mirror of the bus's input-pin state (REQ §6.4 / DESIGN §4).
+ * The bus is authoritative (see [[feedback-bus-owns-state]]); this
+ * SolidStore copy exists so HW-trace checkboxes + the Interrupts section
+ * re-render when the user edits a value. `setInputPin` keeps both in
+ * sync; `loop.onTick` re-syncs after every frame to catch nNMI's
+ * auto-clear (see [[feedback-nmi-pulse-semantics]]).
+ *
+ * Naming matches the pin names on `cpu.bus` so callers stay in one
+ * vocabulary across the bus + store + UI.
+ */
 export interface InputPinsState {
+  nINT: 0 | 1;
+  nNMI: 0 | 1;
+  nRESET: 0 | 1;
+  nBUSRQ: 0 | 1;
+  nWAIT: 0 | 1;
   /** Byte placed on `cpu.bus.data` during INT-acknowledge cycles (REQ §6.4). */
   intVector: number;
 }
@@ -282,8 +298,19 @@ export interface Store {
   setPendingSplitIo(on: boolean): void;
   readonly splitIoDirty: Accessor<boolean>;
 
-  // ── input pins
+  // ── input pins (REQ §6.4). The HW-trace per-row checkboxes call
+  // `setInputPin`; the Interrupts section calls `setIntVector`.
   readonly inputPins: SolidStore<InputPinsState>;
+  /**
+   * Set a CPU input pin level. Writes through to the bus (authoritative)
+   * and updates the reactive mirror so UI re-renders. Value is masked to
+   * 0|1 at the boundary. Paused-only — calls during run no-op, matching
+   * the bus-write convention shared with `setMemByte`/`setIoByte`. nNMI
+   * is a level pin from the UI's perspective, but boot.tsx auto-clears
+   * it after one HC so it reads as a 1-HC pulse in the HW trace
+   * ([[feedback-nmi-pulse-semantics]]).
+   */
+  setInputPin(name: InputPinName, value: 0 | 1): void;
   setIntVector(byte: number): void;
 
   // ── program files (REQ §6.1)

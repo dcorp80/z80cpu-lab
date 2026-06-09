@@ -12,6 +12,7 @@ import { breakpoints } from "./breakpoints/index.tsx";
 import { cpuState } from "./cpuState/index.tsx";
 import { hwTrace } from "./hwTrace/index.tsx";
 import { instructionTrace } from "./instructionTrace/index.tsx";
+import { interrupts } from "./interrupts/index.tsx";
 import { io } from "./io/index.tsx";
 import { memory } from "./memory/index.tsx";
 import { program } from "./program/index.tsx";
@@ -29,6 +30,7 @@ export const DEFAULT_SECTION_ORDER: SectionModule[] = [
   program,
   memory,
   io,
+  interrupts,
   hwTrace,
 ];
 

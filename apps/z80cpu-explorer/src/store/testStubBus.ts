@@ -7,7 +7,7 @@
 // Joined-mode tests get the default single-plane stub; split-mode tests
 // pass `makeStubBus({ splitIo: true })` to exercise the dual-plane path.
 
-import type { BusAccessRecord } from "../runloop/bus.ts";
+import type { BusAccessRecord, InputPinName } from "../runloop/bus.ts";
 
 export interface StubBus {
   mem: Uint8Array;
@@ -16,6 +16,8 @@ export interface StubBus {
   splitIo: boolean;
   intVector(): number;
   setIntVector(byte: number): void;
+  getInputPin(name: InputPinName): 0 | 1;
+  setInputPin(name: InputPinName, value: 0 | 1): void;
   broadcastIoLowByte(port: number, value: number): void;
   lastMemRead(): BusAccessRecord | null;
   lastMemWrite(): BusAccessRecord | null;
@@ -42,6 +44,13 @@ export function makeStubBus(opts: StubBusOptions = {}): StubBus {
   let lastMW: BusAccessRecord | null = null;
   let lastIR: BusAccessRecord | null = null;
   let lastIW: BusAccessRecord | null = null;
+  const pins: Record<InputPinName, 0 | 1> = {
+    nINT: 1,
+    nNMI: 1,
+    nRESET: 1,
+    nBUSRQ: 1,
+    nWAIT: 1,
+  };
   return {
     mem,
     ioRead,
@@ -50,6 +59,10 @@ export function makeStubBus(opts: StubBusOptions = {}): StubBus {
     intVector: () => v,
     setIntVector: (b: number) => {
       v = b & 0xff;
+    },
+    getInputPin: (name) => pins[name],
+    setInputPin: (name, value) => {
+      pins[name] = (value & 1) as 0 | 1;
     },
     broadcastIoLowByte: (port: number, value: number) => {
       const p = port & 0xff;

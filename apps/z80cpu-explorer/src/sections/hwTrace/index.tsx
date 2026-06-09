@@ -7,9 +7,11 @@
 // The display window always starts at HC=1; the first visible cell is
 // the bus state right after the first clockEdge.
 //
-// M8a scope: outputs only — input pins render at their initial level
-// (deasserted high) because no UI control drives them yet (8b lands
-// checkboxes + NMI button + INT vector input). VCD export lands in 8c.
+// M8b status: input-signal rows (nINT/nNMI/nRESET/nBUSRQ/nWAIT) carry
+// a checkbox in their left header column that drives the bus pin via
+// `store.setInputPin`. The INT vector input moved to the new
+// Interrupts section (REQ §6.8) so the HW trace stays a pure
+// logic-analyzer view. VCD export lands in M8c.
 
 import {
   type Component,
@@ -20,11 +22,14 @@ import {
   Show,
 } from "solid-js";
 import { DEFAULT_HW_TRACE_RENDER_MAX_HCS } from "../../config/defaults.ts";
+import type { InputPinName } from "../../runloop/bus.ts";
 import {
   ALL_SIGNALS,
   BUS_VALUE_SIGNALS,
   type BusSnapshotRecord,
   type BusValueSignal,
+  INPUT_BIT_SIGNALS,
+  type InputBitSignal,
   OUTPUT_TRI_SIGNALS,
   type SignalName,
   type Tri,
@@ -49,10 +54,13 @@ import {
 
 const TRI_SET: ReadonlySet<string> = new Set(OUTPUT_TRI_SIGNALS);
 const BUS_VALUE_SET: ReadonlySet<string> = new Set(BUS_VALUE_SIGNALS);
+const INPUT_BIT_SET: ReadonlySet<string> = new Set(INPUT_BIT_SIGNALS);
 
 const isTri = (name: SignalName): name is TriSignal => TRI_SET.has(name);
 const isBusValue = (name: SignalName): name is BusValueSignal =>
   BUS_VALUE_SET.has(name);
+const isInputBit = (name: SignalName): name is InputBitSignal =>
+  INPUT_BIT_SET.has(name);
 
 const Header: Component = () => {
   const store = useStore();
@@ -190,7 +198,35 @@ interface RowData {
  * Per-signal row component (REQ §6.4 "Each signal row is an isolated
  * component instance — one per signal"). Isolation preps for post-MVP
  * drag-to-reorder of rows and keeps render cost per signal flat.
+ *
+ * M8b: input-signal rows (nINT/nNMI/nRESET/nBUSRQ/nWAIT) carry a small
+ * checkbox in the left header. Checked = asserted (level 0, active-low);
+ * unchecked = deasserted (level 1). nNMI is special: the bus auto-clears
+ * it after one HC to render as a 1-HC pulse in the trace
+ * ([[feedback-nmi-pulse-semantics]]) — the checkbox visually returns to
+ * unchecked on the next tick.
  */
+const InputPinCheckbox: Component<{ signal: InputBitSignal }> = (props) => {
+  const store = useStore();
+  const name: InputPinName = props.signal;
+  const checked = () => store.inputPins[name] === 0;
+  // Paused-only to match every other write through the bus (memory/IO
+  // edits, INT vector). Disables during run AND step — a single-step
+  // checkbox change wouldn't take effect until the next paused state
+  // anyway, and the consistent `!isPaused()` gate keeps the UX uniform.
+  return (
+    <input
+      type="checkbox"
+      class="hwt-input-checkbox"
+      aria-label={STR.hwTrace.inputPinAriaLabel(props.signal)}
+      title={STR.hwTrace.inputPinTooltip(props.signal)}
+      checked={checked()}
+      disabled={!store.isPaused()}
+      onChange={(e) => store.setInputPin(name, e.currentTarget.checked ? 0 : 1)}
+    />
+  );
+};
+
 const SignalRow: Component<{
   signal: SignalName;
   windowLo: number;
@@ -243,7 +279,12 @@ const SignalRow: Component<{
   return (
     <div class="hwt-row">
       <span class="hwt-row-label">
-        {STR.hwTrace.signalLabels[props.signal]}
+        <span class="hwt-row-label-text">
+          {STR.hwTrace.signalLabels[props.signal]}
+        </span>
+        <Show when={isInputBit(props.signal)}>
+          <InputPinCheckbox signal={props.signal as InputBitSignal} />
+        </Show>
       </span>
       <span class="hwt-row-waveform">
         <For each={segments()}>
@@ -363,6 +404,14 @@ const Body: Component = () => {
       store.hwTraceVersion();
       const hi = store.hc();
       if (hi < 1) return { lo: 1, hi: 0 };
+      // Empty ring → collapse to an empty window (hi<lo) so every row's
+      // waveform renders as "" rather than filling the [1, hc] span with
+      // carry-forward default levels. M8b: rows render unconditionally
+      // so the user can assert pins pre-step; this guards against the
+      // post-Zero-HC / post-disable case where `store.hc()` is large but
+      // nothing's in the ring.
+      const oldest = store.hwTrace.oldestHc();
+      if (oldest === undefined) return { lo: 1, hi: 0 };
       // Clamp the left edge UP to the oldest recorded HC. `store.hc()` is a
       // free-running counter that keeps advancing while capture is DISABLED,
       // but the ring records nothing then — so a window left edge of
@@ -372,10 +421,7 @@ const Body: Component = () => {
       // "dead lines" bug (visible after enabling capture mid-session, when
       // HC already advanced past where the ring starts). Pinning `lo` to
       // `oldestHc()` keeps the window over real data; the carry-forward seed
-      // then always has a record behind it. (`oldestHc()` is undefined only
-      // when the ring is empty — then the body shows the empty/disabled
-      // fallback, not rows, so the `?? 1` is never actually rendered.)
-      const oldest = store.hwTrace.oldestHc() ?? 1;
+      // then always has a record behind it.
       const lo = Math.max(1, hi - DEFAULT_HW_TRACE_RENDER_MAX_HCS + 1, oldest);
       return { lo, hi };
     },
@@ -497,16 +543,19 @@ const Body: Component = () => {
       }}
       onScroll={onScroll}
     >
-      <Show
-        when={hasData()}
-        fallback={
-          <span class="muted">
-            {store.hwTraceMode() === "disabled"
-              ? STR.hwTrace.bodyDisabled
-              : STR.hwTrace.bodyEmpty}
-          </span>
-        }
-      >
+      {/* Capture ON: rows render even when the ring is empty so the
+          user can assert input pins before the first edge (REQ §6.4).
+          Capture OFF: hide the row column entirely — there's nothing to
+          assert toward, and the muted status line carries the message
+          on its own. The empty status line still shows under capture-
+          ON when the ring has no transitions yet. */}
+      <Show when={store.hwTraceMode() === "disabled"}>
+        <span class="hwt-body-status muted">{STR.hwTrace.bodyDisabled}</span>
+      </Show>
+      <Show when={store.hwTraceMode() === "ring"}>
+        <Show when={!hasData()}>
+          <span class="hwt-body-status muted">{STR.hwTrace.bodyEmpty}</span>
+        </Show>
         <div class="hwt-content">
           <div class="hwt-gridlines" aria-hidden="true">
             <For each={m1Starts()}>

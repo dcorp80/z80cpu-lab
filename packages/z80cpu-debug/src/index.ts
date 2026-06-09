@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright 2026 dcorp80
-
+export type { BreakHandle } from "./z80dbg.ts";
 export {
   type CpuState,
   type DecodedFlags,

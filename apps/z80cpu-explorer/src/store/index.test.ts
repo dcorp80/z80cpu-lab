@@ -904,6 +904,60 @@ describe("createAppStore", () => {
     });
   });
 
+  describe("input pins (M8b, REQ §6.4)", () => {
+    it("seeds inputPins from the bus (all deasserted at construction)", async () => {
+      const { store } = await freshStore();
+      expect(store.inputPins.nINT).toBe(1);
+      expect(store.inputPins.nNMI).toBe(1);
+      expect(store.inputPins.nRESET).toBe(1);
+      expect(store.inputPins.nBUSRQ).toBe(1);
+      expect(store.inputPins.nWAIT).toBe(1);
+    });
+
+    it("setInputPin writes through to the bus and mirrors into inputPins", async () => {
+      const { store, bus } = await freshStore();
+      store.setInputPin("nINT", 0);
+      expect(bus.getInputPin("nINT")).toBe(0);
+      expect(store.inputPins.nINT).toBe(0);
+      store.setInputPin("nINT", 1);
+      expect(bus.getInputPin("nINT")).toBe(1);
+      expect(store.inputPins.nINT).toBe(1);
+    });
+
+    it("setInputPin works for all five pin names", async () => {
+      const { store, bus } = await freshStore();
+      const pins = ["nINT", "nNMI", "nRESET", "nBUSRQ", "nWAIT"] as const;
+      for (const p of pins) {
+        store.setInputPin(p, 0);
+        expect(bus.getInputPin(p)).toBe(0);
+        expect(store.inputPins[p]).toBe(0);
+      }
+    });
+
+    it("setInputPin no-ops while running (paused-only gate per §7.5)", async () => {
+      const { store, bus, loop } = await freshStore();
+      loop.setStatus("running");
+      store.run();
+      store.setInputPin("nINT", 0);
+      expect(bus.getInputPin("nINT")).toBe(1);
+      expect(store.inputPins.nINT).toBe(1);
+    });
+
+    it("loop.onTick re-syncs the mirror from the bus (catches nNMI auto-clear)", async () => {
+      const { store, bus, loop } = await freshStore();
+      store.setInputPin("nNMI", 0);
+      expect(store.inputPins.nNMI).toBe(0);
+      // Simulate the post-edge auto-clear that boot.tsx applies (the
+      // bus reads back the same value the store mirror sees until the
+      // next tick fires); then drive a tick and verify the mirror
+      // caught up.
+      bus.setInputPin("nNMI", 1);
+      expect(store.inputPins.nNMI).toBe(0); // still stale before tick
+      loop.emitTick(1);
+      expect(store.inputPins.nNMI).toBe(1); // synced
+    });
+  });
+
   describe("legacy int-vector + pause-reason (regression block)", () => {
     it("setIntVector masks to 8 bits and pushes through to the bus", async () => {
       const { store, bus } = await freshStore();
