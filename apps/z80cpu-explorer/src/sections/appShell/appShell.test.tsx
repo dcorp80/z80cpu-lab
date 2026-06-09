@@ -107,6 +107,18 @@ describe("appShell — Cold boot button (header)", () => {
     expect(btn?.textContent).toBe(STR.appShell.coldBoot);
   });
 
+  it("renders the version chip with v<version> (<sha>)", async () => {
+    harness = await mount("header");
+    const chip =
+      harness.container.querySelector<HTMLSpanElement>(".appshell-version");
+    expect(chip).not.toBeNull();
+    // __APP_VERSION__ / __BUILD_SHA__ are injected by Vite's `define` and
+    // apply in vitest too, so the chip's text matches the STR formatter.
+    expect(chip?.textContent).toBe(
+      STR.appShell.version(__APP_VERSION__, __BUILD_SHA__),
+    );
+  });
+
   it("disables the Cold boot button while the CPU is running", async () => {
     harness = await mount("header");
     const btn =

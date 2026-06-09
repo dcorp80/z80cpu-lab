@@ -59,7 +59,13 @@ const Header = () => {
       <div class="bp-controls">
         <button
           type="button"
+          class="btn"
           onClick={() => (store.isPaused() ? store.run() : store.pause())}
+          title={
+            store.isPaused()
+              ? STR.breakpoints.runTooltip
+              : STR.breakpoints.pauseTooltip
+          }
         >
           {store.isPaused() ? STR.breakpoints.run : STR.breakpoints.pause}
         </button>

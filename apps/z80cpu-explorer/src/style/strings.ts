@@ -22,6 +22,9 @@ export const STR = {
   appShell: {
     // Header is the app name itself (REQ §11) — pulled from STR.app.title
     // so the name lives in exactly one place.
+    version: (v: string, sha: string) => `v${v} (${sha})`,
+    versionTooltip: (v: string, sha: string) =>
+      `Version ${v} · commit ${sha}`,
     coldBoot: "Cold boot",
     coldBootTooltip:
       "Reload the page — fresh CPU, mem, IO; files / breakpoints / layout survive; autoload re-fires (Shift+R)",
@@ -39,6 +42,8 @@ export const STR = {
     title: "Breakpoints",
     run: "Run",
     pause: "Pause",
+    runTooltip: "Resume execution (Space)",
+    pauseTooltip: "Pause execution (Space)",
     runningStatus: (hc: string, insns: string) =>
       `running · HC=${hc} · ${insns} insns`,
     steppingStatus: (hc: string, insns: string) =>
@@ -163,6 +168,7 @@ export const STR = {
     step: "Step",
     stepN: "Step N",
     stepTooltip: "Step one instruction (s)",
+    stepNTooltip: "Step the number of instructions in the field",
     stepCountLabel: "Step count",
     executedHeading: "Executed",
     previewHeading: "Preview (next at PC)",

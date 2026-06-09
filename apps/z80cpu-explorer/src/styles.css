@@ -180,14 +180,14 @@ body {
   min-width: 0;
 }
 
-.bp-controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  align-items: center;
-  order: 2;
-}
-.bp-controls button {
+/* Shared action-button look — applied to every section-header button so
+   the visual is uniform across sections. Variants below tweak hover
+   accent (destructive vs. primary action). Without this base, buttons
+   inside .itrace-header-controls / .hwt-header-controls fell back to
+   browser defaults while .bp-controls / .program-controls had their own
+   near-identical copy of the same rule — the inconsistency that REQ
+   §12 flagged. */
+.btn {
   background: none;
   border: 1px solid var(--border);
   color: var(--fg);
@@ -195,14 +195,38 @@ body {
   border-radius: 4px;
   font-size: 12px;
   cursor: pointer;
+  font-family: inherit;
 }
-.bp-controls button:hover:not(:disabled) {
+.btn:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent);
 }
-.bp-controls button:disabled {
+.btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+/* Destructive-action variant: red hover (cold-boot, discard). */
+.btn-danger:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+/* Primary-action variant: accent border / text by default so the user
+   sees which button commits the staged change (save). Hover adds a
+   background tint since border/text are already accent. */
+.btn-accent {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.btn-accent:hover:not(:disabled) {
+  background: var(--highlight-bg);
+}
+
+.bp-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  order: 2;
 }
 .step-n-input {
   background: var(--bg);
@@ -344,23 +368,6 @@ body {
   display: flex;
   gap: 4px;
   align-items: center;
-}
-.program-controls button {
-  background: none;
-  border: 1px solid var(--border);
-  color: var(--fg);
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  cursor: pointer;
-}
-.program-controls button:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.program-controls button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 .program-body {
@@ -607,20 +614,6 @@ body {
   color: var(--warning);
   background: var(--warning-bg);
 }
-.itrace-snap {
-  background: none;
-  border: 1px solid var(--border);
-  color: var(--fg);
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  cursor: pointer;
-}
-.itrace-snap:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
 .itrace-body {
   display: flex;
   flex-direction: column;
@@ -1062,19 +1055,6 @@ body {
   color: var(--warning);
   background: var(--warning-bg);
 }
-.hwt-snap {
-  background: none;
-  border: 1px solid var(--border);
-  color: var(--fg);
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  cursor: pointer;
-}
-.hwt-snap:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
 .hwt-folded-summary {
   color: var(--muted);
 }
@@ -1222,22 +1202,11 @@ body {
   align-items: center;
   gap: 6px;
 }
-.appshell-coldboot {
-  background: none;
-  border: 1px solid var(--border);
-  color: var(--fg);
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  cursor: pointer;
-}
-.appshell-coldboot:hover:not(:disabled) {
-  border-color: var(--danger);
-  color: var(--danger);
-}
-.appshell-coldboot:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.appshell-version {
+  color: var(--muted);
+  font-size: 11px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  white-space: nowrap;
 }
 .appshell-body {
   display: flex;
@@ -1266,27 +1235,6 @@ body {
   align-self: flex-end;
   padding-top: 4px;
   border-top: 1px solid var(--border);
-}
-.appshell-save,
-.appshell-discard {
-  background: none;
-  border: 1px solid var(--border);
-  color: var(--fg);
-  padding: 2px 10px;
-  border-radius: 4px;
-  font-size: 12px;
-  cursor: pointer;
-}
-.appshell-save {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.appshell-save:hover:not(:disabled) {
-  background: var(--highlight-bg);
-}
-.appshell-discard:hover:not(:disabled) {
-  border-color: var(--danger);
-  color: var(--danger);
 }
 
 /* Interrupts section (REQ §11). Minimal — just a labeled INT vector input

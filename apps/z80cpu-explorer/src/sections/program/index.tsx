@@ -92,6 +92,7 @@ const Header = () => {
     <div class="program-controls">
       <button
         type="button"
+        class="btn"
         onClick={() => store.reloadAllFiles()}
         title={STR.program.reloadAllTooltip}
         disabled={store.files.length === 0}
@@ -267,6 +268,7 @@ const AddStubRow = () => {
       />
       <button
         type="button"
+        class="btn"
         onClick={onAdd}
         disabled={busy()}
         title={STR.program.addFileTooltip}

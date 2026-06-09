@@ -1,12 +1,20 @@
 # z80cpu-lab
 
 Companion toolkit for [`@dcorp80/z80cpu`](https://www.npmjs.com/package/@dcorp80/z80cpu)
-— the half-cycle-accurate Z80 emulator. This repo bundles the tools that ride
-on top of the CPU core: a tracing debug context, a standalone disassembler,
-an interactive REPL, and a debug-overhead benchmark.
+— the half-cycle-accurate Z80 emulator. The CPU core ships from a separate
+repo as a clean, dependency-free library; everything here is downstream.
 
-The CPU core itself lives in a separate repo so it can ship as a clean,
-dependency-free library. Everything here is downstream.
+## 🔬 z80cpu-explorer — visual debugger in the browser
+
+**▶ Try it live: [dcorp80.github.io/z80cpu-lab](https://dcorp80.github.io/z80cpu-lab/)**
+
+Load a Z80 program and watch it run half-cycle by half-cycle. Disassembled
+instruction trace, live register file, 64K memory and IO grids, a
+hardware-pin oscilloscope showing every bus transition, click-to-assert
+input pins (nINT, nNMI, nRESET), PC and HC breakpoints — all side by side,
+all live. Foldable, reorderable, persists across reloads.
+
+→ Source and details: [`apps/z80cpu-explorer/`](apps/z80cpu-explorer/).
 
 ## Packages
 

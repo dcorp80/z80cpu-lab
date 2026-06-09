@@ -86,6 +86,7 @@ const Header: Component = () => {
     <div class="itrace-header-controls">
       <button
         type="button"
+        class="btn"
         onClick={() => store.stepInstructions(1)}
         disabled={!store.isPaused()}
         title={STR.instructionTrace.stepTooltip}
@@ -101,7 +102,13 @@ const Header: Component = () => {
         aria-label={STR.instructionTrace.stepCountLabel}
         size={4}
       />
-      <button type="button" onClick={onStepN} disabled={!store.isPaused()}>
+      <button
+        type="button"
+        class="btn"
+        onClick={onStepN}
+        disabled={!store.isPaused()}
+        title={STR.instructionTrace.stepNTooltip}
+      >
         {STR.instructionTrace.stepN}
       </button>
       <Show when={detached()}>
@@ -117,7 +124,7 @@ const Header: Component = () => {
             </span>
             <button
               type="button"
-              class="itrace-snap"
+              class="btn itrace-snap"
               onClick={() => store.snapInstructionTraceCursorToLive()}
               title={STR.instructionTrace.snapToLiveTooltip}
             >

@@ -83,6 +83,7 @@ const Header: Component = () => {
     <div class="hwt-header-controls">
       <button
         type="button"
+        class="btn"
         onClick={() => store.stepHC(1)}
         disabled={!store.isPaused()}
         title={STR.hwTrace.stepHcTooltip}
@@ -100,6 +101,7 @@ const Header: Component = () => {
       />
       <button
         type="button"
+        class="btn"
         onClick={onStepHcN}
         disabled={!store.isPaused()}
         title={STR.hwTrace.stepNHcTooltip}
@@ -108,6 +110,7 @@ const Header: Component = () => {
       </button>
       <button
         type="button"
+        class="btn"
         onClick={() => store.zeroHC()}
         disabled={!store.isPaused()}
         title={STR.hwTrace.zeroHcTooltip}
@@ -140,7 +143,7 @@ const Header: Component = () => {
             </span>
             <button
               type="button"
-              class="hwt-snap"
+              class="btn hwt-snap"
               onClick={() => store.snapHwTraceCursorToLive()}
               title={STR.hwTrace.snapToLiveTooltip}
             >

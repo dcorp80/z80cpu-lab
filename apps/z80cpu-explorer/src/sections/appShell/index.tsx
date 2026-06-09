@@ -16,15 +16,23 @@ const SECTION_ID = "appShell";
 const Header: Component = () => {
   const store = useStore();
   return (
-    <button
-      type="button"
-      class="appshell-coldboot"
-      onClick={() => store.coldBoot()}
-      disabled={!store.isPaused()}
-      title={STR.appShell.coldBootTooltip}
-    >
-      {STR.appShell.coldBoot}
-    </button>
+    <>
+      <span
+        class="appshell-version"
+        title={STR.appShell.versionTooltip(__APP_VERSION__, __BUILD_SHA__)}
+      >
+        {STR.appShell.version(__APP_VERSION__, __BUILD_SHA__)}
+      </span>
+      <button
+        type="button"
+        class="btn btn-danger appshell-coldboot"
+        onClick={() => store.coldBoot()}
+        disabled={!store.isPaused()}
+        title={STR.appShell.coldBootTooltip}
+      >
+        {STR.appShell.coldBoot}
+      </button>
+    </>
   );
 };
 
@@ -68,7 +76,7 @@ const Body: Component = () => {
         <div class="appshell-actions">
           <button
             type="button"
-            class="appshell-save"
+            class="btn btn-accent appshell-save"
             onClick={onSave}
             disabled={!store.isPaused()}
             title={STR.appShell.saveTooltip}
@@ -77,7 +85,7 @@ const Body: Component = () => {
           </button>
           <button
             type="button"
-            class="appshell-discard"
+            class="btn btn-danger appshell-discard"
             onClick={onDiscard}
             title={STR.appShell.discardTooltip}
           >
