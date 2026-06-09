@@ -15,13 +15,12 @@
 // Input pins (M8b): the bus owns the authoritative pin state. Level pins
 // (`nINT`/`nRESET`/`nBUSRQ`/`nWAIT`) and `nNMI` are written via
 // `setInputPin`; `resolve()` (preEdge) applies them to `cpu.bus` and, for
-// `nNMI`, calls `cpu.nmi()` while asserted. The bus itself treats nNMI
-// as level-asserted: `cpu.ctl.nmiAck` makes `cpu.nmi()` idempotent
-// within one NMI service, but once a service ends `nmiAck` clears and a
-// still-asserted nNMI would re-fire. The 1-HC-pulse UX comes from
-// boot.tsx's postEdge wrapper, which auto-clears nNMI back to 1 after
-// each record ([[feedback-nmi-pulse-semantics]]) — that's the layer that
-// turns the checkbox into a momentary trigger.
+// `nNMI`, fires `cpu.nmi()` on the 1→0 transition (edge-triggered on the
+// CPU side). Holding `nNMI` low across many edges fires once, not once-
+// per-service. boot.tsx's postEdge auto-clears `nNMI` back to 1 after
+// recording so the checkbox UX is momentary ([[feedback-nmi-pulse-
+// semantics]]), but that wrapper is now a UX detail rather than a
+// correctness requirement — the bus is intrinsically safe on its own.
 
 import type { Z80Cpu } from "@dcorp80/z80cpu";
 import type { BusConfig } from "../config/defaults.ts";
@@ -90,12 +89,12 @@ export interface Bus64k {
   lastIoWrite(): BusAccessRecord | null;
   /**
    * Read the current level of a CPU input pin (REQ §6.4 — M8b). All five
-   * pins default to deasserted (1, active-low). `nNMI` is treated as a
-   * level here even though the CPU exposes it as an edge-triggered
-   * method: while `nNMI === 0`, `resolve()` calls `cpu.nmi()` each edge.
-   * The user-visible 1-HC-pulse semantics live one layer up — boot.tsx's
-   * postEdge auto-clears nNMI after recording ([[feedback-nmi-pulse-
-   * semantics]]); the bus alone would keep re-firing across services.
+   * pins default to deasserted (1, active-low). `nNMI` is held as a
+   * level here but translated to an edge on the way to the CPU —
+   * `resolve()` calls `cpu.nmi()` once on the 1→0 transition, so
+   * leaving `nNMI` low across edges fires exactly once. The user-visible
+   * 1-HC-pulse appearance comes from boot.tsx's postEdge auto-clear
+   * ([[feedback-nmi-pulse-semantics]]).
    */
   getInputPin(name: InputPinName): 0 | 1;
   /** Update an input-pin level. Value is masked to 0|1 at the boundary. */
@@ -141,6 +140,13 @@ export function makeBus64k(cpu: Z80Cpu, config: BusConfig): Bus64k {
     nBUSRQ: 1,
     nWAIT: 1,
   };
+  // Previous-edge nNMI level for edge-detection. The CPU's nmi() is
+  // edge-triggered; firing it every edge while held low would re-arm
+  // nmiFf after each service completes (nmiAck clears between services)
+  // and peg the CPU in an NMI loop. We translate the UI's level pin to
+  // an edge here so the bus is intrinsically safe regardless of whether
+  // an external pulse-clear (boot.tsx postEdge) is wired up.
+  let prevNmiLevel: 0 | 1 = 1;
 
   const resolve = () => {
     const { nM1, nMREQ, nIORQ, nRD, nWR, addr, data } = cpu.bus;
@@ -188,14 +194,15 @@ export function makeBus64k(cpu: Z80Cpu, config: BusConfig): Bus64k {
       }
     }
     // Apply input pins. cpu.bus only carries level pins (nINT/nRESET/
-    // nBUSRQ/nWAIT); nNMI is edge-triggered on the CPU side so we call
-    // cpu.nmi() while asserted (cpu.ctl.nmiAck makes the repeat idempotent
-    // within one NMI service).
+    // nBUSRQ/nWAIT); nNMI is edge-triggered on the CPU side so we fire
+    // cpu.nmi() exactly on the 1→0 transition. Holding nNMI low across
+    // many edges fires the CPU once, not once-per-service.
     cpu.bus.nINT = inputPins.nINT;
     cpu.bus.nRESET = inputPins.nRESET;
     cpu.bus.nBUSRQ = inputPins.nBUSRQ;
     cpu.bus.nWAIT = inputPins.nWAIT;
-    if (inputPins.nNMI === 0) cpu.nmi();
+    if (inputPins.nNMI === 0 && prevNmiLevel === 1) cpu.nmi();
+    prevNmiLevel = inputPins.nNMI;
   };
   return {
     mem,

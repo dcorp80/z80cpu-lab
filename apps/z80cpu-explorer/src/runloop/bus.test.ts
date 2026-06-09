@@ -409,5 +409,39 @@ describe("makeBus64k", () => {
       bus.resolve(); // nNMI default 1, should not set nmiFf
       expect(cpu.ctl.nmiFf).toBe(false);
     });
+
+    it("nNMI fires cpu.nmi() once per 1→0 transition, not per edge", () => {
+      // Edge-trigger semantics: holding the pin low across many
+      // resolve() calls must not re-arm nmiFf after each service ends
+      // (nmiAck clears between services, which would otherwise let a
+      // still-low nNMI peg the CPU in an NMI loop).
+      const { cpu, bus } = freshBus();
+      bus.setInputPin("nNMI", 0);
+      bus.resolve();
+      expect(cpu.ctl.nmiFf).toBe(true);
+      // Simulate the CPU finishing one NMI service: clear the flip-flop
+      // and the ack the same way the sequencer does. A level-asserted
+      // implementation would re-set nmiFf on the next resolve(); the
+      // edge-detecting one must NOT.
+      cpu.ctl.nmiFf = false;
+      cpu.ctl.nmiAck = false;
+      bus.resolve();
+      expect(cpu.ctl.nmiFf).toBe(false);
+    });
+
+    it("nNMI re-arms on a fresh 1→0 transition after a deassert", () => {
+      const { cpu, bus } = freshBus();
+      bus.setInputPin("nNMI", 0);
+      bus.resolve();
+      cpu.ctl.nmiFf = false;
+      cpu.ctl.nmiAck = false;
+      // Deassert and re-assert — the bus should treat this as a new
+      // falling edge and fire cpu.nmi() again.
+      bus.setInputPin("nNMI", 1);
+      bus.resolve();
+      bus.setInputPin("nNMI", 0);
+      bus.resolve();
+      expect(cpu.ctl.nmiFf).toBe(true);
+    });
   });
 });
