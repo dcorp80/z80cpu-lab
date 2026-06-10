@@ -68,6 +68,15 @@ export interface Bus64k {
   /** Fixed at construction; mirrors `BusConfig.splitIo`. */
   splitIo: boolean;
   /**
+   * Fill byte applied to every mem cell at construction; mirrors
+   * `BusConfig.memInit`. Exposed so the App-shell can show the live
+   * value next to its pending-edit input, with the same fallback
+   * pattern as `splitIo` (REQ §11 staging).
+   */
+  memInit: number;
+  /** Fill byte applied to every IO cell at construction; mirrors `BusConfig.ioInit`. */
+  ioInit: number;
+  /**
    * Write `value` into all 256 high-byte aliases of `port` in `ioRead`
    * (`ioRead[(hi<<8) | port] = value` for hi in 0..255). Used by the
    * IO section's 8-bit view (REQ §6.7) so the user can seed an
@@ -209,6 +218,8 @@ export function makeBus64k(cpu: Z80Cpu, config: BusConfig): Bus64k {
     ioRead,
     ioWrite,
     splitIo,
+    memInit,
+    ioInit,
     resolve,
     broadcastIoLowByte(port, value) {
       const p = port & 0xff;

@@ -14,6 +14,8 @@ export interface StubBus {
   ioRead: Uint8Array;
   ioWrite: Uint8Array | null;
   splitIo: boolean;
+  memInit: number;
+  ioInit: number;
   intVector(): number;
   setIntVector(byte: number): void;
   getInputPin(name: InputPinName): 0 | 1;
@@ -56,6 +58,8 @@ export function makeStubBus(opts: StubBusOptions = {}): StubBus {
     ioRead,
     ioWrite,
     splitIo,
+    memInit: 0xff,
+    ioInit: 0xff,
     intVector: () => v,
     setIntVector: (b: number) => {
       v = b & 0xff;

@@ -85,6 +85,14 @@ export const DEFAULT_BUS_CONFIG: BusConfig = {
   splitIo: true,
 };
 
+/** Type-guard for a persisted byte (0..0xFF integer). Used to validate
+ *  `BusConfig`-shaped values pulled from the storage backend before they
+ *  can drive bus construction. Persisted JSON can carry anything from a
+ *  corrupted save or an older schema — anything that fails this check
+ *  takes the `DEFAULT_BUS_CONFIG` fallback at the call site. */
+export const isPersistedByte = (v: unknown): v is number =>
+  typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 0xff;
+
 // ── Instruction trace ring ────────────────────────────────────────
 
 /**

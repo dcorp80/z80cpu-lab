@@ -5,8 +5,9 @@ import type {
   UiState,
 } from "./types.ts";
 
-// In-memory StorageBackend. Default for tests and the milestone-1 boot path;
-// IndexedDB takes over in milestone 10.
+// In-memory StorageBackend. Used by tests directly and as the boot
+// fallback when IndexedDB is unavailable (see `openDefaultBackend` in
+// `./indexeddb.ts`). State lives only for the lifetime of the instance.
 
 export class MemoryBackend implements StorageBackend {
   private ui: UiState | null = null;

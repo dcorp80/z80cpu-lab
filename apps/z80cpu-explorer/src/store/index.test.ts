@@ -682,7 +682,7 @@ describe("createAppStore", () => {
       expect(store.splitIo()).toBe(false);
     });
 
-    it("setSplitIo persists into the io section config", async () => {
+    it("commitReloadSettings persists pending splitIo into the io section config", async () => {
       const { store, backend } = await freshStore();
       // Hijack window.location.reload so the test doesn't try to navigate.
       const origReload = window.location.reload;
@@ -694,15 +694,49 @@ describe("createAppStore", () => {
         },
       });
       try {
-        store.setSplitIo(true);
+        store.setPendingSplitIo(true);
+        store.commitReloadSettings();
         expect(store.splitIo()).toBe(true);
-        // saveUiState is awaited inside setSplitIo before the reload — wait
-        // a microtask tick so the persist resolves.
+        // saveUiState is awaited inside commitReloadSettings before the
+        // reload — wait a couple of microtask ticks so the persist resolves.
         await Promise.resolve();
         await Promise.resolve();
         const persisted = await backend.loadUiState();
         const ioSec = persisted?.sections.find((s) => s.id === "io");
         expect(ioSec?.config.splitIo).toBe(true);
+        expect(reloadCalls).toBe(1);
+      } finally {
+        Object.defineProperty(window.location, "reload", {
+          configurable: true,
+          value: origReload,
+        });
+      }
+    });
+
+    it("commitReloadSettings persists pending memInit/ioInit alongside splitIo", async () => {
+      const { store, backend } = await freshStore();
+      const origReload = window.location.reload;
+      let reloadCalls = 0;
+      Object.defineProperty(window.location, "reload", {
+        configurable: true,
+        value: () => {
+          reloadCalls++;
+        },
+      });
+      try {
+        store.setPendingMemInit(0x00);
+        store.setPendingIoInit(0x55);
+        store.commitReloadSettings();
+        // Live mirrors flip immediately, before reload.
+        expect(store.memInit()).toBe(0x00);
+        expect(store.ioInit()).toBe(0x55);
+        await Promise.resolve();
+        await Promise.resolve();
+        const persisted = await backend.loadUiState();
+        const memSec = persisted?.sections.find((s) => s.id === "memory");
+        const ioSec = persisted?.sections.find((s) => s.id === "io");
+        expect(memSec?.config.memInit).toBe(0x00);
+        expect(ioSec?.config.ioInit).toBe(0x55);
         expect(reloadCalls).toBe(1);
       } finally {
         Object.defineProperty(window.location, "reload", {

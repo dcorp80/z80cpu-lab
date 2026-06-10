@@ -198,9 +198,15 @@ describe("appShell — Split RD/WR dirty/save/discard (body)", () => {
     expect(harness.container.querySelector(".appshell-actions")).toBeNull();
   });
 
-  it("Save calls setSplitIo with the pending value (reload-triggering happens inside setSplitIo)", async () => {
+  it("Save calls commitReloadSettings (reload-triggering happens inside)", async () => {
     harness = await mount("body");
-    const spy = vi.spyOn(harness.store, "setSplitIo");
+    // Stub the real implementation so the click doesn't trigger a
+    // backend persist + `window.location.reload()` mid-test. We're only
+    // asserting Save's wiring here; persist + reload behavior is covered
+    // by the store-level tests in `store/index.test.ts`.
+    const spy = vi
+      .spyOn(harness.store, "commitReloadSettings")
+      .mockImplementation(() => {});
     const cb = harness.container.querySelector<HTMLInputElement>(
       ".appshell-split-checkbox",
     );
@@ -209,7 +215,73 @@ describe("appShell — Split RD/WR dirty/save/discard (body)", () => {
       harness.container.querySelector<HTMLButtonElement>(".appshell-save");
     save?.click();
     expect(spy).toHaveBeenCalledTimes(1);
-    expect(spy).toHaveBeenCalledWith(true);
+  });
+});
+
+describe("appShell — reload-required fill bytes (body)", () => {
+  it("Memory and IO fill inputs render with the current live bytes (default FF)", async () => {
+    harness = await mount("body");
+    const memInput =
+      harness.container.querySelector<HTMLInputElement>("#appshell-mem-init");
+    const ioInput =
+      harness.container.querySelector<HTMLInputElement>("#appshell-io-init");
+    if (!memInput || !ioInput) throw new Error("fill inputs");
+    // Stub bus's default fill is 0xFF; rendered as "FF" via the 2-pad
+    // hex formatter.
+    expect(memInput.value.toUpperCase()).toBe("FF");
+    expect(ioInput.value.toUpperCase()).toBe("FF");
+    // Live + pending start equal — nothing dirty, no actions row.
+    expect(harness.store.memInitDirty()).toBe(false);
+    expect(harness.store.ioInitDirty()).toBe(false);
+    expect(harness.store.reloadSettingsDirty()).toBe(false);
+    expect(harness.container.querySelector(".appshell-actions")).toBeNull();
+  });
+
+  it("editing Memory fill stages pendingMemInit without touching live (mirrors splitIo)", async () => {
+    harness = await mount("body");
+    const memInput =
+      harness.container.querySelector<HTMLInputElement>("#appshell-mem-init");
+    if (!memInput) throw new Error("mem-init input");
+    // Type a new value and Enter to commit through HexAddrInput.
+    memInput.focus();
+    fireEvent.input(memInput, { target: { value: "00" } });
+    fireEvent.keyDown(memInput, { key: "Enter" });
+    expect(harness.store.pendingMemInit()).toBe(0x00);
+    expect(harness.store.memInit()).toBe(0xff); // live still default
+    expect(harness.store.memInitDirty()).toBe(true);
+    expect(harness.store.reloadSettingsDirty()).toBe(true);
+    // The actions row appears once any reload-required setting is dirty.
+    expect(harness.container.querySelector(".appshell-actions")).not.toBeNull();
+  });
+
+  it("Discard reverts every pending (mem + IO + split) in one click", async () => {
+    harness = await mount("body");
+    harness.store.setPendingMemInit(0x00);
+    harness.store.setPendingIoInit(0x55);
+    harness.store.setPendingSplitIo(!harness.store.splitIo());
+    await flush();
+    expect(harness.store.reloadSettingsDirty()).toBe(true);
+    const discard =
+      harness.container.querySelector<HTMLButtonElement>(".appshell-discard");
+    discard?.click();
+    expect(harness.store.pendingMemInit()).toBe(harness.store.memInit());
+    expect(harness.store.pendingIoInit()).toBe(harness.store.ioInit());
+    expect(harness.store.pendingSplitIo()).toBe(harness.store.splitIo());
+    expect(harness.store.reloadSettingsDirty()).toBe(false);
+  });
+
+  it("Save with mixed dirty settings calls commitReloadSettings once", async () => {
+    harness = await mount("body");
+    const spy = vi
+      .spyOn(harness.store, "commitReloadSettings")
+      .mockImplementation(() => {});
+    harness.store.setPendingMemInit(0x00);
+    harness.store.setPendingIoInit(0x55);
+    await flush();
+    const save =
+      harness.container.querySelector<HTMLButtonElement>(".appshell-save");
+    save?.click();
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -278,6 +350,30 @@ describe("appShell — fold-lock (frame)", () => {
       harness.container.querySelector<HTMLButtonElement>(".appshell-discard");
     discard?.click();
     await flush();
+    expect(
+      harness.store.sections.find((s) => s.id === "appShell")?.folded,
+    ).toBe(true);
+  });
+
+  it("after Save the section auto-folds back to collapsed (mirrors Discard)", async () => {
+    harness = await mount("frame");
+    // Stub commitReloadSettings so the Save click doesn't actually
+    // trigger a page reload (which would also bypass the fold assertion).
+    vi.spyOn(harness.store, "commitReloadSettings").mockImplementation(
+      () => {},
+    );
+    // Unfold (default is folded), stage a dirty value, click Save.
+    harness.store.toggleSectionFold("appShell");
+    await flush();
+    harness.store.setPendingSplitIo(true);
+    await flush();
+    const save =
+      harness.container.querySelector<HTMLButtonElement>(".appshell-save");
+    save?.click();
+    await flush();
+    // Folded again — without this, the persisted UiState would carry
+    // folded=false from the user's expand, and reload would restore the
+    // section open even though they're done with it.
     expect(
       harness.store.sections.find((s) => s.id === "appShell")?.folded,
     ).toBe(true);

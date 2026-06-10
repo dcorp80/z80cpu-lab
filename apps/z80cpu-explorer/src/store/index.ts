@@ -15,6 +15,7 @@ import {
   DEFAULT_MEMORY_BYTES_PER_ROW,
   DEFAULT_UI_CONFIG,
   IO_BYTES_PER_ROW_OPTIONS,
+  isPersistedByte,
   MEMORY_BYTES_PER_ROW_OPTIONS,
   type UiConfig,
 } from "../config/defaults.ts";
@@ -436,31 +437,50 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     return v === "8bit" ? "8bit" : "16bit";
   };
 
-  // IO split mode (REQ §11). Persisted via the IO section's config; the
-  // bus's `splitIo` is fixed at construction (boot reads the same key
-  // and passes it to `makeBus64k`). When the config is present, this
-  // accessor returns it — so a fresh `setSplitIo` updates the checkbox
-  // immediately, before the reload completes. When absent (fresh boot
-  // with no prior persist) we fall back to `bus.splitIo`, the runtime
-  // authority — this is what lets `DEFAULT_BUS_CONFIG.splitIo: true`
-  // light up the UI without needing a stored config to back it.
-  // Malformed persisted values (non-boolean) also take the fallback.
+  // Reload-required settings (REQ §11). All three are baked into bus
+  // construction, so the only way to apply a change is a page reload.
+  // Each lives in the natural-owner section's config: `splitIo`/`ioInit`
+  // on `io`, `memInit` on `memory`. Accessors fall back to the bus's
+  // runtime value when nothing is persisted — that's how shipped
+  // `DEFAULT_BUS_CONFIG` defaults light up the UI on fresh boot without
+  // a stored config to back them. Malformed persisted values (wrong
+  // type / out of range) also take the fallback.
   const splitIo: Accessor<boolean> = () => {
     const s = sections.find((sec) => sec.id === "io");
     const v = s?.config.splitIo;
     return typeof v === "boolean" ? v : bus.splitIo;
   };
+  const memInit: Accessor<number> = () => {
+    const s = sections.find((sec) => sec.id === "memory");
+    const v = s?.config.memInit;
+    return isPersistedByte(v) ? v : bus.memInit;
+  };
+  const ioInit: Accessor<number> = () => {
+    const s = sections.find((sec) => sec.id === "io");
+    const v = s?.config.ioInit;
+    return isPersistedByte(v) ? v : bus.ioInit;
+  };
 
-  // App-shell pending value for Split RD/WR (REQ §11). The checkbox in
-  // the App-shell body binds to this, NOT to `splitIo()` directly —
-  // toggling stages a value, Save flushes via `setSplitIo` (which
-  // persists + reloads), Discard reverts to live. `splitIoDirty` drives
-  // the section's fold-lock and Save/Discard visibility. Initialized
-  // from `splitIo()`; the live value is the source of truth on boot,
-  // every subsequent change is a deliberate user edit.
+  // App-shell pending values (REQ §11 staging). Inputs in the App-shell
+  // body bind to these, NOT to the live accessors directly — editing
+  // stages a value, Save flushes via `commitReloadSettings` (persist +
+  // reload), Discard reverts to live. `reloadSettingsDirty` drives the
+  // section's fold-lock and Save/Discard visibility. Each pending signal
+  // is initialized from its live accessor on boot.
   const [pendingSplitIo, setPendingSplitIo] = createSignal(splitIo());
+  const [pendingMemInit, setPendingMemInit] = createSignal(memInit());
+  const [pendingIoInit, setPendingIoInit] = createSignal(ioInit());
   const splitIoDirty: Accessor<boolean> = createMemo(
     () => pendingSplitIo() !== splitIo(),
+  );
+  const memInitDirty: Accessor<boolean> = createMemo(
+    () => pendingMemInit() !== memInit(),
+  );
+  const ioInitDirty: Accessor<boolean> = createMemo(
+    () => pendingIoInit() !== ioInit(),
+  );
+  const reloadSettingsDirty: Accessor<boolean> = createMemo(
+    () => splitIoDirty() || memInitDirty() || ioInitDirty(),
   );
   function assertBytesPerRow(
     n: number,
@@ -1252,21 +1272,56 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     pendingSplitIo,
     setPendingSplitIo: (on: boolean) => setPendingSplitIo(on),
     splitIoDirty,
-    setSplitIo(on: boolean) {
-      // Paused-only — toggling the IO layout mid-run could leave OUT
-      // cycles split across modes. We bypass the usual updateSectionConfig
-      // path (which fires its own fire-and-forget persistUi) because we
-      // need a single save whose resolution gates the page reload, plus
-      // a catch hook that rolls back the in-memory flip if persistence
-      // fails — otherwise the UI would render the new mode while the
-      // bus (unchanged until reload) stays in the old one.
+    memInit,
+    pendingMemInit,
+    setPendingMemInit: (b: number) => setPendingMemInit(b & 0xff),
+    memInitDirty,
+    ioInit,
+    pendingIoInit,
+    setPendingIoInit: (b: number) => setPendingIoInit(b & 0xff),
+    ioInitDirty,
+    reloadSettingsDirty,
+    commitReloadSettings() {
+      // Paused-only — these settings reshape the bus at construction
+      // (allocation + fill), so they can only land on a fresh boot.
+      // We bypass the usual updateSectionConfig path (which fires its
+      // own fire-and-forget persistUi) because we need a single save
+      // whose resolution gates the page reload, plus a catch hook that
+      // rolls back the in-memory flip if persistence fails — otherwise
+      // the UI would render the new values while the bus (unchanged
+      // until reload) stays on the old ones.
       if (!isPaused()) return;
-      const v = on === true;
-      const prev = splitIo();
-      if (v === prev) return;
-      const idx = sections.findIndex((s) => s.id === "io");
-      if (idx < 0) return;
-      setSections(idx, "config", (cfg) => ({ ...cfg, splitIo: v }));
+      const nextSplitIo = pendingSplitIo();
+      const nextMemInit = pendingMemInit() & 0xff;
+      const nextIoInit = pendingIoInit() & 0xff;
+      const prevSplitIo = splitIo();
+      const prevMemInit = memInit();
+      const prevIoInit = ioInit();
+      const memChanged = nextMemInit !== prevMemInit;
+      const splitChanged = nextSplitIo !== prevSplitIo;
+      const ioInitChanged = nextIoInit !== prevIoInit;
+      // Nothing to do if everything's clean — guard against an empty
+      // Save click (the UI shouldn't render the button in that case,
+      // but defense-in-depth keeps callers from triggering a no-op
+      // reload).
+      if (!memChanged && !splitChanged && !ioInitChanged) return;
+      const memIdx = sections.findIndex((s) => s.id === "memory");
+      const ioIdx = sections.findIndex((s) => s.id === "io");
+      if (memIdx < 0 || ioIdx < 0) return;
+      if (memChanged) {
+        setSections(memIdx, "config", (cfg) => ({
+          ...cfg,
+          memInit: nextMemInit,
+        }));
+      }
+      if (splitChanged || ioInitChanged) {
+        setSections(ioIdx, "config", (cfg) => {
+          const next = { ...cfg };
+          if (splitChanged) next.splitIo = nextSplitIo;
+          if (ioInitChanged) next.ioInit = nextIoInit;
+          return next;
+        });
+      }
       const state: UiState = {
         sections: unwrap(sections),
         fileOrder: files.map((f) => f.id),
@@ -1274,23 +1329,37 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       };
       backend.saveUiState(state).then(
         () => {
-          // Page reload is the allocation event: on boot, the bus reads
-          // the persisted `splitIo` flag and either skips or allocates
-          // the WR plane. Matches the existing Reinit semantics in
-          // sections/breakpoints/index.tsx (REQ §7.3).
+          // Page reload is the allocation/fill event: on boot, the bus
+          // reads these flags and rebuilds. Matches the Reinit semantics
+          // in sections/breakpoints/index.tsx (REQ §7.3).
           window.location.reload();
         },
         (err: unknown) => {
-          // Roll the UI back so it matches the bus that the user still
-          // has. Without this the checkbox would stay flipped while
-          // OUT cycles continue to land in the original plane. Also
-          // resync pendingSplitIo — otherwise the App-shell would lock
-          // the user with a checkbox stuck on the failed target value
-          // and no way to know the persist failed (REQ §11 staging
+          // Roll back exactly the fields we wrote, plus every staging
+          // signal — otherwise the App-shell would lock the user with a
+          // dirty staging form that can't be saved (REQ §11 staging
           // dirty-lock).
-          console.error("setSplitIo: persistence failed; reverting", err);
-          setSections(idx, "config", (cfg) => ({ ...cfg, splitIo: prev }));
-          setPendingSplitIo(prev);
+          console.error(
+            "commitReloadSettings: persistence failed; reverting",
+            err,
+          );
+          if (memChanged) {
+            setSections(memIdx, "config", (cfg) => ({
+              ...cfg,
+              memInit: prevMemInit,
+            }));
+          }
+          if (splitChanged || ioInitChanged) {
+            setSections(ioIdx, "config", (cfg) => {
+              const next = { ...cfg };
+              if (splitChanged) next.splitIo = prevSplitIo;
+              if (ioInitChanged) next.ioInit = prevIoInit;
+              return next;
+            });
+          }
+          setPendingSplitIo(prevSplitIo);
+          setPendingMemInit(prevMemInit);
+          setPendingIoInit(prevIoInit);
         },
       );
     },

@@ -13,6 +13,7 @@ import {
   DEFAULT_BUS_CONFIG,
   DEFAULT_HW_TRACE_CONFIG,
   DEFAULT_LOOP_CONFIG,
+  isPersistedByte,
 } from "./config/defaults.ts";
 import { registerDefaultHotkeys } from "./hotkeys/defaults.ts";
 import { installHotkeyDispatcher } from "./hotkeys/dispatch.ts";
@@ -20,12 +21,16 @@ import { createHotkeyRegistry } from "./hotkeys/registry.ts";
 import { makeBus64k } from "./runloop/bus.ts";
 import { HwTraceBuffer } from "./runloop/hwTrace.ts";
 import { createRunLoop } from "./runloop/loop.ts";
-import { MemoryBackend } from "./storage/memory.ts";
+import { openDefaultBackend } from "./storage/indexeddb.ts";
 import type { StorageBackend } from "./storage/types.ts";
 import { createAppStore, type Store, StoreProvider } from "./store/index.ts";
 
 export interface BootOptions {
-  /** Override the storage backend; defaults to a fresh `MemoryBackend`. */
+  /**
+   * Override the storage backend; defaults to `openDefaultBackend()`
+   * which returns `IndexedDbBackend` (with `MemoryBackend` fallback if
+   * IDB is unavailable). Tests inject `MemoryBackend` directly.
+   */
   backend?: StorageBackend;
 }
 
@@ -38,26 +43,36 @@ export interface BootedApp {
 }
 
 export async function bootApp(opts: BootOptions = {}): Promise<BootedApp> {
-  const backend = opts.backend ?? new MemoryBackend();
+  const backend = opts.backend ?? (await openDefaultBackend());
 
-  // Persistence is read once up-front so the bus's `splitIo` allocation
-  // (REQ §11) matches the user's last toggle, then handed to the store
-  // via `preloadedUi` so `createAppStore` doesn't issue a second load.
-  // When nothing is persisted (fresh boot, MemoryBackend, corrupt value),
-  // fall back to the shipped `DEFAULT_BUS_CONFIG.splitIo` — flipping
-  // that default is the intended escape hatch for testing the split
-  // mode before the IndexedDB backend lands (M10).
+  // Persistence is read once up-front so the bus's construction
+  // (allocation + fill bytes per REQ §11 staging) matches the user's
+  // last committed Save, then handed to the store via `preloadedUi` so
+  // `createAppStore` doesn't issue a second load. When nothing is
+  // persisted (fresh boot, IDB-unavailable fallback, corrupt value),
+  // each field falls back to its shipped `DEFAULT_BUS_CONFIG` value.
   const preloadedUi = await backend.loadUiState();
-  const persistedSplitIo = preloadedUi?.sections?.find((s) => s.id === "io")
-    ?.config?.splitIo;
+  const ioCfg = preloadedUi?.sections?.find((s) => s.id === "io")?.config;
+  const memCfg = preloadedUi?.sections?.find((s) => s.id === "memory")?.config;
   const splitIo =
-    typeof persistedSplitIo === "boolean"
-      ? persistedSplitIo
+    typeof ioCfg?.splitIo === "boolean"
+      ? ioCfg.splitIo
       : DEFAULT_BUS_CONFIG.splitIo;
+  const memInit = isPersistedByte(memCfg?.memInit)
+    ? memCfg.memInit
+    : DEFAULT_BUS_CONFIG.memInit;
+  const ioInit = isPersistedByte(ioCfg?.ioInit)
+    ? ioCfg.ioInit
+    : DEFAULT_BUS_CONFIG.ioInit;
 
   const cpu = new Z80Cpu();
   const dbg = new Z80DebugContext(cpu);
-  const bus = makeBus64k(cpu, { ...DEFAULT_BUS_CONFIG, splitIo });
+  const bus = makeBus64k(cpu, {
+    ...DEFAULT_BUS_CONFIG,
+    splitIo,
+    memInit,
+    ioInit,
+  });
   const hwTrace = new HwTraceBuffer(DEFAULT_HW_TRACE_CONFIG);
 
   const preEdge = (): void => {

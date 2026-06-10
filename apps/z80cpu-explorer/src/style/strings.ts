@@ -23,18 +23,25 @@ export const STR = {
     // Header is the app name itself (REQ §11) — pulled from STR.app.title
     // so the name lives in exactly one place.
     version: (v: string, sha: string) => `v${v} (${sha})`,
-    versionTooltip: (v: string, sha: string) =>
-      `Version ${v} · commit ${sha}`,
+    versionTooltip: (v: string, sha: string) => `Version ${v} · commit ${sha}`,
     coldBoot: "Cold boot",
     coldBootTooltip:
       "Reload the page — fresh CPU, mem, IO; files / breakpoints / layout survive; autoload re-fires (Shift+R)",
-    splitLabel: "Split RD/WR",
+    memInitLabel: "Memory fill",
+    memInitAriaLabel: "Memory fill byte",
+    memInitTooltip:
+      "Byte every memory cell is filled with on cold boot (hex 00–FF). Saving reloads the page.",
+    ioInitLabel: "IO fill",
+    ioInitAriaLabel: "IO fill byte",
+    ioInitTooltip:
+      "Byte every IO cell is filled with on cold boot (hex 00–FF). Saving reloads the page.",
+    splitLabel: "Split IO RD/WR",
     splitAriaLabel: "Split IO read/write spaces",
     splitTooltip:
       "Split IO into two 64K planes: CPU IN reads RD (user-editable), CPU OUT lands in WR (read-only). Saving reloads the page.",
     save: "Save",
     saveTooltip:
-      "Persist changes and Cold boot — required for the bus to re-allocate planes",
+      "Persist changes and Cold boot — required for the bus to re-allocate / refill",
     discard: "Discard",
     discardTooltip: "Revert to the values currently in effect",
   },

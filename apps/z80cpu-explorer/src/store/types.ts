@@ -270,33 +270,39 @@ export interface Store {
   setIoViewMode(mode: "16bit" | "8bit"): void;
 
   /**
-   * IO split mode (REQ §11). When true the IO space is split into two
-   * 64K planes: CPU IN cycles read the RD plane (user-editable,
-   * pre-loaded), OUT cycles land in the WR plane (passive record,
-   * read-only to the user). When false a single plane services both
-   * — the original behavior. Persisted via the IO section's config;
-   * when the persisted value is absent or malformed this falls back to
-   * the bus's runtime authority (`bus.splitIo`, fixed at construction),
-   * so the UI always matches the actual IO-plane allocation.
+   * Reload-required settings (REQ §11). Each is baked into bus
+   * construction (`splitIo`/`memInit`/`ioInit` decide allocation and
+   * fill bytes), so changes only land on a fresh page boot. Each lives
+   * in its natural-owner section's config (`io` for the IO pair,
+   * `memory` for `memInit`); the live accessors fall back to the bus's
+   * runtime authority when nothing is persisted or the persisted value
+   * is malformed.
    *
-   * Toggling is destructive (the bus's WR plane is allocated lazily
-   * at construction based on this flag) so `setSplitIo` persists and
-   * then reloads the page. Paused-only.
+   * App-shell pending values stage the next-boot values. The App-shell
+   * body's inputs bind to these, NOT the live accessors. Save calls
+   * `commitReloadSettings` (single atomic persist + reload across all
+   * three); Discard resets each pending back to its live value.
+   * `reloadSettingsDirty()` is the OR of the three per-setting dirty
+   * flags and drives the section's fold-lock + Save/Discard visibility.
+   * `commitReloadSettings` is paused-only.
    */
   readonly splitIo: Accessor<boolean>;
-  setSplitIo(on: boolean): void;
-  /**
-   * App-shell pending value for Split RD/WR (REQ §11). The App-shell
-   * checkbox stages here instead of writing through to `setSplitIo`
-   * directly. `splitIoDirty()` is `true` whenever this differs from
-   * `splitIo()` — the App-shell section uses it to drive its
-   * Save/Discard buttons and to lock the body fold while unsaved.
-   * Initialized from `splitIo()` on boot; Save calls `setSplitIo`,
-   * Discard resets back to `splitIo()`.
-   */
   readonly pendingSplitIo: Accessor<boolean>;
   setPendingSplitIo(on: boolean): void;
   readonly splitIoDirty: Accessor<boolean>;
+
+  readonly memInit: Accessor<number>;
+  readonly pendingMemInit: Accessor<number>;
+  setPendingMemInit(byte: number): void;
+  readonly memInitDirty: Accessor<boolean>;
+
+  readonly ioInit: Accessor<number>;
+  readonly pendingIoInit: Accessor<number>;
+  setPendingIoInit(byte: number): void;
+  readonly ioInitDirty: Accessor<boolean>;
+
+  readonly reloadSettingsDirty: Accessor<boolean>;
+  commitReloadSettings(): void;
 
   // ── input pins (REQ §6.4). The HW-trace per-row checkboxes call
   // `setInputPin`; the Interrupts section calls `setIntVector`.

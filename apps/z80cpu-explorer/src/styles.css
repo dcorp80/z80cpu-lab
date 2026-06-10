@@ -1214,6 +1214,23 @@ body {
   gap: 12px;
   padding: 8px 12px;
 }
+.appshell-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+}
+.appshell-row.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.appshell-row-label {
+  color: var(--muted);
+  font-size: 0.9em;
+}
+.appshell-byte-input {
+  font-family: var(--mono, monospace);
+}
 .appshell-split {
   display: inline-flex;
   align-items: center;
