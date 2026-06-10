@@ -120,12 +120,13 @@ let harness: Harness | undefined;
 afterEach(() => harness?.dispose());
 
 describe("instructionTrace section — folded summary", () => {
-  it("shows PC / status / insns on empty boot (no last-insn)", async () => {
+  it("shows PC / status / insns / capture on empty boot (no last-insn)", async () => {
     harness = await mount({ folded: true });
     const text = harness.container.textContent ?? "";
     expect(text).toContain("PC=0000");
     expect(text).toContain("paused");
     expect(text).toContain("0 insns");
+    expect(text).toContain(`capture: ${STR.instructionTrace.captureModeRing}`);
     expect(text).not.toContain("last:");
   });
 
@@ -146,6 +147,17 @@ describe("instructionTrace section — folded summary", () => {
     expect(text).toContain("last:");
     expect(text).toContain("LD A,B");
     expect(text).toContain("1 insns");
+    expect(text).toContain(`capture: ${STR.instructionTrace.captureModeRing}`);
+  });
+
+  it("flips the capture clause to 'off' when capture is disabled", async () => {
+    harness = await mount({ folded: true });
+    harness.store.setTraceRingMode("disabled");
+    const text = harness.container.textContent ?? "";
+    expect(text).toContain(
+      `capture: ${STR.instructionTrace.captureModeDisabled}`,
+    );
+    expect(text).not.toContain("last:");
   });
 });
 
@@ -321,6 +333,74 @@ describe("instructionTrace section — header step controls (REQ §6.3)", () => 
     expect(stepBtn.disabled).toBe(true);
     expect(stepNBtn.disabled).toBe(true);
     expect(h.container.querySelector(".itrace-snap")).toBeNull();
+  });
+});
+
+describe("instructionTrace section — capture toggle (REQ §11)", () => {
+  let h: Harness | undefined;
+  afterEach(() => h?.dispose());
+
+  it("checkbox flips traceRingMode; unchecking from a populated ring clears it", async () => {
+    h = await mount();
+    h.loop.emitInstruction(mkTrace({ startAddr: 0x100, bytes: [0x78] }));
+    h.loop.emitInstruction(mkTrace({ startAddr: 0x101, bytes: [0x79] }));
+    expect(h.store.traceRing.size()).toBe(2);
+    // Executed rows render under the default "ring" mode.
+    expect(
+      h.container.querySelectorAll(".itrace-row:not(.is-preview)").length,
+    ).toBe(2);
+
+    // The body slot doesn't include the header, so the section header
+    // checkbox lives in its own mount.
+    const headerHarness = await mountHeader();
+    try {
+      const cb = req(
+        headerHarness.container.querySelector<HTMLInputElement>(
+          `.itrace-capture-mode input[type=checkbox]`,
+        ),
+        "capture checkbox",
+      );
+      expect(cb.checked).toBe(true);
+      fireEvent.click(cb);
+      expect(headerHarness.store.traceRingMode()).toBe("disabled");
+    } finally {
+      headerHarness.dispose();
+    }
+  });
+
+  it("body shows the capture-off message in place of executed rows when disabled", async () => {
+    h = await mount();
+    h.loop.emitInstruction(mkTrace({ startAddr: 0x100, bytes: [0x78] }));
+    expect(
+      h.container.querySelectorAll(".itrace-row:not(.is-preview)").length,
+    ).toBe(1);
+    h.store.setTraceRingMode("disabled");
+    // After disable: rows gone, muted disabled string in their place.
+    expect(
+      h.container.querySelectorAll(".itrace-row:not(.is-preview)").length,
+    ).toBe(0);
+    expect(
+      h.container.querySelector(".itrace-executed")?.textContent,
+    ).toContain(STR.instructionTrace.executedDisabled);
+  });
+
+  it("checkbox disables while running (paused-only gate)", async () => {
+    const headerHarness = await mountHeader();
+    try {
+      const cb = req(
+        headerHarness.container.querySelector<HTMLInputElement>(
+          `.itrace-capture-mode input[type=checkbox]`,
+        ),
+        "capture checkbox",
+      );
+      // Paused at boot.
+      expect(cb.disabled).toBe(false);
+      headerHarness.store.run();
+      await flush();
+      expect(cb.disabled).toBe(true);
+    } finally {
+      headerHarness.dispose();
+    }
   });
 });
 

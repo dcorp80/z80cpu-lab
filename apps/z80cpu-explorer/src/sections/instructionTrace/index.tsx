@@ -111,6 +111,25 @@ const Header: Component = () => {
       >
         {STR.instructionTrace.stepN}
       </button>
+      <label
+        class="itrace-capture-mode"
+        title={STR.instructionTrace.captureToggleTooltip}
+      >
+        <input
+          type="checkbox"
+          aria-label={STR.instructionTrace.captureToggleAriaLabel}
+          checked={store.traceRingMode() === "ring"}
+          disabled={!store.isPaused()}
+          onChange={(e) =>
+            store.setTraceRingMode(
+              e.currentTarget.checked ? "ring" : "disabled",
+            )
+          }
+        />
+        <span class="itrace-capture-mode-label">
+          {STR.instructionTrace.captureToggleLabel}
+        </span>
+      </label>
       <Show when={detached()}>
         {(c) => (
           <>
@@ -157,18 +176,26 @@ const FoldedSummary: Component = () => {
     // Same rationale as the BP status line — use the throttled mirror
     // so the folded summary refreshes once per frame, not per insn.
     const insns = fmt(store.insnCountThrottled());
+    // Mirrors the HW-trace folded summary: "capture: ring/off" surfaces
+    // capture state when the section is folded, so the user can see at a
+    // glance that the ring stopped recording (REQ §11).
+    const capture =
+      store.traceRingMode() === "ring"
+        ? STR.instructionTrace.captureModeRing
+        : STR.instructionTrace.captureModeDisabled;
     const size = store.traceRing.size();
     if (size === 0) {
-      return STR.instructionTrace.foldedSummary(pc, status, insns);
+      return STR.instructionTrace.foldedSummary(pc, status, insns, capture);
     }
     const last = store.traceRing.at(size - 1);
     if (!last) {
-      return STR.instructionTrace.foldedSummary(pc, status, insns);
+      return STR.instructionTrace.foldedSummary(pc, status, insns, capture);
     }
     return STR.instructionTrace.foldedSummaryWithLast(
       pc,
       status,
       insns,
+      capture,
       getDisasm(last),
     );
   });
@@ -412,12 +439,21 @@ const Body: Component = () => {
         onScroll={onScroll}
       >
         <Show
-          when={records().length > 0}
+          when={store.traceRingMode() === "ring"}
           fallback={
-            <span class="muted">{STR.instructionTrace.emptyExecuted}</span>
+            <span class="muted">{STR.instructionTrace.executedDisabled}</span>
           }
         >
-          <Index each={records()}>{(rec) => <ExecutedRow rec={rec()} />}</Index>
+          <Show
+            when={records().length > 0}
+            fallback={
+              <span class="muted">{STR.instructionTrace.emptyExecuted}</span>
+            }
+          >
+            <Index each={records()}>
+              {(rec) => <ExecutedRow rec={rec()} />}
+            </Index>
+          </Show>
         </Show>
       </div>
       <div class="itrace-seam">

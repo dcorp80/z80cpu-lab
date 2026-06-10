@@ -204,25 +204,27 @@ describe("hwTrace section — header step / zero controls (REQ §6.4)", () => {
     expect(loop.lastCmd).toBe("zeroHC");
   });
 
-  it("Step / Zero buttons disable while running, capture toggle stays usable", async () => {
+  it("Step / Zero buttons AND capture toggle disable while running", async () => {
     const { container, store } = await open("header");
     const stepHcBtn = buttonByText(container, STR.hwTrace.stepHc);
     const stepNHcBtn = buttonByText(container, STR.hwTrace.stepNHc);
     const zeroBtn = buttonByText(container, STR.hwTrace.zeroHc);
+    const cb = container.querySelector<HTMLInputElement>(
+      ".hwt-capture-mode input[type=checkbox]",
+    );
     // Paused at boot — all enabled.
     expect(stepHcBtn.disabled).toBe(false);
     expect(stepNHcBtn.disabled).toBe(false);
     expect(zeroBtn.disabled).toBe(false);
+    expect(cb?.disabled).toBe(false);
     store.run();
     await flush();
     expect(stepHcBtn.disabled).toBe(true);
     expect(stepNHcBtn.disabled).toBe(true);
     expect(zeroBtn.disabled).toBe(true);
-    // Capture checkbox is never status-gated.
-    const cb = container.querySelector<HTMLInputElement>(
-      ".hwt-capture-mode input[type=checkbox]",
-    );
-    expect(cb?.disabled).toBeFalsy();
+    // Capture is paused-only too — toggling mid-run discards the live
+    // ring and would race the body's frozen records snapshot.
+    expect(cb?.disabled).toBe(true);
   });
 });
 

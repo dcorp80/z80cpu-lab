@@ -177,6 +177,15 @@ export interface Store {
   readonly traceRing: TraceRing;
   readonly traceRingVersion: Accessor<number>;
   readonly traceRingVersionThrottled: Accessor<number>;
+  /**
+   * Capture mode for the instruction trace ring (REQ §11). Mirrors the
+   * HW-trace toggle: `"ring"` pushes each completed instruction; `"disabled"`
+   * skips the push entirely. Disabling clears the ring (consistent with
+   * `setHwTraceMode`) — a save/export prompt will land here later.
+   * Defaults to `"ring"`.
+   */
+  readonly traceRingMode: Accessor<"disabled" | "ring">;
+  setTraceRingMode(mode: "disabled" | "ring"): void;
 
   // ── view cursors (DESIGN §3.6, REQ §7.2). Default `live`; detached
   // by scroll-back; snap-to-live button (and `g` hotkey, which snaps

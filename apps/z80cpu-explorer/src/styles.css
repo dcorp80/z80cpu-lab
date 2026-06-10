@@ -604,6 +604,17 @@ body {
   align-items: center;
   gap: 6px;
 }
+.itrace-capture-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.itrace-capture-mode-label {
+  user-select: none;
+}
 .itrace-detached-badge {
   font-size: 11px;
   text-transform: uppercase;

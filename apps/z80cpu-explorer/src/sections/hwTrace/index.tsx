@@ -122,6 +122,7 @@ const Header: Component = () => {
           type="checkbox"
           aria-label={STR.hwTrace.captureToggleAriaLabel}
           checked={store.hwTraceMode() === "ring"}
+          disabled={!store.isPaused()}
           onChange={(e) =>
             store.setHwTraceMode(e.currentTarget.checked ? "ring" : "disabled")
           }

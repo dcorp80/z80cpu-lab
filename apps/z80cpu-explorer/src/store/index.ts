@@ -279,15 +279,49 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
   const [traceRingVersionThrottled, setTraceRingVersionThrottled] =
     createSignal(0);
   const [insnCountThrottled, setInsnCountThrottled] = createSignal(0);
+  // Persisted capture mode read from section config (REQ §11). Both
+  // capture checkboxes (HW-trace §6.4, instruction-trace §11) round-trip
+  // through `sections[i].config.captureMode`; on cold boot we seed each
+  // signal from the stored value and fall back to the supplied default
+  // when nothing's there or the field is malformed.
+  function readPersistedCaptureMode(
+    id: string,
+    fallback: "disabled" | "ring",
+  ): "disabled" | "ring" {
+    const s = initialSections.find((sec) => sec.id === id);
+    const v = (s?.config as { captureMode?: unknown } | undefined)?.captureMode;
+    return v === "disabled" || v === "ring" ? v : fallback;
+  }
 
-  // HW-trace reactive mirrors (DESIGN §3.2). `hwTraceVersion` follows
-  // the buffer's own `version()` — only bumped when it advances, so
-  // `'disabled'` mode produces zero signal churn. `hwTraceMode`
-  // mirrors `buffer.getMode()` so section UI can render reactively;
-  // setHwTraceMode keeps both in sync.
+  // Capture mode for the instruction trace (REQ §11). Mirrors the
+  // HW-trace toggle: `"ring"` (default) pushes each completed instruction;
+  // `"disabled"` skips the push and leaves the ring empty. dbg keeps
+  // capturing regardless — PC-range BPs and half-cycle stepping depend on
+  // it — so this only saves the per-callback record copy plus the ring's
+  // resident memory.
+  const [traceRingMode, setTraceRingModeSig] = createSignal<
+    "disabled" | "ring"
+  >(readPersistedCaptureMode("instructionTrace", "ring"));
+
+  // HW-trace reactive mirrors (DESIGN §3.2). Persisted mode wins over the
+  // buffer's constructor default — propagate it back onto the buffer first
+  // so the gating in `record()` matches the UI, then seed the version
+  // signal from the post-propagation buffer state (otherwise a
+  // mode-flipping `setMode` would leave the signal one tick behind on cold
+  // boot). `hwTraceVersion` follows the buffer's own `version()` — only
+  // bumped when it advances, so `'disabled'` mode produces zero signal
+  // churn. `hwTraceMode` mirrors `buffer.getMode()` so section UI can
+  // render reactively; setHwTraceMode keeps both in sync.
+  const initialHwTraceMode = readPersistedCaptureMode(
+    "hwTrace",
+    hwTrace.getMode(),
+  );
+  if (initialHwTraceMode !== hwTrace.getMode()) {
+    hwTrace.setMode(initialHwTraceMode);
+  }
   const [hwTraceVersion, setHwTraceVersion] = createSignal(hwTrace.version());
   const [hwTraceMode, setHwTraceModeSig] = createSignal<"disabled" | "ring">(
-    hwTrace.getMode(),
+    initialHwTraceMode,
   );
   let lastSeenHwTraceVersion = hwTrace.version();
   let runFlushScheduled = false;
@@ -670,8 +704,13 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     // DESIGN §3.1: copy out of the dbg's double-buffered trace into the
     // ring's stable record. The handler must not retain `trace` past the
     // callback — `ring.push` does the byte-by-byte copy.
-    traceRing.push(trace, hcAtComplete);
-    setTraceRingVersion((v) => v + 1);
+    // REQ §11 Capture toggle: skip the push (and version bump) when the
+    // user disabled ring capture. The insn counter and the throttled
+    // mirror still tick so the folded summary keeps moving.
+    if (traceRingMode() === "ring") {
+      traceRing.push(trace, hcAtComplete);
+      setTraceRingVersion((v) => v + 1);
+    }
     bumpThrottled();
   });
 
@@ -1080,6 +1119,12 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
           `setHwTraceMode: 'disabled' | 'ring' required, got ${mode}`,
         );
       }
+      // Paused-only — flipping capture mid-run discards the live ring (see
+      // below) and would leave the body's frozen records memo holding a
+      // stale snapshot until the next pause. The UI checkbox is
+      // `disabled={!isPaused()}`; this enforces the same contract for
+      // programmatic callers (tests, future scripting, hotkeys).
+      if (status() !== "paused") return;
       hwTrace.setMode(mode);
       if (mode === "disabled") {
         // Disabling capture discards the live ring. If it holds anything,
@@ -1107,10 +1152,49 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       // buffer without waiting for the next tick.
       lastSeenHwTraceVersion = hwTrace.version();
       setHwTraceVersion(lastSeenHwTraceVersion);
+      // Persist alongside other section config (folded, watchAddr, etc.).
+      // Fire-and-forget through updateSectionConfig → persistUi.
+      updateSectionConfig("hwTrace", { captureMode: mode });
     },
     traceRing,
     traceRingVersion,
     traceRingVersionThrottled,
+    traceRingMode,
+    setTraceRingMode(mode: "disabled" | "ring") {
+      if (mode !== "disabled" && mode !== "ring") {
+        throw new RangeError(
+          `setTraceRingMode: 'disabled' | 'ring' required, got ${mode}`,
+        );
+      }
+      // Paused-only — same rationale as setHwTraceMode. The UI checkbox is
+      // `disabled={!isPaused()}`; this enforces the same contract for
+      // programmatic callers.
+      if (status() !== "paused") return;
+      if (mode === "disabled") {
+        // Mirror setHwTraceMode: disabling discards the live ring. This is
+        // where the save-or-skip modal (REQ §7.4) will hook in before we
+        // zero it — placeholder until then.
+        // TODO(REQ §7.4): prompt to save/export the captured ring here, and
+        // only clear on the user's confirm/discard.
+        traceRing.clear();
+        setTraceRingVersion((v) => v + 1);
+        // Bring the throttled mirror along so the section's frozen body
+        // memos (gated on the throttled signal) re-run immediately, rather
+        // than waiting for the next bumpThrottled cycle.
+        setTraceRingVersionThrottled(traceRing.version());
+        // A detached anchor HC over an emptied ring is meaningless — same
+        // policy as setHwTraceMode.
+        setCursors(
+          produce((s) => {
+            s.instructionTrace = { mode: "live" };
+          }),
+        );
+      }
+      setTraceRingModeSig(mode);
+      // Persist alongside other section config (folded, watchAddr, etc.).
+      // Fire-and-forget through updateSectionConfig → persistUi.
+      updateSectionConfig("instructionTrace", { captureMode: mode });
+    },
     cursors,
     detachInstructionTraceCursor(anchorHc: number) {
       // `produce` replaces the slice wholesale; plain

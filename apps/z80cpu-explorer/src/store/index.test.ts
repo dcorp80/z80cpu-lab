@@ -248,6 +248,107 @@ describe("createAppStore", () => {
       expect(store.traceRingVersion()).toBeGreaterThan(v0);
     });
 
+    it("trace ring — setTraceRingMode('disabled') skips push but keeps insnCount ticking", async () => {
+      const { store, loop } = await freshStore();
+      expect(store.traceRingMode()).toBe("ring");
+      store.setTraceRingMode("disabled");
+      expect(store.traceRingMode()).toBe("disabled");
+      const c0 = store.insnCount();
+      const v0 = store.traceRingVersion();
+      loop.emitInstruction(mkTrace({ startAddr: 0x200 }));
+      loop.emitInstruction(mkTrace({ startAddr: 0x201 }));
+      // Ring untouched, version pinned — but the per-instruction counter
+      // still advances so the folded summary keeps moving.
+      expect(store.traceRing.size()).toBe(0);
+      expect(store.traceRingVersion()).toBe(v0);
+      expect(store.insnCount()).toBe(c0 + 2);
+      // Re-enabling resumes capture for subsequent instructions.
+      store.setTraceRingMode("ring");
+      loop.emitInstruction(mkTrace({ startAddr: 0x202 }));
+      expect(store.traceRing.size()).toBe(1);
+      expect(store.traceRingVersion()).toBeGreaterThan(v0);
+    });
+
+    it("trace ring — disabling capture clears a populated ring and snaps the cursor to live", async () => {
+      const { store, loop } = await freshStore();
+      loop.emitInstruction(mkTrace({ startAddr: 0x100 }));
+      loop.emitInstruction(mkTrace({ startAddr: 0x101 }));
+      expect(store.traceRing.size()).toBe(2);
+      store.detachInstructionTraceCursor(42);
+      expect(store.cursors.instructionTrace.mode).toBe("detached");
+
+      const vBefore = store.traceRingVersion();
+      store.setTraceRingMode("disabled");
+      expect(store.traceRing.size()).toBe(0);
+      expect(store.traceRingVersion()).toBeGreaterThan(vBefore);
+      // The detached anchor over an emptied ring is meaningless — snap back.
+      expect(store.cursors.instructionTrace).toEqual({ mode: "live" });
+    });
+
+    it("trace ring — setTraceRingMode rejects bogus literals at the boundary", async () => {
+      const { store } = await freshStore();
+      expect(() =>
+        store.setTraceRingMode("capture" as unknown as "ring"),
+      ).toThrow(RangeError);
+      expect(store.traceRingMode()).toBe("ring");
+    });
+
+    it("trace ring — setTraceRingMode persists captureMode under section config", async () => {
+      const { backend, store } = await freshStore();
+      store.setTraceRingMode("disabled");
+      await flush();
+      const saved = await backend.loadUiState();
+      expect(
+        saved?.sections.find((s) => s.id === "instructionTrace")?.config,
+      ).toEqual({ captureMode: "disabled" });
+      // And a fresh store reading the same backend boots in "disabled".
+      const reloaded = await createAppStore({
+        backend,
+        loop: makeStubLoop(),
+        bus: makeStubBus(),
+        dbg: makeStubDbg(),
+      });
+      expect(reloaded.traceRingMode()).toBe("disabled");
+    });
+
+    it("trace ring — malformed persisted captureMode falls back to 'ring'", async () => {
+      const backend = new MemoryBackend();
+      await backend.saveUiState({
+        sections: [
+          {
+            id: "instructionTrace",
+            folded: false,
+            config: { captureMode: "garbage" },
+          },
+        ],
+      });
+      const store = await createAppStore({
+        backend,
+        loop: makeStubLoop(),
+        bus: makeStubBus(),
+        dbg: makeStubDbg(),
+      });
+      expect(store.traceRingMode()).toBe("ring");
+    });
+
+    it("trace ring — setTraceRingMode is paused-only; no-ops while running", async () => {
+      const { store, loop } = await freshStore();
+      // Build up some history so we can prove the ring DIDN'T get cleared.
+      loop.emitInstruction(mkTrace({ startAddr: 0x100 }));
+      loop.emitInstruction(mkTrace({ startAddr: 0x101 }));
+      expect(store.traceRing.size()).toBe(2);
+      store.run();
+      store.setTraceRingMode("disabled");
+      // Action no-oped: mode unchanged, ring untouched.
+      expect(store.traceRingMode()).toBe("ring");
+      expect(store.traceRing.size()).toBe(2);
+      // After pausing, the action takes effect again.
+      loop.emitPause({ kind: "user" });
+      store.setTraceRingMode("disabled");
+      expect(store.traceRingMode()).toBe("disabled");
+      expect(store.traceRing.size()).toBe(0);
+    });
+
     it("zeroHC clears the trace ring and bumps its version", async () => {
       const { store, loop } = await freshStore();
       loop.emitInstruction(mkTrace({ startAddr: 0x100 }));
@@ -1555,12 +1656,76 @@ describe("createAppStore", () => {
       expect(store.cursors.hwTrace).toEqual({ mode: "live" });
     });
 
+    it("HW trace — setHwTraceMode persists captureMode and is restored on reload (also propagated to the buffer)", async () => {
+      const { backend, store } = await freshStore();
+      store.setHwTraceMode("disabled");
+      await flush();
+      const saved = await backend.loadUiState();
+      expect(saved?.sections.find((s) => s.id === "hwTrace")?.config).toEqual({
+        captureMode: "disabled",
+      });
+      // Reload from the same backend: signal AND buffer come up in "disabled"
+      // so record() actually gates on the persisted choice.
+      const reloaded = await createAppStore({
+        backend,
+        loop: makeStubLoop(),
+        bus: makeStubBus(),
+        dbg: makeStubDbg(),
+      });
+      expect(reloaded.hwTraceMode()).toBe("disabled");
+      expect(reloaded.hwTrace.getMode()).toBe("disabled");
+    });
+
+    it("HW trace — malformed persisted captureMode falls back to the buffer default", async () => {
+      const backend = new MemoryBackend();
+      await backend.saveUiState({
+        sections: [
+          {
+            id: "hwTrace",
+            folded: false,
+            config: { captureMode: 42 as unknown as string },
+          },
+        ],
+      });
+      const store = await createAppStore({
+        backend,
+        loop: makeStubLoop(),
+        bus: makeStubBus(),
+        dbg: makeStubDbg(),
+      });
+      // DEFAULT_HW_TRACE_CONFIG.mode is "ring".
+      expect(store.hwTraceMode()).toBe("ring");
+      expect(store.hwTrace.getMode()).toBe("ring");
+    });
+
     it("HW trace — setHwTraceMode rejects bogus literals at the boundary", async () => {
       const { store } = await freshStore();
       expect(() =>
         store.setHwTraceMode("capture" as unknown as "ring"),
       ).toThrow(RangeError);
       expect(store.hwTraceMode()).toBe("ring");
+    });
+
+    it("HW trace — setHwTraceMode is paused-only; no-ops while running", async () => {
+      const { store, loop } = await freshStore();
+      const { makeBusSample, recordSample } = await import(
+        "../runloop/busSampleTestUtil.ts"
+      );
+      recordSample(store.hwTrace, makeBusSample(), 1);
+      recordSample(store.hwTrace, { ...makeBusSample(), nM1: 0 }, 5);
+      expect(store.hwTrace.isEmpty()).toBe(false);
+      store.run();
+      store.setHwTraceMode("disabled");
+      // Action no-oped: mode unchanged, buffer untouched.
+      expect(store.hwTraceMode()).toBe("ring");
+      expect(store.hwTrace.getMode()).toBe("ring");
+      expect(store.hwTrace.isEmpty()).toBe(false);
+      // After pausing, the action takes effect.
+      loop.emitPause({ kind: "user" });
+      store.setHwTraceMode("disabled");
+      expect(store.hwTraceMode()).toBe("disabled");
+      expect(store.hwTrace.getMode()).toBe("disabled");
+      expect(store.hwTrace.isEmpty()).toBe(true);
     });
 
     it("HW trace — zeroHC clears the buffer and bumps the reactive version", async () => {

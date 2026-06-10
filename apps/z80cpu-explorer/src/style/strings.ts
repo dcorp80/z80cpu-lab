@@ -152,17 +152,31 @@ export const STR = {
   instructionTrace: {
     title: "Instruction trace",
     foldedEmpty: "0 insns",
-    // Folded summary: "PC=8000 · paused · 124 insns · last: LD A,B".
+    // Folded summary:
+    //   "PC=8000 · paused · 124 insns · capture: ring · last: LD A,B"
     // The last-insn clause is dropped when the ring is empty so the
-    // line reads cleanly on a fresh boot.
-    foldedSummary: (pc: string, status: string, insns: string) =>
-      `PC=${pc} · ${status} · ${insns} insns`,
+    // line reads cleanly on a fresh boot and when capture is off (which
+    // implies the ring is empty — disabling capture clears it). The
+    // capture clause mirrors the HW-trace folded summary so a folded
+    // section surfaces capture state without unfolding.
+    foldedSummary: (
+      pc: string,
+      status: string,
+      insns: string,
+      capture: string,
+    ) => `PC=${pc} · ${status} · ${insns} insns · capture: ${capture}`,
     foldedSummaryWithLast: (
       pc: string,
       status: string,
       insns: string,
+      capture: string,
       lastDisasm: string,
-    ) => `PC=${pc} · ${status} · ${insns} insns · last: ${lastDisasm}`,
+    ) =>
+      `PC=${pc} · ${status} · ${insns} insns · capture: ${capture} · last: ${lastDisasm}`,
+    // Used by the folded-summary "capture: …" clause. Matches the
+    // HW-trace strings so the two sections share vocabulary.
+    captureModeRing: "ring",
+    captureModeDisabled: "off",
     statusPaused: "paused",
     statusRunning: "running",
     statusStepping: "stepping",
@@ -183,6 +197,18 @@ export const STR = {
     previewAddrAddBpTooltip: "Click to set a PC breakpoint here",
     previewAddrRemoveBpTooltip: "Click to remove the PC breakpoint here",
     emptyExecuted: "(no instructions executed yet)",
+    // Capture toggle (REQ §11) — mirrors the HW-trace checkbox. Unchecking
+    // stops the per-instruction ring push and discards the captured ring;
+    // dbg still observes (PC-range BPs and HC stepping depend on it), so
+    // this is purely about UI memory, not bench dbg-off speed.
+    captureToggleLabel: "Capture",
+    captureToggleAriaLabel: "Enable instruction trace capture",
+    captureToggleTooltip:
+      "Capture completed instructions into the ring. Unchecking stops capture and discards the captured ring.",
+    // Shown in place of the executed rows when capture is OFF. Mirrors
+    // the HW-trace bodyDisabled string so the two sections read alike.
+    executedDisabled:
+      "(capture off — enable Capture to record completed instructions)",
     // Column labels — used as aria-labels for screen-reader rows.
     colHc: "HC",
     colAddr: "Address",
