@@ -108,6 +108,19 @@ export interface Store {
    */
   readonly isPaused: Accessor<boolean>;
   readonly hc: Accessor<number>;
+  /**
+   * Raw per-instruction counter.
+   *
+   * **Non-reactive**: backed by a closure-variable, not a Solid signal.
+   * The reactive wiring through Solid would cost a setter closure +
+   * equalFn comparator on every instruction (~10⁵–10⁶ Hz at full
+   * speed), which surfaced as GC sawtooth in the profiler. The type
+   * is `Accessor<number>` only because that's `() => number` in Solid
+   * — reading it in a reactive scope will NOT cause re-runs.
+   *
+   * UI consumers MUST subscribe to `insnCountThrottled` instead. Tests
+   * read this accessor non-reactively to assert per-instruction state.
+   */
   readonly insnCount: Accessor<number>;
   /**
    * rAF-coalesced mirror of `insnCount` for UI consumers. While
@@ -117,6 +130,9 @@ export interface Store {
    * the DOM hundreds of thousands of times per second. Flushed
    * synchronously on pause (including step-pauses) and on zeroHC,
    * matching `traceRingVersionThrottled`.
+   *
+   * This IS a Solid signal — reactive subscribers belong here, not on
+   * `insnCount`.
    */
   readonly insnCountThrottled: Accessor<number>;
   readonly lastPauseReason: Accessor<PauseReason | null>;
@@ -167,15 +183,24 @@ export interface Store {
   setHwTraceMode(mode: "disabled" | "ring"): void;
 
   // ── instruction trace (DESIGN §3.1). Ring is the canonical buffer;
-  // `traceRingVersion` bumps on push/clear so sections re-render via a
-  // memo keyed on the version rather than tracking each record.
-  // `traceRingVersionThrottled` is rAF-debounced during run and
-  // flushed immediately on pause-edge (REQ §7.5: trace panes batch
-  // appends while running, flush on the next paint). When the loop is
-  // already paused, the throttle is bypassed so step-pause and tests
-  // observe updates synchronously.
+  // `traceRingVersion` bumps on push/clear; `traceRingVersionThrottled`
+  // is the reactive mirror sections subscribe to — rAF-debounced
+  // during run, flushed immediately on pause-edge (REQ §7.5: trace
+  // panes batch appends while running, flush on the next paint). When
+  // the loop is already paused, the throttle is bypassed so step-pause
+  // and tests observe updates synchronously.
   readonly traceRing: TraceRing;
+  /**
+   * Raw per-push version counter.
+   *
+   * **Non-reactive** — same rationale as `insnCount`. Backed by a
+   * closure variable; reading it in a reactive scope will NOT re-run.
+   * UI consumers MUST use `traceRingVersionThrottled`. Tests read
+   * this non-reactively to assert push/clear bumps.
+   */
   readonly traceRingVersion: Accessor<number>;
+  /** Reactive mirror of `traceRingVersion` — Solid signal. UI memos
+   *  belong here. */
   readonly traceRingVersionThrottled: Accessor<number>;
   /**
    * Capture mode for the instruction trace ring (REQ §11). Mirrors the

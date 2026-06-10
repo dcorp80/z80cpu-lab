@@ -61,10 +61,13 @@ export interface RunLoopDeps {
    * Called once per edge, AFTER `dbg.clockEdge()` and AFTER `hc++`.
    * Owns HW-trace recording — samples `cpu.bus` (the state post-edge,
    * at the now-incremented HC) and hands the sample to the buffer.
-   * Receives the post-increment HC so transitions land at the
-   * correct stamp.
+   * Receives the loop's `Float64Array` HC box by reference so the
+   * stamp flows to `HwTraceBuffer.record`'s `chunk.hcs[pos] = box[0]`
+   * write as a pure typed-array copy, never materializing a
+   * HeapNumber past V8's SMI range. Callees should read `hcBox[0]`
+   * once into a local if they need to do arithmetic with it.
    */
-  postEdge: (hc: number) => void;
+  postEdge: (hcBox: Float64Array) => void;
   config: LoopConfig;
   /**
    * Wallclock source — defaults to `performance.now`. Tests inject a
@@ -100,18 +103,69 @@ export function createRunLoop(deps: RunLoopDeps): RunLoop {
   const breakpoints = createBreakpointEvaluator();
 
   let status: RunStatus = "paused";
-  let hc = 0;
+  // HC counter is stored in a Float64Array slot rather than a closure
+  // variable so it stays unboxed once it exceeds V8's SMI range (~2.1B
+  // on 64-bit, ~52s of full-speed run at ~40M edges/sec). With a plain
+  // `let hc = 0`, every increment past 2^31 allocates a fresh
+  // HeapNumber (16B each → ~640 MB/sec of allocation), showing up as GC
+  // sawtooth in the profiler. Float64Array slots hold exact integers up
+  // to 2^53 (~225M s at full speed, decades).
+  //
+  // The box itself is also passed by reference to `postEdge` (which
+  // forwards to `HwTraceBuffer.record`), so the stamp flows from
+  // `++hcBox[0]` here straight into `chunk.hcs[pos] = hcBox[0]` as a
+  // typed-array→typed-array copy — no number materialization on either
+  // boundary. Internal hot-path comparisons (`breakpoints.checkAfterEdge`
+  // and the external subscriber callbacks) still take `hc: number`; V8
+  // inlines those tight call sites in steady state, but past SMI range
+  // each call materializes a HeapNumber for the argument. Acceptable
+  // because checkAfterEdge is monomorphic-inlineable, and the subscriber
+  // callbacks fire at most ~10⁶/sec (insn) or ~60/sec (tick), not 40M.
+  const hcBox = new Float64Array(1);
   // Step state — when > 0, the loop is in 'stepping' mode and decrements
   // these as instructions complete / edges fire. When both fall to 0 the
   // loop pauses with `step-complete`.
   let stepInstructionsRemaining = 0;
   let stepHcRemaining = 0;
 
-  const pauseSubs = new Set<(r: PauseReason) => void>();
-  const instructionSubs = new Set<
-    (t: InstructionTrace, hcAtComplete: number) => void
-  >();
-  const tickSubs = new Set<(hc: number) => void>();
+  // Subscriber lists are plain Arrays with tombstone removal. Indexed
+  // iteration stays allocation-free on the hot dispatch sites
+  // (per-instruction ~10⁶/sec, per-frame tick). `for..of` over a Set
+  // allocates a fresh iterator object per call — V8's escape analysis
+  // on Set iterators is unreliable and surfaces as GC sawtooth in the
+  // profiler.
+  //
+  // Mid-dispatch unsubscribe safety: a callback that calls its own
+  // `off()` during dispatch would otherwise splice and shift the
+  // remaining slots, causing the next callback to be skipped and a
+  // read past the end. Instead, `removeSub` nulls the slot; the
+  // dispatch loop's `cb !== null` guard skips tombstones, and the
+  // captured `n` upper bound stays valid. Tombstones are compacted
+  // lazily on the next `pushSub` (cold path, ~boot-time only) so the
+  // array length doesn't grow unboundedly under sub/unsub churn.
+  //
+  // The Array form drops Set's dedupe-on-add: subscribing the same
+  // callback twice now fires it twice. No production caller does that.
+  const pauseSubs: (((r: PauseReason) => void) | null)[] = [];
+  const instructionSubs: (((
+    t: InstructionTrace,
+    hcAtComplete: number,
+  ) => void) | null)[] = [];
+  const tickSubs: (((hc: number) => void) | null)[] = [];
+
+  function pushSub<T>(arr: (T | null)[], cb: T): void {
+    // Compact tombstones before pushing. Cold path — subscribe happens
+    // at boot / on section mount, not on the per-edge hot path.
+    for (let i = arr.length - 1; i >= 0; i--) {
+      if (arr[i] === null) arr.splice(i, 1);
+    }
+    arr.push(cb);
+  }
+
+  function removeSub<T>(arr: (T | null)[], cb: T): void {
+    const i = arr.indexOf(cb);
+    if (i >= 0) arr[i] = null;
+  }
 
   // Bridge dbg's instruction-complete callback through to our subscribers
   // AND decrement the instruction step counter. The dbg only owns one
@@ -128,7 +182,12 @@ export function createRunLoop(deps: RunLoopDeps): RunLoop {
   CLAIMED_DBGS.add(dbg);
   dbg.onInstructionComplete = (trace) => {
     if (stepInstructionsRemaining > 0) stepInstructionsRemaining--;
-    for (const cb of instructionSubs) cb(trace, hc);
+    const n = instructionSubs.length;
+    const h = hcBox[0];
+    for (let i = 0; i < n; i++) {
+      const cb = instructionSubs[i];
+      if (cb !== null) cb(trace, h);
+    }
   };
 
   let frameScheduled = false;
@@ -154,7 +213,11 @@ export function createRunLoop(deps: RunLoopDeps): RunLoop {
     // step state" a single-place invariant.
     stepInstructionsRemaining = 0;
     stepHcRemaining = 0;
-    for (const cb of pauseSubs) cb(reason);
+    const n = pauseSubs.length;
+    for (let i = 0; i < n; i++) {
+      const cb = pauseSubs[i];
+      if (cb !== null) cb(reason);
+    }
   }
 
   function shouldStopForStep(): PauseReason | null {
@@ -180,8 +243,8 @@ export function createRunLoop(deps: RunLoopDeps): RunLoop {
       // post-edge state at the correct HC.
       preEdge();
       dbg.clockEdge();
-      hc++;
-      postEdge(hc);
+      hcBox[0]++;
+      postEdge(hcBox);
       if (stepHcRemaining > 0) stepHcRemaining--;
       // Breakpoints take precedence over step-complete: when a user
       // steps N instructions and a BP fires at instruction M<N, the
@@ -189,7 +252,7 @@ export function createRunLoop(deps: RunLoopDeps): RunLoop {
       // step-complete. HC-target also wins over a coincident step-N
       // landing on the same edge — same rationale, the explicit BP
       // intent beats the implicit step boundary.
-      const bp = breakpoints.checkAfterEdge(cpu, hc);
+      const bp = breakpoints.checkAfterEdge(cpu, hcBox[0]);
       if (bp) {
         firePause(bp);
         break;
@@ -206,12 +269,17 @@ export function createRunLoop(deps: RunLoopDeps): RunLoop {
         if (now() - t0 > config.frameBudgetMs) break;
       }
     }
-    for (const cb of tickSubs) cb(hc);
+    const tn = tickSubs.length;
+    const th = hcBox[0];
+    for (let i = 0; i < tn; i++) {
+      const cb = tickSubs[i];
+      if (cb !== null) cb(th);
+    }
   }
 
   return {
     status: () => status,
-    hc: () => hc,
+    hc: () => hcBox[0],
     run() {
       if (status === "running") return;
       status = "running";
@@ -240,7 +308,7 @@ export function createRunLoop(deps: RunLoopDeps): RunLoop {
     zeroHC() {
       // Counter resets; CPU/dbg state untouched (REQ §7.3). Time-stamped
       // buffer clearing is the store's job — the loop just zeros its own.
-      hc = 0;
+      hcBox[0] = 0;
       // Re-arm HC-count BPs so any target > 0 fires again post-zero. A
       // target ≤ 0 would refire on the next edge — not a special case,
       // just the natural fallout of "everything > -1 is eligible again".
@@ -251,16 +319,16 @@ export function createRunLoop(deps: RunLoopDeps): RunLoop {
       breakpoints.setBreakpoints(bps);
     },
     onPause(cb) {
-      pauseSubs.add(cb);
-      return () => pauseSubs.delete(cb);
+      pushSub(pauseSubs, cb);
+      return () => removeSub(pauseSubs, cb);
     },
     onInstruction(cb) {
-      instructionSubs.add(cb);
-      return () => instructionSubs.delete(cb);
+      pushSub(instructionSubs, cb);
+      return () => removeSub(instructionSubs, cb);
     },
     onTick(cb) {
-      tickSubs.add(cb);
-      return () => tickSubs.delete(cb);
+      pushSub(tickSubs, cb);
+      return () => removeSub(tickSubs, cb);
     },
     _tickFrameSync() {
       runFrame();

@@ -114,8 +114,22 @@ export class Z80DebugContext {
   /**
    * Global half-cycle counter — always advances on every clockEdge regardless
    * of `enabled`. Useful for absolute timing and "run N HC" loops.
+   *
+   * Backed by a Float64Array slot rather than a plain `number` field so the
+   * value stays unboxed once it exceeds V8's SMI range (~2.1B on 64-bit,
+   * ~52s of full-speed run at ~40M edges/sec). A `number` field past that
+   * boundary HeapNumber-allocates on every `++` (~640 MB/sec of allocation),
+   * which shows up as GC sawtooth in run-mode profilers. The getter/setter
+   * preserves the public API; the hot path (`clockEdge` + `_stepCheck`)
+   * bypasses the accessor and reads `_totalHcBox[0]` directly.
    */
-  totalHc = 0;
+  private readonly _totalHcBox = new Float64Array(1);
+  get totalHc(): number {
+    return this._totalHcBox[0];
+  }
+  set totalHc(v: number) {
+    this._totalHcBox[0] = v;
+  }
 
   private _enabled = true;
 
@@ -198,11 +212,15 @@ export class Z80DebugContext {
 
   private _stepCheck(): void {
     if (this._stepCb === null) return;
-    if (this._stepEnableHc >= 0 && this.totalHc >= this._stepEnableHc) {
+    // Read once into a local — direct typed-array slot access bypasses the
+    // accessor and keeps the value as an unboxed double in this function's
+    // register set. Called per clockEdge at ~40M Hz.
+    const h = this._totalHcBox[0];
+    if (this._stepEnableHc >= 0 && h >= this._stepEnableHc) {
       if (!this._enabled) this.enabled = true;
       this._stepEnableHc = -1;
     }
-    if (this.totalHc >= this._stepFireHc) {
+    if (h >= this._stepFireHc) {
       const cb = this._stepCb;
       this._stepCb = null;
       this._stepFireHc = -1;
@@ -364,7 +382,7 @@ export class Z80DebugContext {
     }
 
     cpu.clockEdge();
-    this.totalHc++;
+    this._totalHcBox[0]++;
     if (this._enabled) this.curr.hc++;
     this._stepCheck();
   }

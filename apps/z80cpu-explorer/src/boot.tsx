@@ -78,7 +78,7 @@ export async function bootApp(opts: BootOptions = {}): Promise<BootedApp> {
   const preEdge = (): void => {
     bus.resolve();
   };
-  const postEdge = (hc: number): void => {
+  const postEdge = (hcBox: Float64Array): void => {
     // Record straight off the live bus — no intermediate sample. `record`
     // short-circuits before touching anything when capture is disabled
     // (DESIGN §3.2). `nNMI` is injected separately (it isn't on cpu.bus —
@@ -87,8 +87,12 @@ export async function bootApp(opts: BootOptions = {}): Promise<BootedApp> {
     // / [[feedback-nmi-pulse-semantics]]). The store's reactive mirror
     // re-syncs on the next `loop.onTick` so the checkbox UI returns to
     // unchecked.
+    //
+    // `hcBox` is forwarded by reference into `hwTrace.record` so the HC
+    // stamp lands in `chunk.hcs[pos] = hcBox[0]` as a typed-array copy
+    // — no HeapNumber materialization past V8's SMI range.
     const nNMI = bus.getInputPin("nNMI");
-    hwTrace.record(cpu.bus, nNMI, hc);
+    hwTrace.record(cpu.bus, nNMI, hcBox);
     if (nNMI === 0) bus.setInputPin("nNMI", 1);
   };
 

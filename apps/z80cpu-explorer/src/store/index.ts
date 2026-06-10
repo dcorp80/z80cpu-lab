@@ -217,7 +217,16 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
   const [status, setStatus] = createSignal<RunStatus>(loop.status());
   const isPaused: Accessor<boolean> = () => status() === "paused";
   const [hc, setHc] = createSignal(loop.hc());
-  const [insnCount, setInsnCount] = createSignal(0);
+  // Raw insnCount is a closure-variable counter, not a Solid signal:
+  // it's bumped per-instruction (~10⁶/sec at full speed) but nothing in
+  // production subscribes to its non-throttled accessor — section UI
+  // reads `insnCountThrottled`, which the rAF flush bumps. Going through
+  // a Solid signal here would cost a setter closure → bound readSignal →
+  // writeSignal → equalFn comparator on every insn, which surfaces as
+  // GC sawtooth at full speed. Tests read the accessor non-reactively,
+  // which still works against a plain closure variable.
+  let insnCountRaw = 0;
+  const insnCount: Accessor<number> = () => insnCountRaw;
   // Effective clock-speed indicator (REQ §11). `null` until the first valid
   // frame measurement (and after zeroHC) → the view shows "—". The value is
   // held across a pause (the view greys it): it's the speed of the run that
@@ -275,7 +284,14 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
   // Breakpoints status line and the trace folded summary need a
   // human-readable count, not a per-instruction signal storm.
   const traceRing = new TraceRing(DEFAULT_INSTRUCTION_RING_CAP);
-  const [traceRingVersion, setTraceRingVersion] = createSignal(0);
+  // Same rationale as `insnCount` above — raw version counter is a
+  // closure variable, not a Solid signal. Bumped per-push (~10⁶/sec) on
+  // a path that has no production reactive subscribers; the throttled
+  // mirror below is where UI subscribes. Tests read `traceRingVersion()`
+  // non-reactively to assert version bumps, which works against a plain
+  // accessor.
+  let traceRingVersionRaw = 0;
+  const traceRingVersion: Accessor<number> = () => traceRingVersionRaw;
   const [traceRingVersionThrottled, setTraceRingVersionThrottled] =
     createSignal(0);
   const [insnCountThrottled, setInsnCountThrottled] = createSignal(0);
@@ -350,8 +366,11 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
    *  both. Sharing one schedule keeps the hot-path cost flat as we
    *  add more throttled mirrors. */
   function flushRunState(): void {
+    // Read straight off the raw counters / buffer version — no extra
+    // Solid indirection. Throttled-mirror writes DO go through Solid
+    // because UI memos subscribe to them.
     setTraceRingVersionThrottled(traceRing.version());
-    setInsnCountThrottled(insnCount());
+    setInsnCountThrottled(insnCountRaw);
   }
   function bumpThrottled(): void {
     // If the loop is already paused (boot, step-pause, post-BP),
@@ -700,7 +719,10 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
   });
   loop.onInstruction((trace, hcAtComplete) => {
     instructionFiredSinceLastPause = true;
-    setInsnCount((n) => n + 1);
+    // Raw closure-variable bump — no Solid signal write on the hot
+    // path. See `insnCountRaw` / `traceRingVersionRaw` declarations
+    // above for rationale.
+    insnCountRaw++;
     // DESIGN §3.1: copy out of the dbg's double-buffered trace into the
     // ring's stable record. The handler must not retain `trace` past the
     // callback — `ring.push` does the byte-by-byte copy.
@@ -709,7 +731,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     // mirror still tick so the folded summary keeps moving.
     if (traceRingMode() === "ring") {
       traceRing.push(trace, hcAtComplete);
-      setTraceRingVersion((v) => v + 1);
+      traceRingVersionRaw++;
     }
     bumpThrottled();
   });
@@ -1076,7 +1098,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     zeroHC() {
       loop.zeroHC();
       setHc(0);
-      setInsnCount(0);
+      insnCountRaw = 0;
       // Effective-clock indicator resets (REQ §11): the HC rebase
       // invalidates any in-flight measurement; show "—" until the next run.
       setEffClockMHz(null);
@@ -1085,7 +1107,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       // a placeholder in M6; from M8a onward it shares the same clear
       // path as the instruction-trace ring. Snapshot log lands in M9.
       traceRing.clear();
-      setTraceRingVersion((v) => v + 1);
+      traceRingVersionRaw++;
       hwTrace.clear();
       lastSeenHwTraceVersion = hwTrace.version();
       setHwTraceVersion(lastSeenHwTraceVersion);
@@ -1177,7 +1199,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
         // TODO(REQ §7.4): prompt to save/export the captured ring here, and
         // only clear on the user's confirm/discard.
         traceRing.clear();
-        setTraceRingVersion((v) => v + 1);
+        traceRingVersionRaw++;
         // Bring the throttled mirror along so the section's frozen body
         // memos (gated on the throttled signal) re-run immediately, rather
         // than waiting for the next bumpThrottled cycle.

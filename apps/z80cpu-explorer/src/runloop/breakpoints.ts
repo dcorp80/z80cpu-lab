@@ -128,6 +128,10 @@ export function createBreakpointEvaluator(): BreakpointEvaluator {
       // redirect, INT acknowledge. Same three IDs dbg uses for its own
       // BP gate (DESIGN §2.6). At this edge `cpu.regs.pc` is the fetch
       // address of the M1 about to start.
+      // Indexed for + property access (no destructuring): the iterator-
+      // protocol path under for..of can defeat V8's optimizer on the
+      // hot per-M1 scan (~10⁶/sec at full speed) and surfaces as GC
+      // sawtooth in the profiler.
       const s = cpu.nextStep;
       if (
         s === StepId.M1_T1_0 ||
@@ -135,9 +139,11 @@ export function createBreakpointEvaluator(): BreakpointEvaluator {
         s === StepId.INT_M1_T1_0
       ) {
         const pc = cpu.regs.pc;
-        for (const { lo, hi } of enabledPc) {
-          if (pc >= lo && pc <= hi) {
-            return { kind: "pc-breakpoint", pc, lo, hi };
+        const n = enabledPc.length;
+        for (let i = 0; i < n; i++) {
+          const b = enabledPc[i];
+          if (pc >= b.lo && pc <= b.hi) {
+            return { kind: "pc-breakpoint", pc, lo: b.lo, hi: b.hi };
           }
         }
       }

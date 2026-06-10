@@ -1,11 +1,13 @@
 // Test-only helpers for the HW-trace buffer.
 //
 // Production records straight off the live CPU bus via
-// `HwTraceBuffer.record(cpu.bus, nNMI, hc)` — no intermediate object. Tests
-// prefer to express a bus state as a normalized `BusSample` (deasserted
-// defaults + `withOverrides`) and feed it through `recordSample`, which
-// reverses the normalization into the raw `BusReadout` shape the buffer
-// consumes. Keeping this in a test util (not the hot path) is the whole
+// `HwTraceBuffer.record(cpu.bus, nNMI, hcBox)` — no intermediate object,
+// HC arrives via a Float64Array slot so the stamp never materializes a
+// HeapNumber. Tests prefer to express a bus state as a normalized
+// `BusSample` (deasserted defaults + `withOverrides`) and feed it
+// through `recordSample`, which reverses the normalization into the raw
+// `BusReadout` shape the buffer consumes and wraps `hc` into a one-shot
+// box. Keeping this in a test util (not the hot path) is the whole
 // point — `makeBusSample` was only ever load-bearing for tests.
 
 import type { BusReadout, BusSample, HwTraceBuffer, Tri } from "./hwTrace.ts";
@@ -69,5 +71,7 @@ export function recordSample(
     addr: s.addr,
     data: s.data,
   };
-  buf.record(readout, s.nNMI, hc);
+  const hcBox = new Float64Array(1);
+  hcBox[0] = hc;
+  buf.record(readout, s.nNMI, hcBox);
 }

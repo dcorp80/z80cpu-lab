@@ -5,7 +5,7 @@ import { DEFAULT_BUS_CONFIG } from "../config/defaults.ts";
 import { makeBus64k } from "./bus.ts";
 import { createRunLoop, type PauseReason, type RunLoop } from "./loop.ts";
 
-const noopPostEdge = (_hc: number): void => {};
+const noopPostEdge = (_hcBox: Float64Array): void => {};
 
 // Build a real CPU + dbg + bus. Force memInit=0 so the code path is
 // NOPs (opcode 00 = NOP) — keeps step/HC arithmetic predictable instead
@@ -202,8 +202,8 @@ describe("RunLoop", () => {
         calls.push("pre");
         bus.resolve();
       };
-      const postEdge = (hc: number): void => {
-        calls.push(`post:${hc}`);
+      const postEdge = (hcBox: Float64Array): void => {
+        calls.push(`post:${hcBox[0]}`);
       };
       const loop = createRunLoop({
         cpu,

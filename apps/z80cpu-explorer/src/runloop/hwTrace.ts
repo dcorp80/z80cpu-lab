@@ -19,9 +19,9 @@
 // Physical layout per chunk: one Float64Array for HCs, plus three
 // parallel TypedArrays indexed by position:
 //   - `state` (Uint32Array) — every 1-bit and tri-bit signal AND the
-//     addr/data tristate flags packed into a single integer (see
-//     `packBusState`). One compare per record replaces fifteen
-//     TypedArray reads on the hot path.
+//     addr/data tristate flags packed into a single integer (layout
+//     inlined in `record()` below). One compare per record replaces
+//     fifteen TypedArray reads on the hot path.
 //   - `addr` (Uint16Array), `data` (Uint8Array) — bus values. During a
 //     bus grant the value is `undefined`; the corresponding slot is left
 //     stale and the tristate flag in `state` selects between "use slot"
@@ -147,8 +147,8 @@ class FrameChunk {
   pointer = -1;
   readonly hcs: Float64Array;
   /** Every 1-bit / tri-bit signal plus the addr/data tristate flags
-   *  packed into one integer per position. Layout owned by
-   *  `packBusState`; `readSnapshot` inlines the inverse. */
+   *  packed into one integer per position. Pack layout inlined in
+   *  `HwTraceBuffer.record`; `readSnapshot` inlines the inverse. */
   readonly state: Uint32Array;
   /** Bus values. Slots are only written when the bus is driven; during
    *  a tristate the slot is left stale and `state`'s addrTri/dataTri
@@ -189,54 +189,12 @@ class FrameChunk {
 // Bit layout, MSB→LSB:
 //   nM1 | nRFSH | nHALT | nBUSACK | nMREQ(2) | nIORQ(2) | nRD(2) | nWR(2) |
 //   nINT | nNMI | nRESET | nBUSRQ | nWAIT | addrTri | dataTri
-
-function packBusState(bus: BusReadout, nNMI: 0 | 1): number {
-  let st: number = bus.nM1;
-  st = (st << 1) | bus.nRFSH;
-  st = (st << 1) | bus.nHALT;
-  st = (st << 1) | bus.nBUSACK;
-  st = (st << 2) | (bus.nMREQ === undefined ? 2 : bus.nMREQ);
-  st = (st << 2) | (bus.nIORQ === undefined ? 2 : bus.nIORQ);
-  st = (st << 2) | (bus.nRD === undefined ? 2 : bus.nRD);
-  st = (st << 2) | (bus.nWR === undefined ? 2 : bus.nWR);
-  st = (st << 1) | bus.nINT;
-  st = (st << 1) | nNMI;
-  st = (st << 1) | bus.nRESET;
-  st = (st << 1) | bus.nBUSRQ;
-  st = (st << 1) | bus.nWAIT;
-  st = (st << 1) | (bus.addr === undefined ? 1 : 0);
-  st = (st << 1) | (bus.data === undefined ? 1 : 0);
-  return st;
-}
-
-function writeSnapshot(
-  chunk: FrameChunk,
-  pos: number,
-  bus: BusReadout,
-  hc: number,
-  packedState: number,
-): void {
-  chunk.hcs[pos] = hc;
-  chunk.state[pos] = packedState;
-  // Tristate slots are left stale on purpose — `readSnapshot` consults
-  // the addrTri/dataTri bits in `state` and returns `undefined` then.
-  if (bus.addr !== undefined) chunk.addr[pos] = bus.addr;
-  if (bus.data !== undefined) chunk.data[pos] = bus.data;
-}
-
-function snapshotEquals(
-  chunk: FrameChunk,
-  pos: number,
-  bus: BusReadout,
-  packedState: number,
-): boolean {
-  if (chunk.state[pos] !== packedState) return false;
-  // When `bus.addr`/`bus.data` is undefined, `state` already proved the
-  // tristate flag matches, so the stale slot value is irrelevant. Only
-  // compare the numeric value when the bus is currently driven.
-  if (bus.addr !== undefined && chunk.addr[pos] !== bus.addr) return false;
-  return !(bus.data !== undefined && chunk.data[pos] !== bus.data);
-}
+//
+// Packing, equality check, and writeback all live inline in `record()`
+// — no helper functions. The per-edge path runs at ~40M Hz; flattening
+// to one body lets V8 see the full sequence and avoid three call-site
+// boundaries on every edge. `readSnapshot` (cold path, used by
+// `rangeView` / `latestBefore`) keeps its own inline-inverse for clarity.
 
 function readSnapshot(chunk: FrameChunk, pos: number): BusSnapshotRecord {
   // Unpack in reverse of packBusState — LSB first.
@@ -329,33 +287,82 @@ export class HwTraceBuffer {
   }
 
   /**
-   * Capture the current bus state at `hc`, reading straight off the live
-   * `bus` readout (`cpu.bus` in production) plus the separately-injected
-   * `nNMI` — no intermediate sample object. Compares against the snapshot
-   * at the current write position; if anything changed, advances and
-   * stores a fresh snapshot (rotating chunks on overflow). `mode ===
-   * 'disabled'` makes this a no-op before touching the bus, so disabled
-   * capture costs one comparison per edge.
+   * Capture the current bus state at the HC stored in `hcBox[0]`,
+   * reading straight off the live `bus` readout (`cpu.bus` in
+   * production) plus the separately-injected `nNMI` — no intermediate
+   * sample object. Compares against the snapshot at the current write
+   * position; if anything changed, advances and stores a fresh
+   * snapshot (rotating chunks on overflow). `mode === 'disabled'`
+   * makes this a no-op before touching the bus, so disabled capture
+   * costs one comparison per edge.
+   *
+   * `hcBox` is passed by reference so the HC stamp travels from the
+   * runloop to the `chunk.hcs[pos] = hcBox[0]` write as a pure
+   * Float64Array→Float64Array copy. A plain `hc: number` argument
+   * would materialize a HeapNumber on the call boundary once HC
+   * exceeds V8's SMI range (~2.1B / ~52s at full speed). Tests can
+   * wrap a one-shot box via `recordSample` in `busSampleTestUtil`.
    */
-  record(bus: BusReadout, nNMI: 0 | 1, hc: number): void {
+  record(bus: BusReadout, nNMI: 0 | 1, hcBox: Float64Array): void {
     if (this.mode === "disabled") return;
-    const packedState = packBusState(bus, nNMI);
+
+    // Read addr/data once into locals — used by both the packing below
+    // and the equality / write paths. Avoids re-reading bus properties
+    // multiple times across what used to be three function boundaries.
+    const addr = bus.addr;
+    const data = bus.data;
+    const nMREQ = bus.nMREQ;
+    const nIORQ = bus.nIORQ;
+    const nRD = bus.nRD;
+    const nWR = bus.nWR;
+
+    // Inline pack (was packBusState). 19-bit result stays SMI.
+    let packedState: number = bus.nM1;
+    packedState = (packedState << 1) | bus.nRFSH;
+    packedState = (packedState << 1) | bus.nHALT;
+    packedState = (packedState << 1) | bus.nBUSACK;
+    packedState = (packedState << 2) | (nMREQ === undefined ? 2 : nMREQ);
+    packedState = (packedState << 2) | (nIORQ === undefined ? 2 : nIORQ);
+    packedState = (packedState << 2) | (nRD === undefined ? 2 : nRD);
+    packedState = (packedState << 2) | (nWR === undefined ? 2 : nWR);
+    packedState = (packedState << 1) | bus.nINT;
+    packedState = (packedState << 1) | nNMI;
+    packedState = (packedState << 1) | bus.nRESET;
+    packedState = (packedState << 1) | bus.nBUSRQ;
+    packedState = (packedState << 1) | bus.nWAIT;
+    packedState = (packedState << 1) | (addr === undefined ? 1 : 0);
+    packedState = (packedState << 1) | (data === undefined ? 1 : 0);
+
     if (this.head < 0) {
       // First-ever record — open chunk[0] and store at position 0.
       this.head = 0;
       this._size = 1;
-      this.chunks[0].pointer = 0;
-      writeSnapshot(this.chunks[0], 0, bus, hc, packedState);
+      const first = this.chunks[0];
+      first.pointer = 0;
+      first.hcs[0] = hcBox[0];
+      first.state[0] = packedState;
+      // Tristate slots are left stale on purpose — `readSnapshot`
+      // consults the addrTri/dataTri bits in `state` and returns
+      // `undefined` then.
+      if (addr !== undefined) first.addr[0] = addr;
+      if (data !== undefined) first.data[0] = data;
       this._version++;
       return;
     }
+
     const chunk = this.chunks[this.head];
     const pos = chunk.pointer;
-    if (snapshotEquals(chunk, pos, bus, packedState)) {
-      // Nothing changed — no record, no version bump. The renderer's
-      // "value at HC=X" is unchanged.
+
+    // Inline equality check (was snapshotEquals). Nothing-changed →
+    // no record, no version bump.
+    if (
+      chunk.state[pos] === packedState &&
+      (addr === undefined || chunk.addr[pos] === addr) &&
+      (data === undefined || chunk.data[pos] === data)
+    ) {
       return;
     }
+
     const newPos = pos + 1;
     if (newPos >= this.chunkSize) {
       // Overflow — rotate to next chunk in the ring.
@@ -368,10 +375,16 @@ export class HwTraceBuffer {
       }
       const newChunk = this.chunks[this.head];
       newChunk.pointer = 0;
-      writeSnapshot(newChunk, 0, bus, hc, packedState);
+      newChunk.hcs[0] = hcBox[0];
+      newChunk.state[0] = packedState;
+      if (addr !== undefined) newChunk.addr[0] = addr;
+      if (data !== undefined) newChunk.data[0] = data;
     } else {
       chunk.pointer = newPos;
-      writeSnapshot(chunk, newPos, bus, hc, packedState);
+      chunk.hcs[newPos] = hcBox[0];
+      chunk.state[newPos] = packedState;
+      if (addr !== undefined) chunk.addr[newPos] = addr;
+      if (data !== undefined) chunk.data[newPos] = data;
     }
     this._version++;
   }
