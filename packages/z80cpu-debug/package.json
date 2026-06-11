@@ -1,6 +1,6 @@
 {
   "name": "@dcorp80/z80cpu-debug",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Instruction tracing / debug context for @dcorp80/z80cpu",
   "keywords": [
     "z80",

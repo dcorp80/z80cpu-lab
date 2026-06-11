@@ -65,12 +65,37 @@ export function findMatch(
   return undefined;
 }
 
+// `<input>` types that take keystrokes as text/value entry — these are
+// the ones that should swallow global single-letter hotkeys. Anything
+// else (checkbox, radio, range, color, file, button, submit, reset,
+// image, hidden) lets the dispatcher through, so e.g. Space still
+// fires Run/Pause when the HW-trace `nINT` checkbox is focused.
+const TEXT_INPUT_TYPES = new Set([
+  "text",
+  "email",
+  "password",
+  "search",
+  "tel",
+  "url",
+  "number",
+  "date",
+  "datetime-local",
+  "month",
+  "week",
+  "time",
+]);
+
 export function isTextInputFocused(): boolean {
   if (typeof document === "undefined") return false;
   const el = document.activeElement as HTMLElement | null;
   if (!el) return false;
   if (el.isContentEditable) return true;
   const tag = el.tagName;
-  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  if (tag === "TEXTAREA" || tag === "SELECT") return true;
+  if (tag === "INPUT") {
+    // HTMLInputElement.type lowercases and falls back to "text" for
+    // missing or unrecognized type attributes.
+    return TEXT_INPUT_TYPES.has((el as HTMLInputElement).type);
+  }
   return false;
 }

@@ -20,7 +20,7 @@ import { installHotkeyDispatcher } from "./hotkeys/dispatch.ts";
 import { createHotkeyRegistry } from "./hotkeys/registry.ts";
 import { makeBus64k } from "./runloop/bus.ts";
 import { HwTraceBuffer } from "./runloop/hwTrace.ts";
-import { createRunLoop } from "./runloop/loop.ts";
+import { createRunLoop, type ReadonlyHcBox } from "./runloop/loop.ts";
 import { openDefaultBackend } from "./storage/indexeddb.ts";
 import type { StorageBackend } from "./storage/types.ts";
 import { createAppStore, type Store, StoreProvider } from "./store/index.ts";
@@ -78,7 +78,7 @@ export async function bootApp(opts: BootOptions = {}): Promise<BootedApp> {
   const preEdge = (): void => {
     bus.resolve();
   };
-  const postEdge = (hcBox: Float64Array): void => {
+  const postEdge = (hcBox: ReadonlyHcBox): void => {
     // Record straight off the live bus — no intermediate sample. `record`
     // short-circuits before touching anything when capture is disabled
     // (DESIGN §3.2). `nNMI` is injected separately (it isn't on cpu.bus —

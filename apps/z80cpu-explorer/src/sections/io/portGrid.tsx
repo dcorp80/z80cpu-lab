@@ -130,12 +130,17 @@ export const IoPortGrid: Component<IoPortGridProps> = (props) => {
   // Jump effect — mirrors HexGrid. The watch-jump version bumps on
   // Enter in the watch input; scroll the watch row into view even when
   // the watch port didn't change (user may have scrolled the page).
-  createEffect(() => {
-    props.jumpVersion();
-    queueMicrotask(() => {
-      watchRowEl?.scrollIntoView({ block: "center", behavior: "smooth" });
-    });
-  });
+  // Skip the initial run so app boot (and Cold-boot reload) doesn't
+  // scroll the page down into the IO section unprompted.
+  createEffect((prev: number | undefined) => {
+    const v = props.jumpVersion();
+    if (prev !== undefined) {
+      queueMicrotask(() => {
+        watchRowEl?.scrollIntoView({ block: "center", behavior: "smooth" });
+      });
+    }
+    return v;
+  }, undefined);
 
   /** Last visible port in the current window — mirrors HexGrid's
    *  `windowLastAddr`. Used by advance to detect when the next cell

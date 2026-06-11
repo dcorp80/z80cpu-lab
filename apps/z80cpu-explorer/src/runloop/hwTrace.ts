@@ -32,6 +32,7 @@
 
 import type { HwTraceConfig } from "../config/defaults.ts";
 import { INPUT_PIN_NAMES, type InputPinName } from "./bus.ts";
+import type { ReadonlyHcBox } from "./loop.ts";
 
 // ── Signal taxonomy ──────────────────────────────────────────────
 
@@ -303,7 +304,7 @@ export class HwTraceBuffer {
    * exceeds V8's SMI range (~2.1B / ~52s at full speed). Tests can
    * wrap a one-shot box via `recordSample` in `busSampleTestUtil`.
    */
-  record(bus: BusReadout, nNMI: 0 | 1, hcBox: Float64Array): void {
+  record(bus: BusReadout, nNMI: 0 | 1, hcBox: ReadonlyHcBox): void {
     if (this.mode === "disabled") return;
 
     // Read addr/data once into locals — used by both the packing below

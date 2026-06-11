@@ -55,11 +55,14 @@ export function createBreakpointEvaluator(): BreakpointEvaluator {
   // recomputing the next-min target. Kept around so re-enable can
   // reinstate without the caller passing extra state.
   let enabledHc: HcBp[] = [];
-  // Ids previously seen in `enabledHc` — used to detect off→on
-  // transitions on the next `setBreakpoints` call. An id missing from
-  // this set when it appears as enabled is a re-enable (or fresh add),
-  // and we clear its fired flag.
-  let prevEnabledHcIds: Set<string> = new Set();
+  // Map of id → target for HC-count BPs that were enabled at the
+  // previous `setBreakpoints` call. On the next call we use this to
+  // detect (a) off→on transitions (id missing here, present in the
+  // new enabled set) and (b) in-place target edits (id present in
+  // both, target differs) — both clear the fired flag so the BP can
+  // fire at the new target. Storing the target (not just the id —
+  // the prior Set) is what distinguishes in-place edits from no-ops.
+  let prevEnabledHcTargets: Map<string, number> = new Map();
   const firedHcIds: Set<string> = new Set();
   let nextHcTarget: number = Number.POSITIVE_INFINITY;
 
@@ -75,7 +78,7 @@ export function createBreakpointEvaluator(): BreakpointEvaluator {
     setBreakpoints(bps) {
       enabledPc = [];
       const nextEnabledHc: HcBp[] = [];
-      const nextEnabledHcIds = new Set<string>();
+      const nextEnabledHcTargets = new Map<string, number>();
       // All HC-count ids in the new list, enabled or not. Used to drop
       // fired ids whose BP was removed outright (vs merely disabled —
       // disabled BPs keep their fired flag so a quick toggle off/on is
@@ -88,13 +91,25 @@ export function createBreakpointEvaluator(): BreakpointEvaluator {
           enabledPc.push({ lo: b.lo, hi: b.hi });
         } else {
           nextEnabledHc.push({ id: b.id, target: b.target });
-          nextEnabledHcIds.add(b.id);
+          nextEnabledHcTargets.set(b.id, b.target);
         }
       }
-      // Off→on transition: any currently-enabled id that wasn't
-      // enabled last time gets its fired flag cleared.
-      for (const id of nextEnabledHcIds) {
-        if (!prevEnabledHcIds.has(id)) firedHcIds.delete(id);
+      // Re-arm enabled HC-count BPs whose effective target changed
+      // since the last call. Two flavors collapse into one check:
+      //   - off→on transition: id wasn't in `prevEnabledHcTargets`
+      //     → `prevTarget === undefined` → not equal to new target
+      //     → clear fired.
+      //   - in-place target edit on an already-enabled BP: id is
+      //     present in both, target differs → clear fired.
+      // Editing the target while keeping the id (the production path
+      // — the store mutates `breakpoints[i].target` rather than
+      // recreating) used to leave the fired flag set, so a BP that
+      // fired at the old target would never fire at the new one
+      // until removed-and-re-added or zeroHC was hit.
+      for (const b of nextEnabledHc) {
+        if (prevEnabledHcTargets.get(b.id) !== b.target) {
+          firedHcIds.delete(b.id);
+        }
       }
       // Removed BPs: drop fired flags for ids no longer in the BP list
       // at all. Single pass — `nextAllHcIds` captures both enabled and
@@ -104,21 +119,27 @@ export function createBreakpointEvaluator(): BreakpointEvaluator {
         if (!nextAllHcIds.has(id)) firedHcIds.delete(id);
       }
       enabledHc = nextEnabledHc;
-      prevEnabledHcIds = nextEnabledHcIds;
+      prevEnabledHcTargets = nextEnabledHcTargets;
       recomputeNextHc();
     },
     checkAfterEdge(cpu, hc) {
       // HC-count first: single number compare, fires on any edge. We
-      // need to discover *which* BP id corresponds to `nextHcTarget`
-      // so we can mark it fired — at most a handful of HC-count BPs in
-      // realistic use, so the second pass is cheap (and only on the
+      // need to discover *which* BP id(s) correspond to `nextHcTarget`
+      // so we can mark them fired — at most a handful of HC-count BPs
+      // in realistic use, so the second pass is cheap (and only on the
       // rare fire-edge path, not the per-edge hot path).
+      //
+      // Mark ALL matching ids in one pass: N BPs sharing a target
+      // collapse into a single pause at that target. Marking only one
+      // (the prior behavior) left the others armed at the same target,
+      // so the user's next `run()` would pause again on the next edge
+      // — N separate "hc-target=X" pauses across N edges for a single
+      // semantic event.
       if (hc >= nextHcTarget) {
         const target = nextHcTarget;
         for (const b of enabledHc) {
           if (b.target === target && !firedHcIds.has(b.id)) {
             firedHcIds.add(b.id);
-            break;
           }
         }
         recomputeNextHc();

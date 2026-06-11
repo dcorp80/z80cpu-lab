@@ -94,6 +94,53 @@ function reconcileSections(stored: SectionUiState[]): SectionUiState[] {
   return out;
 }
 
+/** Filter persisted breakpoints down to the shapes the evaluator
+ *  understands. The backend's `loadBreakpoints()` returns a typed array
+ *  but does not validate at runtime, so a schema downgrade, hand-edited
+ *  record, or unknown-kind leftover would otherwise reach the evaluator
+ *  — whose `else` branch in `setBreakpoints` would silently treat it as
+ *  `hc-count` with `target: undefined`, producing a ghost BP in the UI
+ *  that never fires. Drop anything that doesn't match a known kind plus
+ *  the per-kind field invariants. */
+function reconcileBreakpoints(stored: Breakpoint[]): Breakpoint[] {
+  const isU16 = (n: unknown): n is number =>
+    typeof n === "number" && Number.isInteger(n) && n >= 0 && n <= 0xffff;
+  const isHcTarget = (n: unknown): n is number =>
+    typeof n === "number" &&
+    Number.isInteger(n) &&
+    n >= 0 &&
+    n <= Number.MAX_SAFE_INTEGER;
+  const out: Breakpoint[] = [];
+  for (const raw of stored as unknown[]) {
+    if (!raw || typeof raw !== "object") continue;
+    const b = raw as { id?: unknown; kind?: unknown; enabled?: unknown } & {
+      lo?: unknown;
+      hi?: unknown;
+      target?: unknown;
+    };
+    if (typeof b.id !== "string" || typeof b.enabled !== "boolean") continue;
+    if (b.kind === "pc-range") {
+      if (!isU16(b.lo) || !isU16(b.hi) || b.lo > b.hi) continue;
+      out.push({
+        id: b.id,
+        kind: "pc-range",
+        lo: b.lo,
+        hi: b.hi,
+        enabled: b.enabled,
+      });
+    } else if (b.kind === "hc-count") {
+      if (!isHcTarget(b.target)) continue;
+      out.push({
+        id: b.id,
+        kind: "hc-count",
+        target: b.target,
+        enabled: b.enabled,
+      });
+    }
+  }
+  return out;
+}
+
 /** Apply a stored file order on top of the file list from the backend.
  *  Same reconciliation as sections — preserves stored order for known
  *  ids, appends unknown ids at the end. */
@@ -184,7 +231,9 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     : defaultSections();
   const storedFiles = await backend.listFiles();
   const initialFiles = reconcileFiles(storedFiles, loaded?.fileOrder);
-  const initialBreakpoints = await backend.loadBreakpoints();
+  const initialBreakpoints = reconcileBreakpoints(
+    await backend.loadBreakpoints(),
+  );
 
   // Reactive setup lives inside createRoot so `dispose()` can release
   // every signal/store/memo in one shot. Without an owner, top-level
@@ -416,7 +465,16 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       // model simple.
       let pending = Math.max(1, uiConfig().flushEveryNFrames | 0);
       const tick = (): void => {
-        if (disposed) return;
+        if (disposed) {
+          // Reset the gate so the flag matches reality (no callback
+          // pending). Benign today since post-dispose nothing reads
+          // from the store, but the stale `true` would silently lose
+          // the first frame under a future "rebuild store, reuse loop"
+          // pattern — the new store's `bumpThrottled` would short-
+          // circuit on the inherited flag.
+          runFlushScheduled = false;
+          return;
+        }
         pending--;
         if (pending > 0) {
           scheduleFrame(tick);
@@ -666,7 +724,13 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     // contract. `pc-breakpoint` (M5+) also lands at a boundary.
     let instructionFiredSinceLastPause = false;
 
-    loop.onPause((reason) => {
+    // Capture the loop's Unsubscribe returns so `dispose()` can detach
+    // these callbacks alongside `rootDispose()`. Without this, the loop's
+    // subscriber arrays keep our callbacks live after dispose; if the
+    // loop is then ticked (HMR mid-run, future rebuild-store-only flow),
+    // `traceRing.push` / `hwTrace` / `setInputPins` would keep firing
+    // against a torn-down root.
+    const offPause = loop.onPause((reason) => {
       setStatus("paused");
       setHc(loop.hc());
       setLastPauseReason(reason);
@@ -714,7 +778,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       // touched by future bus-internal logic.
       syncInputPinsFromBus();
     });
-    loop.onTick((h) => {
+    const offTick = loop.onTick((h) => {
       setHc(h);
       // Effective clock (REQ §11): frame-to-frame T-state rate, measured
       // only across genuine *run* frames. The indicator is "host throughput
@@ -753,7 +817,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       // waiting for the user to pause).
       syncInputPinsFromBus();
     });
-    loop.onInstruction((trace, hcBox) => {
+    const offInstruction = loop.onInstruction((trace, hcBox) => {
       instructionFiredSinceLastPause = true;
       // Raw closure-variable bump — no Solid signal write on the hot
       // path. See `insnCountRaw` / `traceRingVersionRaw` declarations
@@ -1547,9 +1611,14 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       dispose() {
         // Order matters: flip the flag first so any rAF callback that
         // wakes after `rootDispose` is already short-circuited before it
-        // touches a disposed signal. `rootDispose` then releases every
-        // signal/store/memo created inside `createRoot`.
+        // touches a disposed signal. Then detach the loop subscriptions
+        // so the loop can't re-enter our callbacks against a torn-down
+        // root. `rootDispose` finally releases every signal/store/memo
+        // created inside `createRoot`.
         disposed = true;
+        offPause();
+        offTick();
+        offInstruction();
         rootDispose();
       },
     };

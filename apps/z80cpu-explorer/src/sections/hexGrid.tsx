@@ -170,12 +170,19 @@ const AsciiCell: Component<AsciiCellProps> = (props) => {
             }
           }}
           onBlur={() => {
-            const t = text();
-            if (t !== "") {
-              const code = t.charCodeAt(0);
-              if (code >= 0 && code <= 0xff) {
-                props.setByte(props.addr, code);
-              }
+            // Mirror Enter's invalid path on out-of-range chars (paste
+            // of a surrogate pair / multi-code-unit glyph → charCodeAt(0)
+            // returns 0xD800–0xDBFF, tripping the 0..0xff guard inside
+            // tryCommit). Flash + revert and keep editing so the user
+            // sees their input was rejected. Pre-fix behavior silently
+            // closed the cell on invalid blur, leaving the byte
+            // untouched with no feedback — the user thought they'd
+            // edited a byte but hadn't.
+            const result = tryCommit();
+            if (result === "invalid") {
+              setInvalid(true);
+              setText("");
+              return;
             }
             setEditing(false);
             setInvalid(false);
@@ -225,15 +232,23 @@ export const HexGrid: Component<HexGridProps> = (props) => {
   let watchRowEl: HTMLDivElement | undefined;
   let gridEl: HTMLDivElement | undefined;
 
-  createEffect(() => {
-    // Subscribe to the jump event; queueMicrotask lets the row layout
-    // settle (relevant after a watchAddr change repositioned the row)
-    // before we attempt to scroll.
-    props.jumpVersion();
-    queueMicrotask(() => {
-      watchRowEl?.scrollIntoView({ block: "center", behavior: "smooth" });
-    });
-  });
+  // Subscribe to the jump event; queueMicrotask lets the row layout
+  // settle (relevant after a watchAddr change repositioned the row)
+  // before we attempt to scroll. Skip the initial run — createEffect
+  // fires once at subscription time, which on app boot (especially
+  // post-Cold-boot reload) would scroll the whole page down into the
+  // Memory section even though the user never requested a jump. The
+  // prev-undefined seed pattern matches HexAddrInput's resetSignal
+  // handling — first invocation only captures the baseline value.
+  createEffect((prev: number | undefined) => {
+    const v = props.jumpVersion();
+    if (prev !== undefined) {
+      queueMicrotask(() => {
+        watchRowEl?.scrollIntoView({ block: "center", behavior: "smooth" });
+      });
+    }
+    return v;
+  }, undefined);
 
   /** Last visible address in the current window. Used to detect when an
    *  advance would fall off the bottom and the window needs to scroll. */

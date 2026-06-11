@@ -14,6 +14,23 @@ export type PauseReason =
 
 export type Unsubscribe = () => void;
 
+/**
+ * Read-only view over the loop's single-slot `Float64Array` HC counter.
+ *
+ * Subscribers can do `box[0]` reads (no HeapNumber materialization
+ * inside V8's SMI range, then a typed-array → typed-array copy past it
+ * — see `HwTraceBuffer.record`'s `chunk.hcs[pos] = box[0]`), but cannot
+ * write — TS rejects `box[0] = …` against the readonly index signature.
+ * The runtime value is still the same `Float64Array`; this is a pure
+ * compile-time guard with zero runtime cost (no Proxy, no copy, no
+ * subarray view). It turns the existing "by convention, don't write to
+ * this" comment into an enforceable contract for in-tree TS consumers.
+ */
+export interface ReadonlyHcBox {
+  readonly [n: number]: number;
+  readonly length: number;
+}
+
 export interface RunLoop {
   status(): RunStatus;
   hc(): number;
@@ -30,7 +47,7 @@ export interface RunLoop {
   setBreakpoints(bps: ReadonlyArray<Breakpoint>): void;
   onPause(cb: (reason: PauseReason) => void): Unsubscribe;
   onInstruction(
-    cb: (trace: InstructionTrace, hcBox: Float64Array) => void,
+    cb: (trace: InstructionTrace, hcBox: ReadonlyHcBox) => void,
   ): Unsubscribe;
   onTick(cb: (hc: number) => void): Unsubscribe;
   /**
@@ -67,7 +84,7 @@ export interface RunLoopDeps {
    * HeapNumber past V8's SMI range. Callees should read `hcBox[0]`
    * once into a local if they need to do arithmetic with it.
    */
-  postEdge: (hcBox: Float64Array) => void;
+  postEdge: (hcBox: ReadonlyHcBox) => void;
   config: LoopConfig;
   /**
    * Wallclock source — defaults to `performance.now`. Tests inject a
@@ -148,7 +165,7 @@ export function createRunLoop(deps: RunLoopDeps): RunLoop {
   // callback twice now fires it twice. No production caller does that.
   const pauseSubs: (((r: PauseReason) => void) | null)[] = [];
   const instructionSubs: (
-    | ((t: InstructionTrace, hcBox: Float64Array) => void)
+    | ((t: InstructionTrace, hcBox: ReadonlyHcBox) => void)
     | null
   )[] = [];
   const tickSubs: (((hc: number) => void) | null)[] = [];
@@ -221,8 +238,13 @@ export function createRunLoop(deps: RunLoopDeps): RunLoop {
 
   function shouldStopForStep(): PauseReason | null {
     if (status !== "stepping") return null;
-    const insnDone = stepInstructionsRemaining === 0;
-    const hcDone = stepHcRemaining === 0;
+    // `<= 0` rather than `=== 0`: a non-integer N (e.g. 2.5) would
+    // walk the counter through 0 to a negative residue (0.5 → -0.5),
+    // and `=== 0` would never match. UI's `parsePositiveInt` already
+    // floors at the input boundary, but this guard makes the
+    // programmatic surface non-trappy too.
+    const insnDone = stepInstructionsRemaining <= 0;
+    const hcDone = stepHcRemaining <= 0;
     if (insnDone && hcDone) return { kind: "step-complete" };
     return null;
   }
@@ -245,14 +267,19 @@ export function createRunLoop(deps: RunLoopDeps): RunLoop {
       hcBox[0]++;
       postEdge(hcBox);
       if (stepHcRemaining > 0) stepHcRemaining--;
-      // Breakpoints take precedence over step-complete: when a user
-      // steps N instructions and a BP fires at instruction M<N, the
-      // BP pause reason is more informative than a generic
-      // step-complete. HC-target also wins over a coincident step-N
-      // landing on the same edge — same rationale, the explicit BP
-      // intent beats the implicit step boundary.
+      // Breakpoints never pause out of step mode — the step target is
+      // the only pause boundary while stepping (REQ §12). Without this
+      // gate, Step from a BP-paused state would refire the same BP on
+      // the very next edge in many configurations (PC-range covering
+      // the current PC, HC-count BP exactly at the current HC, BPs
+      // landing inside the step window) and the user would see "press
+      // Step → still paused at the same BP" with no apparent progress.
+      // We still call `checkAfterEdge` so HC-count BPs encountered
+      // during the step get their fired-flag set as a side effect — a
+      // subsequent `run()` then correctly skips them rather than
+      // immediately re-pausing at an HC the step already swept past.
       const bp = breakpoints.checkAfterEdge(cpu, hcBox[0]);
-      if (bp) {
+      if (bp && status !== "stepping") {
         firePause(bp);
         break;
       }

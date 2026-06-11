@@ -3,9 +3,14 @@ import { Z80DebugContext } from "@dcorp80/z80cpu-debug";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_BUS_CONFIG } from "../config/defaults.ts";
 import { makeBus64k } from "./bus.ts";
-import { createRunLoop, type PauseReason, type RunLoop } from "./loop.ts";
+import {
+  createRunLoop,
+  type PauseReason,
+  type ReadonlyHcBox,
+  type RunLoop,
+} from "./loop.ts";
 
-const noopPostEdge = (_hcBox: Float64Array): void => {};
+const noopPostEdge = (_hcBox: ReadonlyHcBox): void => {};
 
 // Build a real CPU + dbg + bus. Force memInit=0 so the code path is
 // NOPs (opcode 00 = NOP) — keeps step/HC arithmetic predictable instead
@@ -135,19 +140,31 @@ describe("RunLoop", () => {
     expect(count).toBe(2);
   });
 
-  it("HC-count BP fires through the loop and clears step counters", () => {
+  it("HC-count BP fires from run() and pauses with hc-target", () => {
     const { loop, pauses } = buildLoop();
     loop.setBreakpoints([
       { id: "hc1", kind: "hc-count", target: 5, enabled: true },
     ]);
-    // Ask for 1000 HC of stepping — BP fires at 5, step state should
-    // not be honored on a subsequent run().
-    loop.stepHC(1000);
+    loop.run();
     sync(loop);
     expect(loop.hc()).toBe(5);
     expect(pauses).toEqual([{ kind: "hc-target", target: 5 }]);
-    // Verify step state was cleared by the BP fire: a follow-up run()
-    // shouldn't stop until we ask it to.
+  });
+
+  it("BPs do not fire during stepHC — only the step target pauses (REQ §12)", () => {
+    const { loop, pauses } = buildLoop();
+    // HC-count BP at 5; step over it to HC=10. The BP is silently
+    // swept past and marked fired as a side effect of the per-edge
+    // checkAfterEdge call.
+    loop.setBreakpoints([
+      { id: "hc1", kind: "hc-count", target: 5, enabled: true },
+    ]);
+    loop.stepHC(10);
+    sync(loop);
+    expect(loop.hc()).toBe(10);
+    expect(pauses).toEqual([{ kind: "step-complete" }]);
+    // Now run() — the BP was already marked fired during the step,
+    // so it must not re-fire (no double-pause at the same HC).
     loop.run();
     expect(loop.status()).toBe("running");
     loop.pause();
@@ -184,15 +201,40 @@ describe("RunLoop", () => {
     expect(loop.hc()).toBe(3);
   });
 
-  it("BP fire takes precedence over a coincident step-complete", () => {
+  it("step-complete wins over a coincident BP that lands on the step target (REQ §12)", () => {
     const { loop, pauses } = buildLoop();
     loop.setBreakpoints([
       { id: "hc1", kind: "hc-count", target: 5, enabled: true },
     ]);
     loop.stepHC(5);
     sync(loop);
-    // Both would land on edge 5; BP check runs first.
-    expect(pauses).toEqual([{ kind: "hc-target", target: 5 }]);
+    // Both would land on edge 5; in step mode BPs are suppressed, so
+    // the explicit step boundary is the only pause reason. (Pre-§12
+    // behavior was the opposite — BPs took precedence.)
+    expect(pauses).toEqual([{ kind: "step-complete" }]);
+  });
+
+  it("PC-range BP does not refire when stepping out of a BP pause (REQ §12)", () => {
+    // Reproduces the §12 issue: pause at a single-PC BP, click Step,
+    // expect Step to actually advance an instruction rather than
+    // re-pausing at the same BP. memInit=0 → all NOPs, so PC advances
+    // by 1 per instruction.
+    const { loop, pauses, cpu } = buildLoop();
+    loop.setBreakpoints([
+      { id: "pc1", kind: "pc-range", lo: 0x0001, hi: 0x0001, enabled: true },
+    ]);
+    loop.run();
+    sync(loop);
+    expect(pauses[0]?.kind).toBe("pc-breakpoint");
+    expect(cpu.regs.pc).toBe(0x0001);
+    // Now Step. Pre-fix behavior re-fired the BP on the first M1
+    // entry of the resumed run; with the gate in place, the step
+    // advances past it.
+    loop.stepInstructions(1);
+    sync(loop);
+    expect(pauses.length).toBe(2);
+    expect(pauses[1]).toEqual({ kind: "step-complete" });
+    expect(cpu.regs.pc).toBeGreaterThan(0x0001);
   });
 
   describe("preEdge / postEdge ordering", () => {
@@ -205,7 +247,7 @@ describe("RunLoop", () => {
         calls.push("pre");
         bus.resolve();
       };
-      const postEdge = (hcBox: Float64Array): void => {
+      const postEdge = (hcBox: ReadonlyHcBox): void => {
         calls.push(`post:${hcBox[0]}`);
       };
       const loop = createRunLoop({
@@ -256,5 +298,20 @@ describe("RunLoop", () => {
     });
     expect(warn).toHaveBeenCalledOnce();
     warn.mockRestore();
+  });
+
+  // Compile-time guard for #4: subscribers receive the HC slot as a
+  // `ReadonlyHcBox`, so any accidental `box[0] = …` (which would have
+  // corrupted the loop's authoritative counter) is a TS error. The
+  // guard is TS-only; underneath, the value is still a mutable
+  // Float64Array, so we never call this lambda — the `@ts-expect-error`
+  // does the work at build time, and the build fails if the readonly
+  // assignment ever stops being an error.
+  it("ReadonlyHcBox rejects writes at the TS layer", () => {
+    const _typecheck = (box: ReadonlyHcBox): void => {
+      // @ts-expect-error — index signature is readonly, write rejected.
+      box[0] = 5;
+    };
+    expect(typeof _typecheck).toBe("function");
   });
 });

@@ -918,17 +918,22 @@ body {
   font-size: 0.9em;
 }
 
-/* Side-by-side panes when split is on. Container query so the WR pane
-   stacks below RD when the section body is too narrow (this is per-
-   section, not viewport-wide — the explorer is single-column but
-   sections can be nested in narrow surfaces in future layouts). */
+/* Side-by-side panes when split is on; WR pane stacks below RD when
+   the viewport is too narrow. The original implementation used a
+   container query against `.io-split-body` itself — but `container-type`
+   establishes a query container for DESCENDANTS, not the element it's
+   declared on, so the rule never matched and the panes stayed
+   side-by-side at every width. Switched to a @media query: the
+   explorer is single-column and full-width so viewport ≈ section width
+   in practice. Per-section container queries can come back if sections
+   ever land in narrower surfaces (an outer wrapper would carry the
+   container-type then). */
 .io-split-body {
-  container-type: inline-size;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
 }
-@container (max-width: 720px) {
+@media (max-width: 720px) {
   .io-split-body {
     grid-template-columns: 1fr;
   }

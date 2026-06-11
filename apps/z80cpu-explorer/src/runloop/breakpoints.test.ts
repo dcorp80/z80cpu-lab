@@ -131,6 +131,28 @@ describe("BreakpointEvaluator", () => {
       expect(ev.checkAfterEdge(fake(StepId.M1_T1_0, 0), 400)).toBeNull();
     });
 
+    it("N BPs sharing a target collapse into one fire", () => {
+      const ev = createBreakpointEvaluator();
+      // Three distinct BPs (different ids) all pointed at hc=100.
+      // Prior behavior marked only one fired per edge, so a subsequent
+      // `run()` would pause again at hc=101, then hc=102, etc. — N
+      // user-visible pauses for one semantic event. Fix coalesces
+      // them: all three are marked fired in a single pass, and no
+      // further fires occur regardless of how far hc advances.
+      ev.setBreakpoints([
+        { id: "a", kind: "hc-count", target: 100, enabled: true },
+        { id: "b", kind: "hc-count", target: 100, enabled: true },
+        { id: "c", kind: "hc-count", target: 100, enabled: true },
+      ]);
+      expect(ev.checkAfterEdge(fake(StepId.M1_T1_0, 0), 100)).toMatchObject({
+        target: 100,
+      });
+      // The next several edges must not refire.
+      expect(ev.checkAfterEdge(fake(StepId.M1_T1_0, 0), 101)).toBeNull();
+      expect(ev.checkAfterEdge(fake(StepId.M1_T1_0, 0), 200)).toBeNull();
+      expect(ev.checkAfterEdge(fake(StepId.M1_T1_0, 0), 1_000_000)).toBeNull();
+    });
+
     it("disabled HC-count BP does not fire", () => {
       const ev = createBreakpointEvaluator();
       ev.setBreakpoints([hc(100, false)]);
@@ -204,6 +226,70 @@ describe("BreakpointEvaluator", () => {
       expect(ev.checkAfterEdge(fake(StepId.M1_T1_0, 0), 500)).toMatchObject({
         target: 100,
       });
+    });
+
+    it("in-place target edit on a fired BP re-arms it", () => {
+      const ev = createBreakpointEvaluator();
+      // BP fires at hc=100.
+      const bp = (target: number): Breakpoint => ({
+        id: "a",
+        kind: "hc-count",
+        target,
+        enabled: true,
+      });
+      ev.setBreakpoints([bp(100)]);
+      expect(ev.checkAfterEdge(fake(StepId.M1_T1_0, 0), 100)).toMatchObject({
+        target: 100,
+      });
+      // User edits the BP target in place (same id, still enabled).
+      // The store mutates `breakpoints[i].target` rather than
+      // recreating the record, so the id survives — pre-fix behavior
+      // left the fired flag set and the BP never fired at the new
+      // target until removed-and-re-added or zeroHC.
+      ev.setBreakpoints([bp(200)]);
+      expect(ev.checkAfterEdge(fake(StepId.M1_T1_0, 0), 150)).toBeNull();
+      expect(ev.checkAfterEdge(fake(StepId.M1_T1_0, 0), 200)).toMatchObject({
+        target: 200,
+      });
+    });
+
+    it("in-place edit to a target below current hc fires on the next edge", () => {
+      const ev = createBreakpointEvaluator();
+      const bp = (target: number): Breakpoint => ({
+        id: "a",
+        kind: "hc-count",
+        target,
+        enabled: true,
+      });
+      // BP fires at hc=100.
+      ev.setBreakpoints([bp(100)]);
+      ev.checkAfterEdge(fake(StepId.M1_T1_0, 0), 100);
+      // User edits target to 50 (already passed). Per the existing
+      // "target ≤ current hc fires on next edge" rule, the re-armed
+      // BP fires immediately.
+      ev.setBreakpoints([bp(50)]);
+      expect(ev.checkAfterEdge(fake(StepId.M1_T1_0, 0), 150)).toMatchObject({
+        target: 50,
+      });
+    });
+
+    it("setBreakpoints with the SAME target is a no-op for fired state", () => {
+      // Sanity guard for the in-place-edit detection: a setBreakpoints
+      // call that passes the same target must not re-arm a fired BP
+      // (otherwise any unrelated mutation that rebuilds the BP list —
+      // adding a different BP, toggling another BP — would refire
+      // every "already hit" BP on the next edge).
+      const ev = createBreakpointEvaluator();
+      const bp: Breakpoint = {
+        id: "a",
+        kind: "hc-count",
+        target: 100,
+        enabled: true,
+      };
+      ev.setBreakpoints([bp]);
+      ev.checkAfterEdge(fake(StepId.M1_T1_0, 0), 100);
+      ev.setBreakpoints([bp]); // identical re-set
+      expect(ev.checkAfterEdge(fake(StepId.M1_T1_0, 0), 200)).toBeNull();
     });
 
     it("re-adding a removed-then-recreated BP at the same target fires again", () => {

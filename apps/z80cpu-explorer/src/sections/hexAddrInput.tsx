@@ -199,10 +199,12 @@ export const HexAddrInput: Component<HexAddrInputProps> = (props) => {
     setFocused(false);
     const t = text();
     if (t === "") {
-      // Empty — already reverted by the unfocused render. Clear any
-      // stale invalid flash so the field doesn't keep the red border
-      // after the user moves on.
-      setInvalid(false);
+      // Empty — already reverted by the unfocused render. Do NOT touch
+      // `invalid` here: Enter-on-garbage sets it via `flashInvalid()`
+      // (text → "", 700 ms timer running) and a blur fired before the
+      // timer would otherwise cut the fade-out mid-animation. Letting
+      // the timer alone run keeps the flash visible for its full
+      // duration regardless of whether the user tabs away.
       return;
     }
     const parsed = parseValue(t);
