@@ -364,25 +364,6 @@ describe("Z80DebugContext", () => {
     );
   });
 
-  test("totalHc advances every clockEdge regardless of enabled", () => {
-    const cpu = new Z80Cpu();
-    const mem = new Uint8Array(256); // all NOPs
-    const resolve = makeBus(cpu, mem);
-    const dbg = new Z80DebugContext(cpu);
-
-    strictEqual(dbg.totalHc, 0);
-    dbgTickN(dbg, resolve, 10);
-    strictEqual(dbg.totalHc, 10, "totalHc counts each clockEdge while enabled");
-
-    dbg.enabled = false;
-    dbgTickN(dbg, resolve, 10);
-    strictEqual(dbg.totalHc, 20, "totalHc still advances while disabled");
-
-    dbg.enabled = true;
-    dbgTickN(dbg, resolve, 10);
-    strictEqual(dbg.totalHc, 30, "totalHc keeps counting after re-enable");
-  });
-
   test("disabled mode does not fire callbacks", () => {
     const cpu = new Z80Cpu();
     const mem = new Uint8Array(256); // all NOPs
@@ -397,113 +378,6 @@ describe("Z80DebugContext", () => {
     dbg.enabled = false;
     dbgTickN(dbg, resolve, 100); // 100 HC of NOPs while disabled
     strictEqual(fires, 0, "no callbacks should fire while disabled");
-  });
-
-  test("stepHc(n, cb) fires cb after exactly n HC", () => {
-    const cpu = new Z80Cpu();
-    const mem = new Uint8Array(256); // all NOPs
-    const resolve = makeBus(cpu, mem);
-    const dbg = new Z80DebugContext(cpu);
-
-    const startHc = dbg.totalHc;
-    let fired = false;
-    let firedAtHc = -1;
-    dbg.stepHc(50, () => {
-      fired = true;
-      firedAtHc = dbg.totalHc;
-    });
-
-    // Tick until cb fires (or give up after a generous budget).
-    for (let i = 0; i < 200 && !fired; i++) {
-      resolve();
-      dbg.clockEdge();
-    }
-
-    strictEqual(fired, true, "cb must fire");
-    strictEqual(firedAtHc, startHc + 50, "cb fires exactly at startHc + n");
-  });
-
-  test("stepHc prefetch enables tracing before fire even if dbg was off", () => {
-    const cpu = new Z80Cpu();
-    const mem = new Uint8Array(256); // all NOPs (4T = 8 HC each)
-    const resolve = makeBus(cpu, mem);
-    const dbg = new Z80DebugContext(cpu);
-    dbg.enabled = false;
-
-    const completed: number[] = [];
-    dbg.onInstructionComplete = (t) => {
-      completed.push(t.startAddr);
-    };
-
-    // Step 500 HC with 96 HC prefetch. After 500-96=404 HC the dbg
-    // re-enables, then traces several NOPs before firing.
-    let fired = false;
-    dbg.stepHc(500, () => {
-      fired = true;
-    });
-
-    for (let i = 0; i < 600 && !fired; i++) {
-      resolve();
-      dbg.clockEdge();
-    }
-
-    strictEqual(fired, true, "cb fires");
-    strictEqual(dbg.enabled, true, "prefetch must have flipped enabled true");
-    // 96 HC prefetch / 8 HC per NOP ≈ at least a few traces before fire.
-    strictEqual(
-      completed.length >= 2,
-      true,
-      `expected ≥2 traces in prefetch window, got ${completed.length}`,
-    );
-  });
-
-  test("stepHc(1, cb) — tight step works (smaller than prefetch)", () => {
-    const cpu = new Z80Cpu();
-    const mem = new Uint8Array(256);
-    const resolve = makeBus(cpu, mem);
-    const dbg = new Z80DebugContext(cpu);
-    dbg.enabled = false;
-
-    const startHc = dbg.totalHc;
-    let firedAtHc = -1;
-    // n=1 with default prefetch=96: enableAt = startHc + 1 - 96 < startHc,
-    // so enable must flip immediately.
-    dbg.stepHc(1, () => {
-      firedAtHc = dbg.totalHc;
-    });
-
-    strictEqual(dbg.enabled, true, "tight step enables immediately");
-
-    for (let i = 0; i < 5 && firedAtHc < 0; i++) {
-      resolve();
-      dbg.clockEdge();
-    }
-    strictEqual(firedAtHc, startHc + 1);
-  });
-
-  test("stepHc called twice replaces the pending callback", () => {
-    const cpu = new Z80Cpu();
-    const mem = new Uint8Array(256);
-    const resolve = makeBus(cpu, mem);
-    const dbg = new Z80DebugContext(cpu);
-
-    let firstFired = 0;
-    let secondFired = 0;
-    dbg.stepHc(100, () => {
-      firstFired++;
-    });
-    // Replace before the first fires.
-    dbg.stepHc(50, () => {
-      secondFired++;
-    });
-
-    for (let i = 0; i < 200; i++) {
-      resolve();
-      dbg.clockEdge();
-    }
-
-    strictEqual(firstFired, 0, "replaced cb must NOT fire");
-    strictEqual(secondFired, 1, "new cb fires exactly once");
   });
 
   // NMI M1 asserts nRD but the fetched byte is discarded by the CPU
@@ -546,63 +420,6 @@ describe("Z80DebugContext", () => {
       nmiTrace?.tStates,
       11,
       "NMI sequence is 11T (5T M1 + 3T pushH + 3T pushL)",
-    );
-  });
-
-  test("stepHc(0, ...) throws", () => {
-    const cpu = new Z80Cpu();
-    const dbg = new Z80DebugContext(cpu);
-    let threw = false;
-    try {
-      dbg.stepHc(0, () => {});
-    } catch {
-      threw = true;
-    }
-    strictEqual(threw, true);
-  });
-
-  // Regression: a stepHc armed but not yet fired must not survive into a
-  // later disabled-mode tick loop. The prefetch enableAt would otherwise
-  // force-enable dbg partway through, leaking traces. cancelStepHc lets
-  // callers clean up the leftover when they exit their loop via another
-  // condition.
-  test("cancelStepHc disarms pending stepHc + prefetch enable", () => {
-    const cpu = new Z80Cpu();
-    const mem = new Uint8Array(256); // all NOPs
-    const resolve = makeBus(cpu, mem);
-    const dbg = new Z80DebugContext(cpu);
-
-    // Arm an unfired stepHc (with default prefetch=96) that would
-    // eventually force-enable dbg.
-    let fired = false;
-    dbg.stepHc(500, () => {
-      fired = true;
-    });
-    // Caller exits "early" before the stepHc would fire and cleans up.
-    dbg.cancelStepHc();
-
-    // Now disable dbg and tick well past where the stepHc would have
-    // force-enabled. Nothing should re-enable it.
-    dbg.enabled = false;
-    const completed: number[] = [];
-    dbg.onInstructionComplete = () => {
-      completed.push(0);
-    };
-    for (let i = 0; i < 1000; i++) {
-      resolve();
-      dbg.clockEdge();
-    }
-
-    strictEqual(fired, false, "cancelled stepHc must not fire");
-    strictEqual(
-      dbg.enabled,
-      false,
-      "cancelled stepHc must not have force-enabled dbg",
-    );
-    strictEqual(
-      completed.length,
-      0,
-      "no traces should leak through disabled mode",
     );
   });
 

@@ -4,6 +4,11 @@
 // Z80 debug context — instruction tracing via T-phase step hooks.
 // Wraps Z80Cpu without modifying it. No allocations in the hot path.
 //
+// Pure trace observer: no breakpoint or HC concerns live here. PC-range
+// breakpoints, stepHc triggers, and the half-cycle counter are owned by
+// `Z80Breakpoints` (a sibling helper) + an external `HcCounter` the
+// consumer ticks itself.
+//
 // Capture model: each clockEdge inspects cpu.nextStep (the upcoming step's
 // StepId) and dispatches in a single switch:
 //   M1_T1_0     — capture `nextPc` for the in-flight trace: cpu.regs.pc
@@ -29,23 +34,6 @@ import { type CpuState, StepId, type Z80Cpu } from "@dcorp80/z80cpu";
 export { type CpuState, type DecodedFlags, decodeFlags } from "@dcorp80/z80cpu";
 
 export type M1Type = "normal" | "nmi" | "int" | "halt" | "special_reset";
-
-/** Payload passed to a PC-breakpoint callback. */
-export interface PcBreakInfo {
-  /** PC at the M1 boundary where the breakpoint fired. */
-  pc: number;
-  /** The matched range — lets one cb branch on which bp fired. */
-  lo: number;
-  hi: number;
-}
-
-/**
- * Handle returned by `addPcBreak` (and future `addMemBreak`, etc.). Call
- * `remove()` to disarm. Idempotent — removing the same handle twice is safe.
- */
-export interface BreakHandle {
-  remove(): void;
-}
 
 export class InstructionTrace {
   startAddr = 0;
@@ -111,32 +99,11 @@ export class Z80DebugContext {
   /** Fires after deferred writes have landed (M1 T3 falling of the next instruction). */
   onInstructionComplete: (trace: InstructionTrace) => void = () => {};
 
-  /**
-   * Global half-cycle counter — always advances on every clockEdge regardless
-   * of `enabled`. Useful for absolute timing and "run N HC" loops.
-   *
-   * Backed by a Float64Array slot rather than a plain `number` field so the
-   * value stays unboxed once it exceeds V8's SMI range (~2.1B on 64-bit,
-   * ~52s of full-speed run at ~40M edges/sec). A `number` field past that
-   * boundary HeapNumber-allocates on every `++` (~640 MB/sec of allocation),
-   * which shows up as GC sawtooth in run-mode profilers. The getter/setter
-   * preserves the public API; the hot path (`clockEdge` + `_stepCheck`)
-   * bypasses the accessor and reads `_totalHcBox[0]` directly.
-   */
-  private readonly _totalHcBox = new Float64Array(1);
-  get totalHc(): number {
-    return this._totalHcBox[0];
-  }
-  set totalHc(v: number) {
-    this._totalHcBox[0] = v;
-  }
-
   private _enabled = true;
 
   /**
    * When false, `clockEdge` skips trace bookkeeping (curr/prev mutation,
-   * byte capture, `onInstructionComplete` fires) but still ticks the CPU,
-   * advances totalHc, and runs the PC-breakpoint check.
+   * byte capture, `onInstructionComplete` fires) but still ticks the CPU.
    *
    * Toggling false → true discards any partial in-flight trace state. The
    * instruction in flight at the moment of disable is silently dropped; the
@@ -153,127 +120,6 @@ export class Z80DebugContext {
       this._multicycle = false;
     }
     this._enabled = v;
-  }
-
-  // Pending stepHc state. _stepFireHc < 0 means "no step armed".
-  // _stepEnableHc < 0 means "no auto-enable pending" (either already past
-  // that point, or step was armed while already enabled).
-  private _stepFireHc = -1;
-  private _stepEnableHc = -1;
-  private _stepCb: (() => void) | null = null;
-
-  /**
-   * Arm a one-shot trigger that fires `cb` after `n` half-cycles have
-   * elapsed (measured against `totalHc`). To guarantee the caller sees
-   * trace state at fire time, `enabled` is forced true `prefetchHc` HC
-   * before the target — long enough that at least one full instruction
-   * is observed even if dbg was running disabled.
-   *
-   * `prefetchHc` defaults to 96 HC (48 T-states) — covers any single Z80
-   * instruction including DDCB forms. Pass 0 to fire without any prefetch
-   * window, or a larger number to guarantee multiple traces of context.
-   *
-   * After firing, `_stepCb` is cleared but `enabled` is NOT restored —
-   * chained `stepHc` calls then start immediately. The caller manages
-   * `enabled` separately if they want to drop back to free-run mode.
-   *
-   * Calling `stepHc` while a previous step is pending silently replaces
-   * it; the old `cb` is dropped.
-   */
-  stepHc(n: number, cb: () => void, prefetchHc = 96): void {
-    if (n < 1) throw new Error(`stepHc: n must be >= 1, got ${n}`);
-    if (prefetchHc < 0)
-      throw new Error(`stepHc: prefetchHc must be >= 0, got ${prefetchHc}`);
-    this._stepFireHc = this.totalHc + n;
-    const enableAt = this._stepFireHc - prefetchHc;
-    if (enableAt <= this.totalHc) {
-      // Prefetch window already covers "now" — enable immediately and
-      // skip the per-edge enable check.
-      if (!this._enabled) this.enabled = true;
-      this._stepEnableHc = -1;
-    } else {
-      this._stepEnableHc = enableAt;
-    }
-    this._stepCb = cb;
-  }
-
-  /**
-   * Cancel any pending `stepHc` trigger. Idempotent. Use when a caller
-   * exits its tick loop via a different condition (e.g. an instruction
-   * completion in `<enter>`) and doesn't want the leftover trigger to
-   * fire — and, critically, to auto-enable dbg — during a subsequent
-   * unrelated loop.
-   */
-  cancelStepHc(): void {
-    this._stepCb = null;
-    this._stepFireHc = -1;
-    this._stepEnableHc = -1;
-  }
-
-  private _stepCheck(): void {
-    if (this._stepCb === null) return;
-    // Read once into a local — direct typed-array slot access bypasses the
-    // accessor and keeps the value as an unboxed double in this function's
-    // register set. Called per clockEdge at ~40M Hz.
-    const h = this._totalHcBox[0];
-    if (this._stepEnableHc >= 0 && h >= this._stepEnableHc) {
-      if (!this._enabled) this.enabled = true;
-      this._stepEnableHc = -1;
-    }
-    if (h >= this._stepFireHc) {
-      const cb = this._stepCb;
-      this._stepCb = null;
-      this._stepFireHc = -1;
-      cb();
-    }
-  }
-
-  // Registered PC breakpoints. Each tick at m1_t1_0, every entry whose
-  // [lo,hi] range contains pc fires its callback. The m1_t1_0 gate gives
-  // edge-triggered semantics for free: m1_t1_0 fires exactly once per
-  // instruction execution, so a breakpoint at X fires once per visit to
-  // X regardless of how many HC PC sat at X mid-prev-instruction.
-  private _pcBreaks: Array<{
-    lo: number;
-    hi: number;
-    cb: (info: PcBreakInfo) => void;
-  }> = [];
-
-  /**
-   * Register a PC breakpoint covering `[lo, hi]` (inclusive). Single-
-   * address form: `addPcBreak(addr, addr, cb)`. The callback receives
-   * `{pc, lo, hi}` so a shared handler can branch on which range matched.
-   *
-   * Fires at instruction boundary (m1_t1_0). If the dbg is disabled, it
-   * is force-enabled before the callback runs so the in-flight M1 is
-   * observed cleanly — the typical "stop here" use case.
-   *
-   * Returns a handle; call `.remove()` to disarm.
-   */
-  addPcBreak(
-    lo: number,
-    hi: number,
-    cb: (info: PcBreakInfo) => void,
-  ): BreakHandle {
-    if (lo > hi) throw new Error(`addPcBreak: lo (${lo}) > hi (${hi})`);
-    const entry = { lo: lo & 0xffff, hi: hi & 0xffff, cb };
-    this._pcBreaks.push(entry);
-    return {
-      remove: () => {
-        const i = this._pcBreaks.indexOf(entry);
-        if (i >= 0) this._pcBreaks.splice(i, 1);
-      },
-    };
-  }
-
-  /** Disarm every PC breakpoint. Idempotent. */
-  clearAllPcBreaks(): void {
-    this._pcBreaks.length = 0;
-  }
-
-  /** Snapshot of the currently armed PC breakpoint ranges. */
-  listPcBreaks(): ReadonlyArray<{ lo: number; hi: number }> {
-    return this._pcBreaks.map((b) => ({ lo: b.lo, hi: b.hi }));
   }
 
   constructor(cpu: Z80Cpu) {
@@ -293,21 +139,6 @@ export class Z80DebugContext {
   clockEdge(): void {
     const cpu = this.cpu;
     const nextStep = cpu.nextStep;
-
-    // PC breakpoint — runs unconditionally (works in disabled mode too).
-    // M1_T1_0 gate gives edge-triggered semantics: fire once per
-    // instruction execution at an address in range, regardless of how
-    // long PC sat there during the previous instruction's tail.
-    if (nextStep === StepId.M1_T1_0 && this._pcBreaks.length > 0) {
-      const pc = cpu.regs.pc & 0xffff;
-      for (let i = 0; i < this._pcBreaks.length; i++) {
-        const b = this._pcBreaks[i];
-        if (pc >= b.lo && pc <= b.hi) {
-          if (!this._enabled) this.enabled = true;
-          b.cb({ pc, lo: b.lo, hi: b.hi });
-        }
-      }
-    }
 
     if (this._enabled) {
       switch (nextStep) {
@@ -382,9 +213,7 @@ export class Z80DebugContext {
     }
 
     cpu.clockEdge();
-    this._totalHcBox[0]++;
     if (this._enabled) this.curr.hc++;
-    this._stepCheck();
   }
 
   /**

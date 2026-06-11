@@ -30,7 +30,9 @@ import {
   type BreakHandle,
   type CpuState,
   decodeFlags,
+  type HcCounter,
   type InstructionTrace,
+  Z80Breakpoints,
   Z80DebugContext,
 } from "@dcorp80/z80cpu-debug";
 import { disasm } from "@dcorp80/z80cpu-disasm";
@@ -179,6 +181,24 @@ async function main(): Promise<void> {
     console.log(fmtTrace(t));
   };
 
+  // Half-cycle counter owned by the REPL (the dbg no longer tracks HC;
+  // see z80cpu-debug:HcCounter). Single Float64Array slot ticked by the
+  // tick helper below. Passed to Z80Breakpoints by reference so its
+  // stepHc check stays an unboxed-double indexed load.
+  const hcBox = new Float64Array(1);
+  const hc: HcCounter = { box: hcBox, index: 0 };
+  const bp = new Z80Breakpoints(dbg, hc);
+
+  // Run one full edge: bus resolve → dbg.clockEdge → tick HC → bp scan.
+  // Every tick site in the REPL goes through this helper so the four
+  // steps stay in lockstep.
+  const tickEdge = (): void => {
+    resolve();
+    dbg.clockEdge();
+    hcBox[0]++;
+    bp.tickAfterEdge();
+  };
+
   // REPL holds a single breakpoint slot. `b <addr>` replaces it; `b -` clears.
   // The cb only sets a local flag — the `c` command's tick loop watches it.
   let bpHandle: BreakHandle | null = null;
@@ -237,7 +257,7 @@ async function main(): Promise<void> {
     }
 
     if (input === "") {
-      // Step until one trace fires. Use stepHc with a huge n + early
+      // Step until one trace fires. Use bp.stepHc with a huge n + early
       // break in the onInstructionComplete: when the user's printer
       // fires, set `fired = true` and exit the tick loop. stepHc here
       // is just a safety net to avoid runaway if no instruction ever
@@ -250,22 +270,19 @@ async function main(): Promise<void> {
         fired = true;
       };
       let timedOut = false;
-      dbg.stepHc(
+      bp.stepHc(
         1024,
         () => {
           timedOut = true;
         },
         0,
       );
-      while (!fired && !timedOut) {
-        resolve();
-        dbg.clockEdge();
-      }
+      while (!fired && !timedOut) tickEdge();
       dbg.onInstructionComplete = userPrint;
       // If we exited via `fired`, the stepHc safety timeout is still
       // armed — and its hidden prefetch logic would force-enable dbg
       // mid-way through a later `c` loop. Always cancel after exit.
-      dbg.cancelStepHc();
+      bp.cancelStepHc();
       if (timedOut)
         console.log("(no trace fired in 1024 HC — program may be stuck)");
       else console.log(fmtState(dbg.state()));
@@ -278,13 +295,10 @@ async function main(): Promise<void> {
         continue;
       }
       bpHit = false;
-      // Free-run: dbg auto-enables itself when the breakpoint fires
-      // (the check inside clockEdge does `enabled = true`).
+      // Free-run: bp.tickAfterEdge auto-enables dbg when the breakpoint
+      // fires (the force-enable hook on PC-bp hit).
       dbg.enabled = false;
-      while (!bpHit) {
-        resolve();
-        dbg.clockEdge();
-      }
+      while (!bpHit) tickEdge();
       console.log(`(break at ${hex16(dbg.state().pc)})`);
       console.log(fmtState(dbg.state()));
       continue;
@@ -327,7 +341,7 @@ async function main(): Promise<void> {
       if (bpHandle) bpHandle.remove();
       bpRange = { lo, hi };
       bpHit = false;
-      bpHandle = dbg.addPcBreak(lo, hi, () => {
+      bpHandle = bp.addPcBreak(lo, hi, () => {
         bpHit = true;
       });
       if (lo === hi) console.log(`breakpoint set at ${hex16(lo)}h`);
@@ -341,21 +355,18 @@ async function main(): Promise<void> {
         console.log("N must be > 0");
         continue;
       }
-      const startHc = dbg.totalHc;
+      const startHc = hcBox[0];
       // Disable tracing for the bulk of the skip; stepHc's default
       // prefetch (96 HC) auto-flips `enabled` back on shortly before
       // the target, so the final few instructions print as context
       // for where we stopped.
       dbg.enabled = false;
       let done = false;
-      dbg.stepHc(n, () => {
+      bp.stepHc(n, () => {
         done = true;
       }); // default prefetchHc = 96
-      while (!done) {
-        resolve();
-        dbg.clockEdge();
-      }
-      console.log(`(skipped ${n} HC; totalHc ${startHc} → ${dbg.totalHc})`);
+      while (!done) tickEdge();
+      console.log(`(skipped ${n} HC; totalHc ${startHc} → ${hcBox[0]})`);
       continue;
     }
 
