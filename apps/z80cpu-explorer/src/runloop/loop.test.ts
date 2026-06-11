@@ -31,7 +31,10 @@ function buildLoop() {
     },
   });
   loop.onPause((r) => pauses.push(r));
-  loop.onInstruction((_t, hcAtComplete) => insnHcs.push(hcAtComplete));
+  // hcBox is the loop's Float64Array HC slot — copy the value out so the
+  // assertion compares plain numbers (and so the captured HC stays
+  // immutable in `insnHcs` even though the box keeps mutating).
+  loop.onInstruction((_t, hcBox) => insnHcs.push(hcBox[0]));
   return { cpu, dbg, bus, loop, pauses, insnHcs };
 }
 

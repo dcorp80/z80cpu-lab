@@ -87,7 +87,10 @@ describe("Program section (browser smoke)", () => {
       name: "picked.bin",
       bytes: new Uint8Array([0xab, 0xcd, 0xef]),
     }));
-    await mountApp();
+    // Fresh MemoryBackend — see the dirty-highlight test below for why
+    // (default backend is IndexedDB and persists across tests in the
+    // same browser context).
+    await mountApp(new MemoryBackend());
     // Type a non-default address into the stub's addr input.
     const stubRow = document.querySelector(".program-add-stub") as HTMLElement;
     const addrInput = stubRow.querySelector<HTMLInputElement>(
@@ -113,7 +116,8 @@ describe("Program section (browser smoke)", () => {
   });
 
   it("file-row addr input commits the parsed value on real blur", async () => {
-    await mountApp();
+    // Fresh MemoryBackend — see the dirty-highlight test below for why.
+    await mountApp(new MemoryBackend());
     booted.store.addFile({
       name: "rom.bin",
       bytes: new Uint8Array([0]),
@@ -142,15 +146,20 @@ describe("Program section (browser smoke)", () => {
   });
 
   it("dirty highlight is visible (CSS rule applies) after addr changes post-load", async () => {
-    await mountApp();
+    // Fresh MemoryBackend per test — the default backend is IndexedDB,
+    // which persists across tests in the same browser context. The two
+    // prior tests in this describe add files via the default backend,
+    // so without isolation here we land with three file rows and the
+    // "Load" button locator matches three elements.
+    await mountApp(new MemoryBackend());
     booted.store.addFile({
       name: "rom.bin",
       bytes: new Uint8Array([0xaa]),
       loadAddr: 0x100,
     });
     await flush();
-    // Load it so session.lastLoadedAddr is set. Multiple buttons read
-    // "Load*" — use exact match against the per-file button label.
+    // Load it so session.lastLoadedAddr is set. Use exact match against
+    // the per-file button label so the locator stays tight.
     const loadBtn = page.getByRole("button", { name: "Load", exact: true });
     await loadBtn.click();
     // Change addr on the real row (not the stub).

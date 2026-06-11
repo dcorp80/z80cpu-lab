@@ -27,16 +27,29 @@ export interface StubLoop extends RunLoop {
 
 export function makeStubLoop(): StubLoop {
   let status: RunStatus = "paused";
-  let hc = 0;
-  const pauseSubs = new Set<(r: PauseReason) => void>();
-  const instructionSubs = new Set<
-    (t: InstructionTrace, hcAtComplete: number) => void
-  >();
-  const tickSubs = new Set<(hc: number) => void>();
+  // Mirror the real loop's Float64Array HC slot so emitInstruction can
+  // hand subscribers `hcBox` by reference (matching the production
+  // `onInstruction(cb: (trace, hcBox: Float64Array) => void)` contract).
+  const hcBox = new Float64Array(1);
+  // Subscriber lists mirror the real loop: tombstone Arrays, not Sets.
+  // The store's dispatch sites read these to validate event flow; using
+  // Set here would mask any future regression that depends on the
+  // production iteration semantics (indexed-for + null-skip).
+  const pauseSubs: (((r: PauseReason) => void) | null)[] = [];
+  const instructionSubs: (
+    | ((t: InstructionTrace, hcBox: Float64Array) => void)
+    | null
+  )[] = [];
+  const tickSubs: (((hc: number) => void) | null)[] = [];
+
+  function removeSub<T>(arr: (T | null)[], cb: T): void {
+    const i = arr.indexOf(cb);
+    if (i >= 0) arr[i] = null;
+  }
 
   const stub: StubLoop = {
     status: () => status,
-    hc: () => hc,
+    hc: () => hcBox[0],
     run() {
       stub.lastCmd = "run";
       status = "running";
@@ -45,7 +58,13 @@ export function makeStubLoop(): StubLoop {
       stub.lastCmd = "pause";
       const wasRunning = status !== "paused";
       status = "paused";
-      if (wasRunning) for (const cb of pauseSubs) cb({ kind: "user" });
+      if (wasRunning) {
+        const n = pauseSubs.length;
+        for (let i = 0; i < n; i++) {
+          const cb = pauseSubs[i];
+          if (cb !== null) cb({ kind: "user" });
+        }
+      }
     },
     stepInstructions(n: number) {
       stub.lastCmd = "stepInstructions";
@@ -59,7 +78,7 @@ export function makeStubLoop(): StubLoop {
     },
     zeroHC() {
       stub.lastCmd = "zeroHC";
-      hc = 0;
+      hcBox[0] = 0;
     },
     setBreakpoints(bps) {
       // Snapshot rather than alias. The store passes `unwrap(breakpoints)`
@@ -72,30 +91,42 @@ export function makeStubLoop(): StubLoop {
       stub.setBreakpointsCalls++;
     },
     onPause(cb): Unsubscribe {
-      pauseSubs.add(cb);
-      return () => pauseSubs.delete(cb);
+      pauseSubs.push(cb);
+      return () => removeSub(pauseSubs, cb);
     },
     onInstruction(cb): Unsubscribe {
-      instructionSubs.add(cb);
-      return () => instructionSubs.delete(cb);
+      instructionSubs.push(cb);
+      return () => removeSub(instructionSubs, cb);
     },
     onTick(cb): Unsubscribe {
-      tickSubs.add(cb);
-      return () => tickSubs.delete(cb);
+      tickSubs.push(cb);
+      return () => removeSub(tickSubs, cb);
     },
     emitPause(r) {
       status = "paused";
-      for (const cb of pauseSubs) cb(r);
+      const n = pauseSubs.length;
+      for (let i = 0; i < n; i++) {
+        const cb = pauseSubs[i];
+        if (cb !== null) cb(r);
+      }
     },
     emitInstruction(t) {
-      for (const cb of instructionSubs) cb(t, hc);
+      const n = instructionSubs.length;
+      for (let i = 0; i < n; i++) {
+        const cb = instructionSubs[i];
+        if (cb !== null) cb(t, hcBox);
+      }
     },
     emitTick(h) {
-      hc = h;
-      for (const cb of tickSubs) cb(h);
+      hcBox[0] = h;
+      const n = tickSubs.length;
+      for (let i = 0; i < n; i++) {
+        const cb = tickSubs[i];
+        if (cb !== null) cb(h);
+      }
     },
     setHc(h) {
-      hc = h;
+      hcBox[0] = h;
     },
     setStatus(s) {
       status = s;

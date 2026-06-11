@@ -3,7 +3,6 @@ import type { Z80DebugContext } from "@dcorp80/z80cpu-debug";
 import {
   type Accessor,
   createContext,
-  createMemo,
   createSignal,
   useContext,
 } from "solid-js";
@@ -315,9 +314,23 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
   // capturing regardless — PC-range BPs and half-cycle stepping depend on
   // it — so this only saves the per-callback record copy plus the ring's
   // resident memory.
+  // Same split as `insnCountRaw` / `traceRingVersionRaw`: a raw closure
+  // mirror for the per-instruction hot path (read in `loop.onInstruction`
+  // below — ~10⁶/sec at full speed), plus a Solid signal for UI sections.
+  // Calling the Accessor `traceRingMode()` inside the hot callback would
+  // route through Solid's `readSignal` on every dispatch — measurable
+  // memory inflation in the profiler. The HW-trace recorder dodges this
+  // by parking its own mode on the buffer (`hwTrace.record` checks
+  // `this.mode`); the instruction ring's mode gate stays in the store
+  // (the gate also bumps `traceRingVersionRaw`), so we mirror the
+  // hwTrace pattern in spirit — read a plain value, not a signal.
+  let traceRingModeRaw: "disabled" | "ring" = readPersistedCaptureMode(
+    "instructionTrace",
+    "ring",
+  );
   const [traceRingMode, setTraceRingModeSig] = createSignal<
     "disabled" | "ring"
-  >(readPersistedCaptureMode("instructionTrace", "ring"));
+  >(traceRingModeRaw);
 
   // HW-trace reactive mirrors (DESIGN §3.2). Persisted mode wins over the
   // buffer's constructor default — propagate it back onto the buffer first
@@ -523,18 +536,20 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
   const [pendingSplitIo, setPendingSplitIo] = createSignal(splitIo());
   const [pendingMemInit, setPendingMemInit] = createSignal(memInit());
   const [pendingIoInit, setPendingIoInit] = createSignal(ioInit());
-  const splitIoDirty: Accessor<boolean> = createMemo(
-    () => pendingSplitIo() !== splitIo(),
-  );
-  const memInitDirty: Accessor<boolean> = createMemo(
-    () => pendingMemInit() !== memInit(),
-  );
-  const ioInitDirty: Accessor<boolean> = createMemo(
-    () => pendingIoInit() !== ioInit(),
-  );
-  const reloadSettingsDirty: Accessor<boolean> = createMemo(
-    () => splitIoDirty() || memInitDirty() || ioInitDirty(),
-  );
+  // Plain accessors, not `createMemo`: `createAppStore` runs outside any
+  // `createRoot`/`render` scope (it's called from `bootApp` before the
+  // root `render(...)` mounts), so a top-level `createMemo` here logs a
+  // Solid warning ("computations created outside a `createRoot` or
+  // `render` will never be disposed"). These four are boolean
+  // comparisons of signal reads — consumers (`<Show when={...}>`,
+  // `isCollapseLocked`) auto-track the underlying signals just as well
+  // through plain accessors, and the deduplication a memo would provide
+  // is negligible for a boolean.
+  const splitIoDirty: Accessor<boolean> = () => pendingSplitIo() !== splitIo();
+  const memInitDirty: Accessor<boolean> = () => pendingMemInit() !== memInit();
+  const ioInitDirty: Accessor<boolean> = () => pendingIoInit() !== ioInit();
+  const reloadSettingsDirty: Accessor<boolean> = () =>
+    splitIoDirty() || memInitDirty() || ioInitDirty();
   function assertBytesPerRow(
     n: number,
     options: ReadonlyArray<number>,
@@ -717,7 +732,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     // waiting for the user to pause).
     syncInputPinsFromBus();
   });
-  loop.onInstruction((trace, hcAtComplete) => {
+  loop.onInstruction((trace, hcBox) => {
     instructionFiredSinceLastPause = true;
     // Raw closure-variable bump — no Solid signal write on the hot
     // path. See `insnCountRaw` / `traceRingVersionRaw` declarations
@@ -729,8 +744,8 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     // REQ §11 Capture toggle: skip the push (and version bump) when the
     // user disabled ring capture. The insn counter and the throttled
     // mirror still tick so the folded summary keeps moving.
-    if (traceRingMode() === "ring") {
-      traceRing.push(trace, hcAtComplete);
+    if (traceRingModeRaw === "ring") {
+      traceRing.push(trace, hcBox[0]);
       traceRingVersionRaw++;
     }
     bumpThrottled();
@@ -1212,6 +1227,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
           }),
         );
       }
+      traceRingModeRaw = mode;
       setTraceRingModeSig(mode);
       // Persist alongside other section config (folded, watchAddr, etc.).
       // Fire-and-forget through updateSectionConfig → persistUi.

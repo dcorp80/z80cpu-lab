@@ -30,7 +30,7 @@ export interface RunLoop {
   setBreakpoints(bps: ReadonlyArray<Breakpoint>): void;
   onPause(cb: (reason: PauseReason) => void): Unsubscribe;
   onInstruction(
-    cb: (trace: InstructionTrace, hcAtComplete: number) => void,
+    cb: (trace: InstructionTrace, hcBox: Float64Array) => void,
   ): Unsubscribe;
   onTick(cb: (hc: number) => void): Unsubscribe;
   /**
@@ -147,10 +147,10 @@ export function createRunLoop(deps: RunLoopDeps): RunLoop {
   // The Array form drops Set's dedupe-on-add: subscribing the same
   // callback twice now fires it twice. No production caller does that.
   const pauseSubs: (((r: PauseReason) => void) | null)[] = [];
-  const instructionSubs: (((
-    t: InstructionTrace,
-    hcAtComplete: number,
-  ) => void) | null)[] = [];
+  const instructionSubs: (
+    | ((t: InstructionTrace, hcBox: Float64Array) => void)
+    | null
+  )[] = [];
   const tickSubs: (((hc: number) => void) | null)[] = [];
 
   function pushSub<T>(arr: (T | null)[], cb: T): void {
@@ -183,10 +183,9 @@ export function createRunLoop(deps: RunLoopDeps): RunLoop {
   dbg.onInstructionComplete = (trace) => {
     if (stepInstructionsRemaining > 0) stepInstructionsRemaining--;
     const n = instructionSubs.length;
-    const h = hcBox[0];
     for (let i = 0; i < n; i++) {
       const cb = instructionSubs[i];
-      if (cb !== null) cb(trace, h);
+      if (cb !== null) cb(trace, hcBox);
     }
   };
 
