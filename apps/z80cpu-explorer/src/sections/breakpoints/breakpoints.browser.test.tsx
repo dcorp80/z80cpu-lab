@@ -11,16 +11,17 @@ import { page } from "@vitest/browser/context";
 import { render } from "solid-js/web";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type BootedApp, bootApp } from "../../boot.tsx";
+import { MemoryBackend } from "../../storage/memory.ts";
 import "../../styles.css";
 
 let booted: BootedApp;
 let dispose: () => void = () => {};
 
-async function mountApp() {
+async function mountApp(backend?: MemoryBackend) {
   const container = document.createElement("div");
   container.id = "root";
   document.body.append(container);
-  booted = await bootApp();
+  booted = await bootApp({ backend });
   const detachRender = render(booted.ui, container);
   dispose = () => {
     detachRender();
@@ -29,8 +30,12 @@ async function mountApp() {
   };
 }
 
+// Fresh MemoryBackend per test — the default backend is IndexedDB, which
+// persists across tests in the same browser context. `addBreakpoint`
+// below writes to the backend, so without isolation the next test would
+// inherit the previous run's BPs.
 beforeEach(async () => {
-  await mountApp();
+  await mountApp(new MemoryBackend());
 });
 
 afterEach(() => {
