@@ -11,13 +11,18 @@
 //
 // Capture model: each clockEdge inspects cpu.nextStep (the upcoming step's
 // StepId) and dispatches in a single switch:
-//   M1_T1_0     — capture `nextPc` for the in-flight trace: cpu.regs.pc
-//                 at this exact tick is the fetch address of the upcoming
-//                 M1, i.e. where the just-completing instruction "ended."
-//                 NMI_M1_T1_0 / INT_M1_T1_0 are handled the same way so the
+//   M1_T1_0     — overwrite `curr.nextPc` with cpu.regs.pc, the fetch
+//                 address of the M1 about to start. This is "where the
+//                 just-completing instruction ended" (curr is still the
+//                 in-flight trace at this point — promotion to prev
+//                 happens at the following M1_T3_0). NMI_M1_T1_0 /
+//                 INT_M1_T1_0 are handled the same way so the
 //                 interrupted instruction's nextPc is preserved.
-//   M1_T3_0     — fresh trace, capture opcode; while seq.hasMoreMCycles
-//                 (a chained prefix/CB/ED form) append to curr instead.
+//   M1_T3_0     — fresh trace, capture opcode; seed curr.nextPc to
+//                 startAddr (overwritten at the *next* M1_T1_0 above) so
+//                 mid-instruction readers of `curr.nextPc` always see a
+//                 sensible address. While seq.hasMoreMCycles (a chained
+//                 prefix/CB/ED form) append to curr instead.
 //   OP_RD_T1_0  — arm operand capture.
 //   RD_T3_1     — if armed, capture operand byte from cpu.bus.data.
 //   INT_M1_T3_0 — fresh trace, m1Type='int', capture vector.
@@ -53,9 +58,21 @@ export class InstructionTrace {
   hc = 0;
   /**
    * Logical "where the CPU went next" — the fetch address of the M1
-   * that follows this instruction. Captured at the next M1's T1_0,
-   * before T1_1 increments PC, so jumps/calls/rets/NMI all land here
-   * as the actual next instruction address.
+   * that follows this instruction.
+   *
+   * Lifecycle on `dbg.curr` (in-flight reads, for callers that bypass
+   * the `onInstructionComplete` callback):
+   *  - Seeded by `_initFreshCurr` at this trace's own M1 T3_0 to
+   *    `startAddr` (the M1 fetch address). Stays at `startAddr` for
+   *    the duration of this instruction's M-cycles — a sensible
+   *    "we haven't gone anywhere yet" default for UIs that read
+   *    curr mid-instruction.
+   *  - Overwritten at the **next** M1's T1_0 with the live
+   *    `cpu.regs.pc` (captured before T1_1 increments it), so
+   *    jumps / calls / rets / NMI / INT land here as the actual
+   *    next-instruction fetch address. By M1_T3_0 of that next M1
+   *    this trace is promoted to `prev`, and the value is the final
+   *    one delivered to the callback.
    *
    * Distinct from a snapshot's `pc`: the trace callback fires after
    * the next M1's T1_1 has incremented PC, so `state().pc` reads
@@ -150,7 +167,7 @@ export class Z80DebugContext {
           // Recorded on curr; by the time curr is promoted to
           // prev at m1_t3_0, prev.nextPc holds the logical
           // next-PC for the callback to expose.
-          this.curr.nextPc = cpu.regs.pc & 0xffff;
+          this.curr.nextPc = cpu.regs.pc;
           break;
         case StepId.M1_T3_0: {
           // While inside a multi-M-cycle instruction the next M1 is
@@ -220,12 +237,20 @@ export class Z80DebugContext {
    * Promote curr to prev, seed a fresh curr from the M1 we're entering.
    * Called at m1_t3_0 / intM1_t3_0 / nmiM1_t3_0 — by then cpu.bus has the
    * fetched byte and cpu.bus.addr still points at the instruction's PC.
+   *
+   * Seeds `nextPc = startAddr` so callers reading `dbg.curr` mid-instruction
+   * (e.g. visual debuggers wanting a stable "preview origin") always
+   * see a meaningful address. The real next-PC overwrites this at the
+   * following M1's T1_0; by the time the trace fires through
+   * `onInstructionComplete`, nextPc is the actual next-M1 fetch
+   * address — see {@link InstructionTrace.nextPc}.
    */
   private _initFreshCurr(m1Type?: M1Type): void {
     this.prev = this.curr;
     const fresh = this.curr === this._a ? this._b : this._a;
     fresh.reset();
     fresh.startAddr = this.cpu.bus.addr;
+    fresh.nextPc = this.cpu.bus.addr;
     if (this.cpu.ctl.sres) fresh.m1Type = "special_reset";
     else if (m1Type) fresh.m1Type = m1Type;
     else if (this.cpu.ctl.haltLatch) fresh.m1Type = "halt";

@@ -1441,6 +1441,59 @@ describe("createAppStore", () => {
     });
   });
 
+  describe("currentInstruction snapshot", () => {
+    it("is null at boot (no instruction in flight yet)", async () => {
+      const { store } = await freshStore();
+      expect(store.currentInstruction()).toBeNull();
+    });
+
+    it("samples dbg.curr at non-boundary pause", async () => {
+      const { store, loop, dbg } = await freshStore();
+      dbg.setCurr({ startAddr: 0x0400, bytes: [0x3e] }); // LD A,n opcode only
+      loop.emitPause({ kind: "user" });
+      const snap = store.currentInstruction();
+      expect(snap).not.toBeNull();
+      expect(snap?.startAddr).toBe(0x0400);
+      expect(Array.from(snap?.bytes ?? [])).toEqual([0x3e]);
+      expect(snap?.length).toBe(1);
+      expect(snap?.m1Type).toBe("normal");
+    });
+
+    it("still snapshots dbg.curr at boundary (the freshly-promoted next instruction)", async () => {
+      const { store, loop, dbg } = await freshStore();
+      // At boundary the dbg has just initialized a fresh curr (length=1,
+      // startAddr=nextPc of the trace that just fired). The store keeps
+      // sampling it so the section can render a Current row aliasing
+      // the first preview row — same address, partial bytes / full disasm.
+      dbg.setCurr({ startAddr: 0x0500, bytes: [0x00] });
+      loop.emitInstruction(mkTrace());
+      loop.emitPause({ kind: "step-complete" });
+      expect(store.atInstructionBoundary()).toBe(true);
+      const snap = store.currentInstruction();
+      expect(snap).not.toBeNull();
+      expect(snap?.startAddr).toBe(0x0500);
+    });
+
+    it("carries curr.nextPc through (defaults to startAddr unless transitional window)", async () => {
+      const { store, loop, dbg } = await freshStore();
+      // Plain mid-instruction snapshot — stub setCurr defaults nextPc
+      // to startAddr (mirroring _initFreshCurr).
+      dbg.setCurr({ startAddr: 0x0600, bytes: [0xc3] });
+      loop.emitPause({ kind: "user" });
+      expect(store.currentInstruction()?.nextPc).toBe(0x0600);
+
+      // Transitional window: next M1's T1_0 has overwritten curr.nextPc
+      // with the actual next-instruction PC, but curr hasn't been promoted yet.
+      dbg.setCurr({
+        startAddr: 0x0600,
+        bytes: [0xc3, 0x00, 0x07],
+        nextPc: 0x0700,
+      });
+      loop.emitPause({ kind: "user" });
+      expect(store.currentInstruction()?.nextPc).toBe(0x0700);
+    });
+  });
+
   describe("breakpoints (REQ §6.2)", () => {
     it("starts with no breakpoints when storage is empty", async () => {
       const { store } = await freshStore();

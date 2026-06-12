@@ -1,4 +1,5 @@
 import type { CpuState } from "@dcorp80/z80cpu";
+import type { M1Type } from "@dcorp80/z80cpu-debug";
 import type { Accessor } from "solid-js";
 import type { Store as SolidStore } from "solid-js/store";
 import type { UiConfig } from "../config/defaults.ts";
@@ -60,6 +61,21 @@ export interface InputPinsState {
   nWAIT: 0 | 1;
   /** Byte placed on `cpu.bus.data` during INT-acknowledge cycles (REQ §6.4). */
   intVector: number;
+}
+
+/**
+ * Snapshot of the in-flight instruction, copied out of `dbg.curr` at
+ * pause time. `bytes` holds exactly `length` entries (1..4); the rest
+ * of the encoding is unknown until further M-cycles run. `nextPc` is
+ * NOT included because it's only valid after the *next* M1's T1_0 —
+ * for an in-flight instruction it's stale/zero. Section that renders
+ * this assumes the instruction is still under construction.
+ */
+export interface CurrentInstructionSnapshot {
+  startAddr: number;
+  bytes: readonly number[];
+  length: number;
+  m1Type: M1Type;
 }
 
 /** Input to `addFile` — id is generated, lastLoadedAddr lives in sessions. */
@@ -154,6 +170,19 @@ export interface Store {
   readonly cpuState: Accessor<CpuState>;
   readonly prevCpuStateAtBoundary: Accessor<CpuState>;
   readonly atInstructionBoundary: Accessor<boolean>;
+  /**
+   * Snapshot of the in-flight instruction at the moment of pause —
+   * the M1 has begun fetching but its `onInstructionComplete` hasn't
+   * fired yet. `null` at cold boot (no M1 has run) and whenever the
+   * pause didn't land mid-instruction. The InstructionTrace section
+   * renders this between Executed and Preview with a `>` gutter
+   * marker; preview rows below stay anchored to the last completed
+   * trace's `nextPc` so they don't slide through operand fetches.
+   *
+   * Sampled by copy on `onPause` (NOT on every `onInstruction` — that
+   * would be a Solid write on the hot path).
+   */
+  readonly currentInstruction: Accessor<CurrentInstructionSnapshot | null>;
 
   run(): void;
   pause(): void;

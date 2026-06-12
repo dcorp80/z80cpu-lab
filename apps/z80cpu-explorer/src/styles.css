@@ -639,6 +639,17 @@ body {
   letter-spacing: 0.04em;
 }
 .itrace-executed {
+  /* Subgrid parent — defines the column tracks for every executed row
+     so the auto-sized disasm column expands to the widest text across
+     ALL visible rows. That gives HC a tabulated x-position one gap
+     after the disasm content (rather than at the far right of the
+     container, which is what `1fr` per-row produced).
+     Columns: gutter · addr · bytes · disasm · hc · 1fr (right-anchor for tag). */
+  display: grid;
+  grid-template-columns: 1ch 5ch 13ch auto minmax(8ch, auto) 1fr;
+  column-gap: 8px;
+  row-gap: 1px;
+  align-content: start;
   max-height: 240px;
   overflow-y: auto;
   border: 1px solid var(--border);
@@ -657,7 +668,8 @@ body {
   color: var(--accent);
   font-weight: 600;
 }
-.itrace-preview {
+.itrace-preview,
+.itrace-current {
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -668,17 +680,42 @@ body {
 }
 .itrace-row {
   display: grid;
-  grid-template-columns: minmax(6ch, auto) 5ch 13ch 1fr auto;
-  gap: 8px;
   align-items: baseline;
   padding: 1px 0;
   white-space: pre;
 }
-.itrace-row.is-preview {
-  /* Preview rows: gutter (BP marker) · addr · bytes · disasm.
-     No HC column in preview. */
-  grid-template-columns: 1ch 5ch 13ch 1fr;
+.itrace-hc {
   color: var(--muted);
+  text-align: right;
+  /* Wider visual break between disasm and HC so the HC column reads
+     as a separate annotation rather than a fifth data column. */
+  padding-left: 16px;
+}
+.itrace-addr {
+  color: var(--fg);
+}
+.itrace-bytes {
+  color: var(--muted);
+}
+.itrace-disasm {
+  color: var(--fg);
+}
+.itrace-tag {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px solid var(--warning);
+  color: var(--warning);
+  background: var(--warning-bg);
+}
+.itrace-current-marker {
+  display: inline-block;
+  width: 1ch;
+  text-align: center;
+  color: var(--accent);
+  line-height: 1;
 }
 .itrace-bp-marker {
   display: inline-block;
@@ -689,9 +726,6 @@ body {
 }
 .itrace-bp-marker::before {
   content: "\2022"; /* bullet */
-}
-.itrace-row.is-preview.has-bp .itrace-bp-marker {
-  color: var(--danger);
 }
 .itrace-addr-btn {
   /* Reset native button chrome so the address sits inline with the rest
@@ -709,34 +743,54 @@ body {
   color: var(--accent);
   text-decoration: underline;
 }
-.itrace-row.is-preview.has-bp .itrace-addr-btn {
-  color: var(--danger);
+/* Executed rows inherit the parent's column tracks via subgrid, so
+   disasm / hc tabulate across rows. Tag pinned to the right edge of
+   the trailing `1fr` filler. */
+.itrace-executed > .itrace-row {
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+  column-gap: 8px;
 }
-.itrace-hc {
+.itrace-executed > .itrace-row > .itrace-tag {
+  justify-self: end;
+}
+/* Empty-state placeholders ("(no instructions executed yet)" /
+   "(capture off — ...)") span the full row width — otherwise they'd
+   land in the 1ch gutter column and clip. */
+.itrace-executed > .muted {
+  grid-column: 1 / -1;
+}
+.itrace-row.is-preview,
+.itrace-row.is-current {
+  /* Preview / Current rows: gutter · addr · bytes · disasm · tag.
+     No HC column. Current renders the tag for non-"normal" M1s
+     (NMI/INT/HALT/special_reset); Preview always leaves it empty. */
+  grid-template-columns: 1ch 5ch 13ch 1fr auto;
+  column-gap: 8px;
   color: var(--muted);
-  text-align: right;
-}
-.itrace-addr {
-  color: var(--fg);
-}
-.itrace-bytes {
-  color: var(--muted);
-}
-.itrace-disasm {
-  color: var(--fg);
 }
 .itrace-row.is-preview .itrace-disasm {
   color: var(--muted);
 }
-.itrace-tag {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 0 4px;
-  border-radius: 3px;
-  border: 1px solid var(--warning);
-  color: var(--warning);
-  background: var(--warning-bg);
+.itrace-row.is-current {
+  /* In-flight row — full-strength fg + accent gutter glyph so the
+     "what's running" cue reads cleanly against the dimmed Preview. */
+  color: var(--fg);
+}
+.itrace-row.is-preview.has-bp .itrace-bp-marker {
+  color: var(--danger);
+}
+.itrace-row.is-preview.has-bp .itrace-addr-btn {
+  color: var(--danger);
+}
+/* Tag cell is always present so the grid column count stays stable
+   (HC's column position depends on it). Strip the chrome when there's
+   no tag content, otherwise every executed row would carry an empty
+   bordered box. */
+.itrace-tag:empty {
+  border: none;
+  padding: 0;
+  background: none;
 }
 
 /* ── Memory / IO watch input (section header) ─────────────────────── */

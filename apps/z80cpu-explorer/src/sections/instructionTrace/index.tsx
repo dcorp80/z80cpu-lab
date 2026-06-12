@@ -208,15 +208,18 @@ interface ExecutedRowProps {
 
 const ExecutedRow: Component<ExecutedRowProps> = (props) => {
   const tag = createMemo(() => m1Tag(props.rec));
+  // Layout mirrors Preview / Current: an empty 1ch gutter slot keeps
+  // addr / bytes / disasm column-aligned across all three panes. HC
+  // sits after disasm (was leftmost — growing digit counts shifted
+  // the trace visually); m1Type tag stays at the far right.
   return (
     <div class="itrace-row">
-      <span class="itrace-hc">{fmt(props.rec.hc)}</span>
+      <span class="itrace-gutter" aria-hidden="true" />
       <span class="itrace-addr">{formatHex(props.rec.startAddr, 4)}</span>
       <span class="itrace-bytes">{formatBytes(props.rec)}</span>
       <span class="itrace-disasm">{getDisasm(props.rec)}</span>
-      <Show when={tag()}>
-        <span class="itrace-tag">{tag()}</span>
-      </Show>
+      <span class="itrace-hc">{fmt(props.rec.hc)}</span>
+      <span class="itrace-tag">{tag() ?? ""}</span>
     </div>
   );
 };
@@ -303,6 +306,51 @@ const PreviewRow: Component<PreviewRowProps> = (props) => {
   );
 };
 
+interface CurrentLine {
+  addr: number;
+  bytes: readonly number[];
+  text: string;
+  nextPc: number;
+  /** NMI/INT/HALT/special_reset tag, if any — we render the tag for
+   *  non-"normal" M1s even mid-instruction since the type is known
+   *  from the M1 start (set in `_initFreshCurr`). The "PREFIX"
+   *  synthetic that ExecutedRow renders for completed length-1 DD/FD
+   *  traces is NOT mirrored here: at length=1 in flight, the trace
+   *  may still extend to DDCB / DD nn — too early to declare a
+   *  wasted prefix. */
+  tag: string | null;
+}
+
+interface CurrentRowProps {
+  line: CurrentLine;
+}
+
+/**
+ * In-flight instruction row, shown between Executed and Preview when
+ * the loop is paused mid-instruction. Read-only: the address is not a
+ * BP toggle (the in-flight instruction's start is already either in
+ * Executed history or is the next preview row at boundary). Gutter
+ * shows a `>` glyph to mark "this is what's running."
+ */
+const CurrentRow: Component<CurrentRowProps> = (props) => {
+  return (
+    <div class="itrace-row is-current">
+      <span class="itrace-current-marker" aria-hidden="true">
+        &gt;
+      </span>
+      <span class="itrace-addr">{formatHex(props.line.addr, 4)}</span>
+      <span class="itrace-bytes">
+        {props.line.bytes
+          .map((b) => formatHex(b, 2))
+          .concat(Array(4 - props.line.bytes.length).fill("  "))
+          .join(" ")}
+      </span>
+      <span class="itrace-disasm">{props.line.text}</span>
+      <span class="itrace-tag">{props.line.tag ?? ""}</span>
+    </div>
+  );
+};
+
 const Body: Component = () => {
   const store = useStore();
   let scrollEl: HTMLDivElement | undefined;
@@ -329,25 +377,44 @@ const Body: Component = () => {
     return out;
   }, []);
 
-  // Preview origin per DESIGN open-question option (c):
-  //   - at instruction boundary: latest trace's nextPc (where exec
-  //     just headed). Matches the rendered cpuState pane's "boundary
-  //     view".
-  //   - mid-instruction: live cpuState.pc (where the CPU is fetching
-  //     from right now). Matches the dimmed pane.
-  // Falls back to live pc when no trace exists yet (fresh boot).
-  // Throttled — the preview is part of the frozen body during run.
-  const previewPc = createMemo(() => {
-    if (store.atInstructionBoundary()) {
-      store.traceRingVersionThrottled();
-      const n = store.traceRing.size();
-      if (n > 0) {
-        const last = store.traceRing.at(n - 1);
-        if (last) return last.nextPc & 0xffff;
-      }
-    }
-    return store.cpuState().pc & 0xffff;
+  // In-flight instruction row. Sourced from the store's pause-time
+  // snapshot of `dbg.curr` (null when no instruction is in flight —
+  // cold boot before any M1 T3_0 has run).
+  //
+  // `cur.nextPc` is the single source of truth for the preview origin
+  // below: the dbg seeds `curr.nextPc = startAddr` in `_initFreshCurr`
+  // and overwrites it with the actual next-M1 PC at the next M1 T1_0,
+  // so reading it is always sensible — sequential mid-instruction,
+  // jump/call/ret target during the 2-HC window between the next M1's
+  // T1_0 and T3_0.
+  const currentLine = createMemo<CurrentLine | null>(() => {
+    if (store.status() !== "paused") return null;
+    const cur = store.currentInstruction();
+    if (!cur) return null;
+    // Disasm tolerates short input: `readN` / `readNN` return
+    // `STYLE.incomplete` when bytes run out, so partial captures
+    // produce a best-effort text (e.g. "LD A,??" for 3E without
+    // operand). Pass exactly the captured bytes — no top-up from
+    // memory — so the row reads as "what the CPU has actually seen
+    // so far," not "what the encoding is expected to become."
+    const d = disasm(cur.bytes);
+    return {
+      addr: cur.startAddr,
+      bytes: cur.bytes,
+      text: d.text,
+      nextPc: cur.nextPc,
+      tag:
+        cur.m1Type === "normal"
+          ? null
+          : STR.instructionTrace.m1Tags[cur.m1Type],
+    };
   });
+
+  // Preview origin: in-flight `nextPc` (which the dbg keeps meaningful
+  // at all times). When there's no in-flight (pre-first-pause), fall
+  // back to 0 — the explorer's CPU starts at PC=0, so this matches the
+  // cold-boot reality.
+  const previewOrigin = (): number => currentLine()?.nextPc ?? 0;
 
   const previewLines = createMemo<PreviewLine[]>((prev) => {
     // Track memVersion so writes (file load, etc.) refresh the preview.
@@ -356,7 +423,7 @@ const Body: Component = () => {
     // Same freeze gate as `records` — preview only makes sense once
     // execution has stopped.
     if (store.status() !== "paused") return prev;
-    const pc0 = previewPc();
+    const pc0 = previewOrigin();
     const lines: PreviewLine[] = [];
     let offset = 0;
     for (let i = 0; i < PREVIEW_INSN_COUNT; i++) {
@@ -456,11 +523,27 @@ const Body: Component = () => {
           </Show>
         </Show>
       </div>
+      <Show when={currentLine()}>
+        {(line) => (
+          <>
+            <div class="itrace-seam">
+              <span class="itrace-section-label">
+                {STR.instructionTrace.currentHeading}
+              </span>
+            </div>
+            <div class="itrace-current">
+              <CurrentRow line={line()} />
+            </div>
+          </>
+        )}
+      </Show>
       <div class="itrace-seam">
         <span class="itrace-section-label">
           {STR.instructionTrace.previewHeading}
         </span>
-        <span class="itrace-pc">{formatHex(previewPc(), 4)}</span>
+        <span class="itrace-pc">
+          {formatHex(currentLine() === null ? 0 : currentLine().nextPc, 4)}
+        </span>
       </div>
       <div class="itrace-preview">
         <Show

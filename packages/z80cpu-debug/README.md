@@ -40,7 +40,11 @@ for (;;) dbg.clockEdge();
   after the deferred A/F writes have landed. See **Timing** below.
 - `dbg.curr` / `dbg.prev` — the in-flight and just-finalized traces. Double-
   buffered; consumers should copy out anything they want to keep, since these
-  are reused.
+  are reused. Reading `dbg.curr` mid-instruction is supported (visual debuggers
+  use it for "what's running right now"): `bytes[0..length)` reflect what the
+  CPU has fetched so far, `m1Type` is set at the M1 start, and `nextPc` is
+  seeded to `startAddr` until the next M1's T1_0 overwrites it with the real
+  next-instruction address.
 
 ### Snapshots
 
@@ -117,6 +121,9 @@ where this instruction was fetched. Always correct.
 **`trace.nextPc`** — the PC at the *next* M1's t1_0, captured *before* the
 T1_1 increment. This is the logical "where the CPU goes next" — covers
 sequential flow, jumps, calls, rets, RST, and NMI/INT redirects.
+On `dbg.curr` (in-flight reads) `nextPc` is pre-seeded to `startAddr` and
+holds that until the next M1's T1_0 overwrites it; on the trace handed to
+`onInstructionComplete` the value is always the real next-M1 address.
 
 **`dbg.state().pc`** — reads `cpu.regs.pc` live. At callback time the next
 M1's T1_1 has already incremented it, so for the just-completed instruction

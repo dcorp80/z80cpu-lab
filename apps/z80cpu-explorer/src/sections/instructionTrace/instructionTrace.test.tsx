@@ -185,7 +185,7 @@ describe("instructionTrace section — executed log", () => {
       }),
     );
     const rows = harness.container.querySelectorAll(
-      ".itrace-row:not(.is-preview)",
+      ".itrace-row:not(.is-preview):not(.is-current)",
     );
     expect(rows.length).toBe(2);
     const r0 = rows[0].textContent ?? "";
@@ -220,12 +220,17 @@ describe("instructionTrace section — executed log", () => {
     );
   });
 
-  it("emits no tag for a normal multi-byte instruction", async () => {
+  it("emits an empty tag cell for a normal multi-byte instruction", async () => {
     harness = await mount();
     harness.loop.emitInstruction(
       mkTrace({ startAddr: 0x100, bytes: [0x78], length: 1, m1Type: "normal" }),
     );
-    expect(harness.container.querySelector(".itrace-tag")).toBeNull();
+    // The tag span is always rendered so the grid keeps a stable HC
+    // column position; CSS `.itrace-tag:empty` strips the chrome when
+    // there's no tag content.
+    const tagEl = harness.container.querySelector(".itrace-tag");
+    expect(tagEl).not.toBeNull();
+    expect(tagEl?.textContent).toBe("");
   });
 
   it("renders disasm bare-hex (no `h` suffix from upstream STYLE)", async () => {
@@ -242,15 +247,15 @@ describe("instructionTrace section — executed log", () => {
 });
 
 describe("instructionTrace section — PC preview", () => {
-  it("uses lastTrace.nextPc as origin at instruction boundary", async () => {
+  it("anchors preview to the in-flight curr.nextPc at instruction boundary", async () => {
     harness = await mount();
     // Stage memory at 0x0100: 78 (LD A,B), 79 (LD A,C).
     harness.bus.mem[0x0100] = 0x78;
     harness.bus.mem[0x0101] = 0x79;
-    // Boundary pause path: dbg.state's pc becomes nextPc+1 (per CLAUDE
-    // timing model). We set cpuState.pc = 0x0101, lastTrace.nextPc = 0x0100,
-    // and expect the preview to start at 0x0100.
-    harness.dbg.setNext({ pc: 0x0101 });
+    // At boundary, dbg.curr is the *next* instruction (freshly
+    // promoted at M1 T3_0): startAddr = nextPc = 0x0100, length=1
+    // (just the M1 opcode). Both rows render at 0x0100.
+    harness.dbg.setCurr({ startAddr: 0x0100, bytes: [0x78] });
     harness.loop.emitInstruction(
       mkTrace({ startAddr: 0xff, bytes: [0x00], length: 1, nextPc: 0x0100 }),
     );
@@ -264,14 +269,50 @@ describe("instructionTrace section — PC preview", () => {
     expect(text).toContain("LD A,B");
   });
 
-  it("uses live cpuState.pc as origin when mid-instruction", async () => {
+  it("preview origin is 0 at cold boot when no instruction is in flight", async () => {
     harness = await mount();
-    harness.bus.mem[0x0200] = 0x79; // LD A,C
-    harness.dbg.setNext({ pc: 0x0200 });
-    // Non-boundary pause: user pauses mid-run. atInstructionBoundary
-    // stays false; preview falls back to live cpuState.pc.
+    harness.bus.mem[0x0000] = 0x00; // NOP at 0
+    // No setCurr — dbg.curr.length stays 0; currentInstruction is null
+    // before the first emitPause and the preview origin falls back to 0.
+    // The previously-used cpuState.pc fallback is gone because it slid
+    // through operand fetches mid-instruction (the bug this design fixed).
+    expect(harness.container.querySelector(".itrace-pc")?.textContent).toBe(
+      "0000",
+    );
+  });
+
+  it("preview anchor stays put across HC-stepping mid-instruction", async () => {
+    harness = await mount();
+    harness.bus.mem[0x0100] = 0x78; // LD A,B
+    // Mid-instruction snapshot: dbg.curr is in flight at 0x0100 with the
+    // M1 opcode captured. `curr.nextPc` mirrors `startAddr` until the
+    // next M1's T1_0 overwrites it — so the preview origin equals the
+    // in-flight instruction's start, regardless of what cpuState.pc says.
+    harness.dbg.setCurr({ startAddr: 0x0100, bytes: [0x78] });
+    harness.dbg.setNext({ pc: 0x0101 }); // live PC has slid past the opcode
     harness.loop.emitPause({ kind: "user" });
     expect(harness.store.atInstructionBoundary()).toBe(false);
+    expect(harness.container.querySelector(".itrace-pc")?.textContent).toBe(
+      "0100",
+    );
+    expect(harness.container.textContent).toContain("LD A,B");
+  });
+
+  it("preview advances in the 2-HC window after the next M1's T1_0", async () => {
+    harness = await mount();
+    // Memory: 0x0100 is still the in-flight instruction; 0x0200 is
+    // where execution will head next (jump target etc.).
+    harness.bus.mem[0x0200] = 0x79; // LD A,C
+    // Transitional window: curr is still the previous instruction
+    // (startAddr=0x0100) but its nextPc has been written by the next
+    // M1's T1_0 to point at 0x0200. Preview should jump ahead to 0x0200
+    // even though curr hasn't yet been promoted to prev.
+    harness.dbg.setCurr({
+      startAddr: 0x0100,
+      bytes: [0xc3, 0x00, 0x02], // JP 0200 — 3 bytes captured
+      nextPc: 0x0200,
+    });
+    harness.loop.emitPause({ kind: "user" });
     expect(harness.container.querySelector(".itrace-pc")?.textContent).toBe(
       "0200",
     );
@@ -280,7 +321,7 @@ describe("instructionTrace section — PC preview", () => {
 
   it("re-renders preview when memory changes", async () => {
     harness = await mount();
-    harness.dbg.setNext({ pc: 0x0300 });
+    harness.dbg.setCurr({ startAddr: 0x0300, bytes: [0x00] });
     harness.loop.emitPause({ kind: "user" });
     harness.bus.mem[0x0300] = 0x00; // NOP
     // Force memVersion bump by writing through a file:
@@ -291,6 +332,93 @@ describe("instructionTrace section — PC preview", () => {
     });
     harness.store.writeFileToMemory(harness.store.files[0].id);
     expect(harness.container.textContent).toContain("LD A,B");
+  });
+});
+
+describe("instructionTrace section — Current row", () => {
+  it("renders the in-flight instruction with the > gutter marker", async () => {
+    harness = await mount();
+    // Stage curr: LD A,n with only the opcode byte captured so far.
+    harness.dbg.setCurr({ startAddr: 0x0400, bytes: [0x3e] });
+    harness.loop.emitPause({ kind: "user" });
+    const row = harness.container.querySelector(".itrace-row.is-current");
+    expect(row).not.toBeNull();
+    const text = row?.textContent ?? "";
+    expect(text).toContain(">"); // gutter marker
+    expect(text).toContain("0400"); // start address
+    expect(text).toContain("3E"); // captured byte
+    // Disasm renders the partial encoding — operand byte is unknown,
+    // so it shows as the disasm's "incomplete" sentinel rather than a
+    // fabricated value.
+    expect(text).toContain("LD A,");
+  });
+
+  it("renders at boundary too — shows the freshly-promoted next instruction", async () => {
+    harness = await mount();
+    // At boundary, curr was freshly init'd at M1 T3_0 of the next M1:
+    // length=1, startAddr=nextPc of the trace that just fired. Current
+    // row visually aliases the first preview row but with only the M1
+    // opcode captured — the partial-vs-full distinction is the point.
+    harness.dbg.setCurr({ startAddr: 0x0500, bytes: [0x00] });
+    harness.loop.emitInstruction(
+      mkTrace({ startAddr: 0xff, bytes: [0x00], length: 1, nextPc: 0x0500 }),
+    );
+    harness.loop.emitPause({ kind: "step-complete" });
+    expect(harness.store.atInstructionBoundary()).toBe(true);
+    const row = harness.container.querySelector(".itrace-row.is-current");
+    expect(row).not.toBeNull();
+    expect(row?.textContent).toContain("0500");
+  });
+
+  it("renders an empty-bytes row at the very first HC pause", async () => {
+    harness = await mount();
+    // No setCurr — dbg.curr.length stays 0. After the first emitPause
+    // the store still snapshots curr, so the Current row appears with
+    // address 0000 and empty byte/disasm cells. Signals "CPU is here,
+    // hasn't fetched yet" — distinct from "no in-flight" (pre-first-pause,
+    // where the signal is still null and the row doesn't render).
+    harness.loop.emitPause({ kind: "user" });
+    const row = harness.container.querySelector(".itrace-row.is-current");
+    expect(row).not.toBeNull();
+    expect(row?.textContent).toContain("0000");
+  });
+
+  it("does not render before the first pause (currentInstruction starts null)", async () => {
+    harness = await mount();
+    // No emitPause yet. Store's currentInstruction signal is initialized
+    // to null at boot.
+    expect(
+      harness.container.querySelector(".itrace-row.is-current"),
+    ).toBeNull();
+  });
+
+  it("renders the m1Type tag for non-normal in-flight instructions", async () => {
+    harness = await mount();
+    // NMI vector at 0x0066. The tag is known from the M1 start, so the
+    // Current row should surface it even with just the M1 byte captured.
+    harness.dbg.setCurr({
+      startAddr: 0x0066,
+      bytes: [0x00],
+      m1Type: "nmi",
+    });
+    harness.loop.emitPause({ kind: "user" });
+    const tagEl = harness.container.querySelector(
+      ".itrace-row.is-current .itrace-tag",
+    );
+    expect(tagEl?.textContent).toBe(STR.instructionTrace.m1Tags.nmi);
+  });
+
+  it("does not synthesize a PREFIX tag for an in-flight length-1 DD/FD", async () => {
+    harness = await mount();
+    // Unlike the completed-trace synthesis in ExecutedRow, the in-flight
+    // case can't tell wasted-prefix from a DDCB / DD nn chain that
+    // hasn't extended yet — so we render no tag at length=1.
+    harness.dbg.setCurr({ startAddr: 0x0200, bytes: [0xdd] });
+    harness.loop.emitPause({ kind: "user" });
+    const tagEl = harness.container.querySelector(
+      ".itrace-row.is-current .itrace-tag",
+    );
+    expect(tagEl?.textContent).toBe("");
   });
 });
 
@@ -347,7 +475,9 @@ describe("instructionTrace section — capture toggle (REQ §11)", () => {
     expect(h.store.traceRing.size()).toBe(2);
     // Executed rows render under the default "ring" mode.
     expect(
-      h.container.querySelectorAll(".itrace-row:not(.is-preview)").length,
+      h.container.querySelectorAll(
+        ".itrace-row:not(.is-preview):not(.is-current)",
+      ).length,
     ).toBe(2);
 
     // The body slot doesn't include the header, so the section header
@@ -372,12 +502,16 @@ describe("instructionTrace section — capture toggle (REQ §11)", () => {
     h = await mount();
     h.loop.emitInstruction(mkTrace({ startAddr: 0x100, bytes: [0x78] }));
     expect(
-      h.container.querySelectorAll(".itrace-row:not(.is-preview)").length,
+      h.container.querySelectorAll(
+        ".itrace-row:not(.is-preview):not(.is-current)",
+      ).length,
     ).toBe(1);
     h.store.setTraceRingMode("disabled");
     // After disable: rows gone, muted disabled string in their place.
     expect(
-      h.container.querySelectorAll(".itrace-row:not(.is-preview)").length,
+      h.container.querySelectorAll(
+        ".itrace-row:not(.is-preview):not(.is-current)",
+      ).length,
     ).toBe(0);
     expect(
       h.container.querySelector(".itrace-executed")?.textContent,
@@ -456,8 +590,9 @@ describe("instructionTrace section — run-time freeze (REQ §7.5)", () => {
         mkTrace({ startAddr: 0x100, bytes: [0x78] }),
       );
       expect(
-        harness.container.querySelectorAll(".itrace-row:not(.is-preview)")
-          .length,
+        harness.container.querySelectorAll(
+          ".itrace-row:not(.is-preview):not(.is-current)",
+        ).length,
       ).toBe(1);
 
       // Enter running. `store.run()` updates BOTH the loop's status
@@ -472,24 +607,27 @@ describe("instructionTrace section — run-time freeze (REQ §7.5)", () => {
       }
       expect(harness.store.traceRing.size()).toBe(26);
       expect(
-        harness.container.querySelectorAll(".itrace-row:not(.is-preview)")
-          .length,
+        harness.container.querySelectorAll(
+          ".itrace-row:not(.is-preview):not(.is-current)",
+        ).length,
       ).toBe(1);
       // No row diff means no auto-pin scroll either; even firing the
       // queued rAF (throttle bump) shouldn't add rows — status is
       // still running.
       while (queued.length > 0) queued.shift()?.(0);
       expect(
-        harness.container.querySelectorAll(".itrace-row:not(.is-preview)")
-          .length,
+        harness.container.querySelectorAll(
+          ".itrace-row:not(.is-preview):not(.is-current)",
+        ).length,
       ).toBe(1);
 
       // Pause flushes the throttle and re-runs the records memo. All
       // 26 rows render now.
       harness.loop.emitPause({ kind: "user" });
       expect(
-        harness.container.querySelectorAll(".itrace-row:not(.is-preview)")
-          .length,
+        harness.container.querySelectorAll(
+          ".itrace-row:not(.is-preview):not(.is-current)",
+        ).length,
       ).toBe(26);
     } finally {
       globalThis.requestAnimationFrame = origRaf;
@@ -502,7 +640,9 @@ describe("instructionTrace section — preview click-to-BP", () => {
     harness = await mount();
     harness.bus.mem[0x0400] = 0x00; // NOP
     harness.bus.mem[0x0401] = 0x00; // NOP
-    harness.dbg.setNext({ pc: 0x0400 });
+    // Anchor preview at 0x0400 via the in-flight snapshot — preview
+    // origin = currentLine.nextPc, seeded from curr.startAddr.
+    harness.dbg.setCurr({ startAddr: 0x0400, bytes: [0x00] });
     harness.loop.emitPause({ kind: "user" });
     const btn = harness.container.querySelector<HTMLButtonElement>(
       ".itrace-row.is-preview .itrace-addr-btn",
@@ -521,7 +661,7 @@ describe("instructionTrace section — preview click-to-BP", () => {
   it("clicking again removes the exact-match BP (toggle)", async () => {
     harness = await mount();
     harness.bus.mem[0x0500] = 0x00;
-    harness.dbg.setNext({ pc: 0x0500 });
+    harness.dbg.setCurr({ startAddr: 0x0500, bytes: [0x00] });
     harness.loop.emitPause({ kind: "user" });
     const btn = harness.container.querySelector<HTMLButtonElement>(
       ".itrace-row.is-preview .itrace-addr-btn",
@@ -535,7 +675,7 @@ describe("instructionTrace section — preview click-to-BP", () => {
   it("preview row gets has-bp class when an enabled pc-range BP covers the addr", async () => {
     harness = await mount();
     harness.bus.mem[0x0600] = 0x00;
-    harness.dbg.setNext({ pc: 0x0600 });
+    harness.dbg.setCurr({ startAddr: 0x0600, bytes: [0x00] });
     harness.store.addBreakpoint({ kind: "pc-range", lo: 0x0600, hi: 0x0600 });
     harness.loop.emitPause({ kind: "user" });
     const row = harness.container.querySelector(".itrace-row.is-preview");
@@ -545,7 +685,7 @@ describe("instructionTrace section — preview click-to-BP", () => {
   it("wider range BP also lights the marker but click adds a duplicate single-PC BP (never modifies the wider range)", async () => {
     harness = await mount();
     harness.bus.mem[0x0700] = 0x00;
-    harness.dbg.setNext({ pc: 0x0700 });
+    harness.dbg.setCurr({ startAddr: 0x0700, bytes: [0x00] });
     // Wider range covering the previewed PC.
     harness.store.addBreakpoint({ kind: "pc-range", lo: 0x0700, hi: 0x07ff });
     harness.loop.emitPause({ kind: "user" });
@@ -592,7 +732,7 @@ describe("instructionTrace section — preview click-to-BP", () => {
     harness.loop.emitPause({ kind: "user" });
     // Executed rows have no .is-preview class and no .itrace-addr-btn.
     const executedRow = harness.container.querySelector(
-      ".itrace-row:not(.is-preview)",
+      ".itrace-row:not(.is-preview):not(.is-current)",
     );
     expect(executedRow).not.toBeNull();
     expect(executedRow?.querySelector(".itrace-addr-btn")).toBeNull();

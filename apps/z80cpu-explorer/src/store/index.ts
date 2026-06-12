@@ -43,6 +43,7 @@ import { TraceRing } from "./traceRing.ts";
 import type {
   BreakpointPatch,
   BusAccessRecord,
+  CurrentInstructionSnapshot,
   CursorsState,
   InputPinsState,
   NewBreakpoint,
@@ -185,10 +186,13 @@ export interface CreateStoreDeps {
   bus: Omit<Bus64k, "resolve">;
   /**
    * Source of CPU register/flag snapshots for the cpuState section
-   * (REQ §6.5). The store calls `dbg.state()` on each pause to refresh
-   * the reactive `cpuState` accessor; tests inject a minimal stub.
+   * (REQ §6.5) plus the in-flight-instruction read-out for the Current
+   * row in the InstructionTrace section. `state()` is called on each
+   * pause; `curr` (the live in-flight `InstructionTrace`) is copied by
+   * the store on pause to populate `currentInstruction()`. Tests inject
+   * a minimal stub.
    */
-  dbg: Pick<Z80DebugContext, "state">;
+  dbg: Pick<Z80DebugContext, "state" | "curr">;
   /**
    * HW-trace buffer (DESIGN §3.2). Optional — when absent the store
    * default-constructs a fresh `HwTraceBuffer` from
@@ -677,6 +681,13 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     let cpuStateAtBoundary = initialCpuState;
     const [atInstructionBoundary, setAtInstructionBoundary] =
       createSignal(false);
+    // In-flight instruction at pause time (REQ: Current row in
+    // InstructionTrace). Copied out of `dbg.curr` on `onPause`, never
+    // written from `onInstruction` — that would be a Solid setter on the
+    // hot path. The body is frozen during run anyway, so the sample is
+    // only consumed when paused.
+    const [currentInstruction, setCurrentInstruction] =
+      createSignal<CurrentInstructionSnapshot | null>(null);
 
     function persistUi(): void {
       const state: UiState = {
@@ -743,6 +754,22 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       const next = dbg.state();
       setCpuState(next);
       setAtInstructionBoundary(fromBoundary);
+      // Sample the in-flight instruction. Hide at instruction boundary —
+      // there the freshly-promoted `curr` aliases the first preview row
+      // (its `startAddr` equals the just-completed trace's `nextPc`), so
+      // a Current row would just duplicate the next-to-execute row.
+      // if (fromBoundary || dbg.curr.length === 0) {
+      //   setCurrentInstruction(null);
+      // } else {
+      const c = dbg.curr;
+      setCurrentInstruction({
+        startAddr: c.startAddr,
+        bytes: c.bytes.slice(0, c.length),
+        length: c.length,
+        m1Type: c.m1Type,
+        nextPc: c.nextPc,
+      });
+      // }
       if (fromBoundary) {
         // Old boundary snapshot becomes the diff baseline; new one takes
         // its place. A non-boundary pause in between leaves the baseline
@@ -1169,6 +1196,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       cpuState,
       prevCpuStateAtBoundary,
       atInstructionBoundary,
+      currentInstruction,
       run() {
         // Clear stale pause reason so the next paused-state render shows
         // the reason for the upcoming pause, not the previous one.

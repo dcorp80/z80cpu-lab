@@ -192,6 +192,12 @@ export const STR = {
     stepNTooltip: "Step the number of instructions in the field",
     stepCountLabel: "Step count",
     executedHeading: "Executed",
+    // Tiny pane between Executed and Preview, shown only when the loop
+    // paused mid-instruction (not at an M1_T3_1 boundary). Renders the
+    // in-flight instruction from `dbg.curr` — captured bytes so far +
+    // best-effort disasm. Hidden at boundary because the just-promoted
+    // `curr` aliases the first preview row in that case.
+    currentHeading: "Current",
     previewHeading: "Preview (next at PC)",
     previewEmpty: "(no bytes at PC)",
     previewAddrAddBpTooltip: "Click to set a PC breakpoint here",
