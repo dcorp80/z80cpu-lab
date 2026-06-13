@@ -1,6 +1,6 @@
 {
   "name": "@dcorp80/z80cpu-debug",
-  "version": "0.0.0",
+  "version": "0.2.0",
   "description": "Instruction tracing / debug context for @dcorp80/z80cpu",
   "keywords": [
     "z80",
@@ -31,6 +31,6 @@
     "test": "node --test src/*.test.ts"
   },
   "dependencies": {
-    "@dcorp80/z80cpu": "^0.1.0"
+    "@dcorp80/z80cpu": "^0.1.1"
   }
 }

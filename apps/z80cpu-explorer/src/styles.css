@@ -1,0 +1,1351 @@
+/* Minimal scaffold styles for milestone 1.
+   Real theming lands in milestone 11 via the token module. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --muted: #6b7280;
+  --border: #d1d5db;
+  --accent: #2563eb;
+  --dragging-bg: #f3f4f6;
+  --drop-line: #2563eb;
+  /* Semantic accents — referenced by sections so the M11 theme token
+     module has a single surface to retheme. Never hex-literal in
+     section CSS. */
+  --warning: #b45309; /* dirty-input border, etc. */
+  --warning-bg: rgba(180, 83, 9, 0.08);
+  --danger: #b91c1c; /* delete-hover, invalid-input border */
+  --highlight: #2563eb; /* diff highlight (cpuState changed cell) */
+  --highlight-bg: rgba(37, 99, 235, 0.1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1115;
+    --fg: #e5e7eb;
+    --muted: #9ca3af;
+    --border: #2a2f3a;
+    --accent: #60a5fa;
+    --dragging-bg: #1c2028;
+    --drop-line: #60a5fa;
+    --warning: #fbbf24;
+    --warning-bg: rgba(251, 191, 36, 0.1);
+    --danger: #f87171;
+    --highlight: #60a5fa;
+    --highlight-bg: rgba(96, 165, 250, 0.15);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+/* Belt-and-suspenders: section bodies may contain wide hex grids or
+   trace rows later — let those scroll inside their own container rather
+   than blow out the page width. */
+body {
+  overflow-x: hidden;
+}
+
+.app {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 12px;
+}
+
+/* Narrow viewports (split panes, devtools open, tablets). MVP is not
+   mobile-first per REQ §2, but we want layout that doesn't visibly break
+   when the window shrinks. */
+@media (max-width: 600px) {
+  .app {
+    padding: 8px;
+  }
+}
+
+.section-column {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.section-frame {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  position: relative;
+}
+
+.section-frame.is-dragging {
+  opacity: 0.5;
+  background: var(--dragging-bg);
+}
+.section-frame.drop-above::before,
+.section-frame.drop-below::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--drop-line);
+}
+.section-frame.drop-above::before {
+  top: -1px;
+}
+.section-frame.drop-below::after {
+  bottom: -1px;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+.section-frame.is-folded .section-header {
+  border-bottom: none;
+}
+
+.fold-chevron {
+  background: none;
+  border: none;
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 4px;
+  line-height: 1;
+}
+.fold-chevron:hover:not(:disabled) {
+  color: var(--accent);
+}
+.fold-chevron:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.drag-handle {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: grab;
+  user-select: none;
+  font-size: 14px;
+  letter-spacing: -2px;
+  padding: 0 2px;
+}
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+.section-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+.folded-summary {
+  flex: 1 1 120px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.section-header-controls {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  flex: 1 1 auto;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+/* Shared action-button look — applied to every section-header button so
+   the visual is uniform across sections. Variants below tweak hover
+   accent (destructive vs. primary action). Without this base, buttons
+   inside .itrace-header-controls / .hwt-header-controls fell back to
+   browser defaults while .bp-controls / .program-controls had their own
+   near-identical copy of the same rule — the inconsistency that REQ
+   §12 flagged. */
+.btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+/* Destructive-action variant: red hover (cold-boot, discard). */
+.btn-danger:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+/* Primary-action variant: accent border / text by default so the user
+   sees which button commits the staged change (save). Hover adds a
+   background tint since border/text are already accent. */
+.btn-accent {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.btn-accent:hover:not(:disabled) {
+  background: var(--highlight-bg);
+}
+
+.bp-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  order: 2;
+}
+.step-n-input {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  width: 4ch;
+}
+.bp-status {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  color: var(--muted);
+  flex: 1 1 180px;
+  min-width: 0;
+  order: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-right: 8px;
+}
+/* Effective clock-speed indicator (REQ §11) — sits next to .bp-status
+   (same order group), greyed when not actively running. */
+.bp-clock {
+  order: 1;
+  flex: 0 0 auto;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+  padding-right: 8px;
+}
+.bp-clock-idle {
+  opacity: 0.45;
+}
+
+/* Breakpoint list (body) */
+.bp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.bp-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+.bp-row.is-disabled {
+  opacity: 0.55;
+}
+.bp-row.bp-add-stub {
+  border-top: 1px dashed var(--border);
+  padding-top: 6px;
+  margin-top: 2px;
+}
+.bp-kind {
+  color: var(--muted);
+  min-width: 1.5em;
+}
+.bp-range-sep {
+  color: var(--muted);
+}
+.bp-hex-input,
+.bp-dec-input {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+.bp-hex-input {
+  width: 6ch;
+  text-transform: uppercase;
+}
+.bp-dec-input {
+  width: 12ch;
+}
+.bp-hex-input.is-invalid,
+.bp-dec-input.is-invalid {
+  border-color: var(--danger);
+}
+.bp-delete {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.bp-delete:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.bp-add-stub button {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.bp-add-stub button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.bp-add-stub select {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-size: 12px;
+}
+
+.section-body {
+  padding: 10px;
+  overflow-x: auto;
+}
+
+.placeholder {
+  color: var(--muted);
+  font-style: italic;
+}
+.muted {
+  color: var(--muted);
+}
+
+/* Program section */
+.program-controls {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.program-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.program-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.program-file-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+}
+.program-file-name {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.program-file-addr {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  width: 6ch;
+  text-transform: uppercase;
+}
+.program-file-row.is-dirty .program-file-addr {
+  border-color: var(--warning);
+  background: var(--warning-bg);
+}
+.program-file-addr.is-invalid {
+  border-color: var(--danger);
+}
+.program-file-row button {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.program-file-row button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.program-file-autoload {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  user-select: none;
+}
+.program-file-row button.program-file-delete {
+  color: var(--muted);
+  border-color: transparent;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 6px;
+}
+.program-file-row button.program-file-delete:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* Persistent "add file" stub at the bottom of the list. Muted border
+   and name slot to read as different from a real file row. */
+.program-file-row.program-add-stub {
+  border-style: dashed;
+  border-color: var(--border);
+  background: transparent;
+}
+.program-add-stub-name {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* CPU state section. Monospaced grid of labeled hex cells; flag bits
+   in a tight row; interrupt state inline. `.is-mid-instruction` on the
+   body wrapper desaturates everything and suppresses .is-changed
+   highlights — values keep updating (REQ §6.5) but the dim cue tells
+   the user the register file is transitional. */
+.cpuState-folded {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  display: inline-flex;
+  gap: 8px;
+  color: var(--muted);
+}
+.cpuState-body {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--fg);
+}
+.cpuState-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cpuState-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.cpuState-cell {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  /* Transparent base so .is-changed can paint a bg without layout shift. */
+  background: transparent;
+}
+.cpuState-label {
+  color: var(--muted);
+  font-weight: 500;
+}
+.cpuState-value {
+  color: var(--fg);
+}
+.cpuState-cell.is-changed {
+  color: var(--highlight);
+  background: var(--highlight-bg);
+}
+.cpuState-cell.is-changed .cpuState-label,
+.cpuState-cell.is-changed .cpuState-value {
+  color: var(--highlight);
+}
+
+.cpuState-shadow {
+  display: flex;
+  gap: 12px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border);
+  flex-wrap: wrap;
+}
+
+.cpuState-flags-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border);
+}
+.cpuState-flags-grid {
+  display: inline-flex;
+  gap: 6px;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.cpuState-flags-grid.is-changed {
+  background: var(--highlight-bg);
+}
+.cpuState-flag-cell {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 18px;
+  line-height: 1.1;
+}
+.cpuState-flag-label {
+  font-size: 10px;
+  color: var(--muted);
+}
+.cpuState-flag-bit {
+  color: var(--muted);
+}
+.cpuState-flag-cell.is-set .cpuState-flag-bit {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.cpuState-irq {
+  display: flex;
+  gap: 12px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border);
+  align-items: center;
+}
+.cpuState-nmi-pending {
+  color: var(--warning);
+  font-weight: 600;
+  font-size: 11px;
+}
+
+/* Mid-instruction: drop saturation and kill highlight backgrounds. The
+   .is-changed rule still fires (DOM stays consistent) but loses its
+   visual weight so the dim signal dominates. */
+.cpuState-body.is-mid-instruction {
+  color: var(--muted);
+}
+.cpuState-body.is-mid-instruction .cpuState-value {
+  color: var(--muted);
+}
+.cpuState-body.is-mid-instruction .cpuState-cell.is-changed {
+  background: transparent;
+  color: var(--muted);
+}
+.cpuState-body.is-mid-instruction .cpuState-cell.is-changed .cpuState-label,
+.cpuState-body.is-mid-instruction .cpuState-cell.is-changed .cpuState-value {
+  color: var(--muted);
+}
+.cpuState-body.is-mid-instruction .cpuState-flags-grid.is-changed {
+  background: transparent;
+}
+.cpuState-body.is-mid-instruction
+  .cpuState-flag-cell.is-set
+  .cpuState-flag-bit {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+/* Instruction trace section. Monospaced rows; executed log scrolls
+   above a fixed preview block. The seam carries the current PC label
+   so the eye can connect history → next. */
+.itrace-header-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.itrace-capture-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.itrace-capture-mode-label {
+  user-select: none;
+}
+.itrace-detached-badge {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--warning);
+  color: var(--warning);
+  background: var(--warning-bg);
+}
+.itrace-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+.itrace-section-label {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.itrace-executed {
+  /* Subgrid parent — defines the column tracks for every executed row
+     so the auto-sized disasm column expands to the widest text across
+     ALL visible rows. That gives HC a tabulated x-position one gap
+     after the disasm content (rather than at the far right of the
+     container, which is what `1fr` per-row produced).
+     Columns: gutter · addr · bytes · disasm · hc · 1fr (right-anchor for tag). */
+  display: grid;
+  grid-template-columns: 1ch 5ch 13ch auto minmax(8ch, auto) 1fr;
+  column-gap: 8px;
+  row-gap: 1px;
+  align-content: start;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
+  background: var(--bg);
+}
+.itrace-seam {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border);
+}
+.itrace-seam .itrace-pc {
+  color: var(--accent);
+  font-weight: 600;
+}
+.itrace-preview,
+.itrace-current {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+}
+.itrace-row {
+  display: grid;
+  align-items: baseline;
+  padding: 1px 0;
+  white-space: pre;
+}
+.itrace-hc {
+  color: var(--muted);
+  text-align: right;
+  /* Wider visual break between disasm and HC so the HC column reads
+     as a separate annotation rather than a fifth data column. */
+  padding-left: 16px;
+}
+.itrace-addr {
+  color: var(--fg);
+}
+.itrace-bytes {
+  color: var(--muted);
+}
+.itrace-disasm {
+  color: var(--fg);
+}
+.itrace-tag {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px solid var(--warning);
+  color: var(--warning);
+  background: var(--warning-bg);
+}
+.itrace-current-marker {
+  display: inline-block;
+  width: 1ch;
+  text-align: center;
+  color: var(--accent);
+  line-height: 1;
+}
+.itrace-bp-marker {
+  display: inline-block;
+  width: 1ch;
+  text-align: center;
+  color: transparent;
+  line-height: 1;
+}
+.itrace-bp-marker::before {
+  content: "\2022"; /* bullet */
+}
+.itrace-addr-btn {
+  /* Reset native button chrome so the address sits inline with the rest
+     of the row. The hover affordance + cursor signal clickability. */
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.itrace-addr-btn:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+/* Executed rows inherit the parent's column tracks via subgrid, so
+   disasm / hc tabulate across rows. Tag pinned to the right edge of
+   the trailing `1fr` filler. */
+.itrace-executed > .itrace-row {
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+  column-gap: 8px;
+}
+.itrace-executed > .itrace-row > .itrace-tag {
+  justify-self: end;
+}
+/* Empty-state placeholders ("(no instructions executed yet)" /
+   "(capture off — ...)") span the full row width — otherwise they'd
+   land in the 1ch gutter column and clip. */
+.itrace-executed > .muted {
+  grid-column: 1 / -1;
+}
+.itrace-row.is-preview,
+.itrace-row.is-current {
+  /* Preview / Current rows: gutter · addr · bytes · disasm · tag.
+     No HC column. Current renders the tag for non-"normal" M1s
+     (NMI/INT/HALT/special_reset); Preview always leaves it empty. */
+  grid-template-columns: 1ch 5ch 13ch 1fr auto;
+  column-gap: 8px;
+  color: var(--muted);
+}
+.itrace-row.is-preview .itrace-disasm {
+  color: var(--muted);
+}
+.itrace-row.is-current {
+  /* In-flight row — full-strength fg + accent gutter glyph so the
+     "what's running" cue reads cleanly against the dimmed Preview. */
+  color: var(--fg);
+}
+.itrace-row.is-preview.has-bp .itrace-bp-marker {
+  color: var(--danger);
+}
+.itrace-row.is-preview.has-bp .itrace-addr-btn {
+  color: var(--danger);
+}
+/* Tag cell is always present so the grid column count stays stable
+   (HC's column position depends on it). Strip the chrome when there's
+   no tag content, otherwise every executed row would carry an empty
+   bordered box. */
+.itrace-tag:empty {
+  border: none;
+  padding: 0;
+  background: none;
+}
+
+/* ── Memory / IO watch input (section header) ─────────────────────── */
+
+.watch-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+.watch-input-label {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.watch-input-field {
+  width: 6ch;
+  padding: 2px 4px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: inherit;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+.watch-input-field:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: 0;
+  border-color: var(--accent);
+}
+.watch-input-field.is-invalid {
+  border-color: var(--danger);
+}
+
+/* ── Hex grid (shared by Memory + IO bodies) ───────────────────────── */
+
+.hex-grid {
+  max-height: 480px;
+  overflow-y: auto;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  padding: 4px 6px;
+}
+
+.hex-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 1px 4px;
+  white-space: pre;
+}
+.hex-row.is-watch-row {
+  background: var(--highlight-bg);
+  border-left: 2px solid var(--accent);
+  padding-left: 2px;
+}
+
+.hex-row-addr {
+  color: var(--muted);
+  width: 4ch;
+  flex: 0 0 auto;
+}
+
+.hex-row-cells {
+  display: grid;
+  gap: 0;
+  flex: 0 0 auto;
+}
+.hex-row-cells.cells-16 {
+  grid-template-columns: repeat(16, 2.5ch);
+}
+.hex-row-cells.cells-32 {
+  grid-template-columns: repeat(32, 2.5ch);
+}
+.hex-row-cells.cells-64 {
+  grid-template-columns: repeat(64, 2.5ch);
+}
+.hex-row-cells.cells-128 {
+  grid-template-columns: repeat(128, 2.5ch);
+}
+
+.hex-cell {
+  /* Rendered as <button> for native click/keyboard semantics; reset
+     the UA styling so the grid keeps its monospace alignment. */
+  appearance: none;
+  background: none;
+  border: none;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  display: inline-block;
+  text-align: center;
+  padding: 0 1px;
+  border-radius: 2px;
+  cursor: default;
+}
+.hex-cell.is-editable {
+  cursor: text;
+}
+.hex-cell.is-editable:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.hex-cell.is-watch-cell {
+  /* Background-only emphasis — bumping font-weight here shifts the row
+     baseline by ~1 px because flex/baseline alignment grows the line
+     box to fit the bolder glyphs. */
+  background: var(--highlight);
+  color: var(--bg);
+}
+.hex-cell-input {
+  width: 2.2ch;
+  padding: 0;
+  margin: 0;
+  border: 1px solid var(--accent);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  text-align: center;
+  text-transform: uppercase;
+}
+.hex-cell-input:focus {
+  outline: none;
+}
+.hex-cell-input.is-invalid {
+  border-color: var(--danger);
+}
+
+/* IO 8-bit view (REQ §6.7). Cells whose 256 high-byte aliases disagree
+   show the io[port] value plus a danger-tinted tag so the user knows
+   the cell is showing one of several values. Editing rewrites all
+   aliases via setIoBytePort8 → broadcastIoLowByte. */
+.hex-cell.is-alias-mismatch {
+  color: var(--danger);
+  text-decoration: underline dotted var(--danger);
+  text-underline-offset: 2px;
+}
+
+/* IO viewmode toggle in the section header. */
+.io-viewmode {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 12px;
+}
+.io-viewmode-label {
+  color: var(--muted);
+  font-size: 0.9em;
+}
+.io-viewmode-select {
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 0 4px;
+}
+
+/* IO split-RD/WR toggle in the section header (REQ §11). Checked = two
+   planes (RD pane left/top, WR pane right/bottom). Toggling reloads
+   the page since the bus allocates the WR plane lazily at boot. */
+.io-split {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 12px;
+}
+.io-split.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.io-split-label {
+  color: var(--muted);
+  font-size: 0.9em;
+}
+
+/* Side-by-side panes when split is on; WR pane stacks below RD when
+   the viewport is too narrow. The original implementation used a
+   container query against `.io-split-body` itself — but `container-type`
+   establishes a query container for DESCENDANTS, not the element it's
+   declared on, so the rule never matched and the panes stayed
+   side-by-side at every width. Switched to a @media query: the
+   explorer is single-column and full-width so viewport ≈ section width
+   in practice. Per-section container queries can come back if sections
+   ever land in narrower surfaces (an outer wrapper would carry the
+   container-type then). */
+.io-split-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+@media (max-width: 720px) {
+  .io-split-body {
+    grid-template-columns: 1fr;
+  }
+}
+.io-pane {
+  min-width: 0; /* let grid tracks shrink rather than overflow */
+}
+.io-pane-title {
+  font-size: 0.85em;
+  color: var(--muted);
+  padding: 2px 0 4px;
+  border-bottom: 1px dashed var(--border);
+  margin-bottom: 4px;
+}
+
+.hex-row-ascii {
+  display: grid;
+  gap: 0;
+  flex: 0 0 auto;
+  color: var(--muted);
+  padding-left: 8px;
+  border-left: 1px dashed var(--border);
+}
+.hex-row-ascii.cells-16 {
+  grid-template-columns: repeat(16, 1.2ch);
+}
+.hex-row-ascii.cells-32 {
+  grid-template-columns: repeat(32, 1.2ch);
+}
+.hex-row-ascii.cells-64 {
+  grid-template-columns: repeat(64, 1.2ch);
+}
+.hex-row-ascii.cells-128 {
+  grid-template-columns: repeat(128, 1.2ch);
+}
+.hex-ascii-cell {
+  /* See .hex-cell — same <button> UA reset. */
+  appearance: none;
+  background: none;
+  border: none;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  display: inline-block;
+  text-align: center;
+  border-radius: 2px;
+  cursor: default;
+}
+.hex-ascii-cell.is-editable {
+  cursor: text;
+}
+.hex-ascii-cell.is-editable:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.hex-ascii-cell.is-watch-cell {
+  /* See .hex-cell.is-watch-cell — keep weight uniform to lock baseline. */
+  background: var(--highlight);
+  color: var(--bg);
+}
+.hex-ascii-input {
+  width: 1.1ch;
+  padding: 0;
+  margin: 0;
+  border: 1px solid var(--accent);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  text-align: center;
+}
+.hex-ascii-input:focus {
+  outline: none;
+}
+.hex-ascii-input.is-invalid {
+  border-color: var(--danger);
+}
+
+/* Bytes-per-row selector (Memory / IO section headers). */
+
+.bpr-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+.bpr-select-label {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.bpr-select-field {
+  appearance: auto;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 1px 4px;
+}
+.bpr-select-field:focus {
+  outline: 1px solid var(--accent);
+  border-color: var(--accent);
+}
+
+/* Hardware trace section. Layout: fixed-width left column for signal
+   names + a monospace waveform pane to the right. One row per signal;
+   strict 1-cell-per-HC inside the waveform (no expansion at edges). */
+.hwt-header-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.hwt-capture-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.hwt-capture-mode-label {
+  user-select: none;
+}
+.hwt-detached-badge {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--warning);
+  color: var(--warning);
+  background: var(--warning-bg);
+}
+.hwt-folded-summary {
+  color: var(--muted);
+}
+.hwt-body {
+  /* Single source of truth for the row geometry the M1 gridline layer
+     depends on: the waveform's first cell starts at label-w + row-gap
+     from the row's left (box-sizing:border-box, so the 80px basis is the
+     label's full outer width). Keep these in sync via the vars below. */
+  /* M8b: label column widened from 80→100px to fit the input-pin
+     checkbox alongside the name without truncating "nBUSACK" etc.
+     The waveform's first cell starts at label-w + row-gap; the M1
+     gridline overlay reads the same vars so it stays in lockstep. */
+  --hwt-label-w: 100px;
+  --hwt-row-gap: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  /* The waveform extends beyond the section's viewport so the user can
+     scroll back through buffer history; `overflow-x: auto` activates
+     CSS scrolling, `max-height` keeps vertical layout sane. */
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 60vh;
+  /* Anchor the scroll viewport so sticky labels position against it. */
+  position: relative;
+}
+/* Empty-ring status line. Sits above the always-rendered row column so
+   the user sees both the "why nothing's drawn" message AND the input-
+   pin checkboxes pre-step. Sticky-left mirrors the row label column so
+   the message stays readable when the body is wide enough to scroll. */
+.hwt-body-status {
+  position: sticky;
+  left: 0;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+.hwt-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--hwt-row-gap);
+  white-space: nowrap;
+  /* Rows must expand to fit their full waveform width, not shrink to
+     the body's clientWidth. `max-content` lets each row reach its
+     natural width which is what triggers horizontal overflow on the
+     body container. */
+  width: max-content;
+  min-width: 100%;
+  /* Lift rows above the M1 gridline layer (which sits at z-index 0 in
+     the same .hwt-content stacking root) so glyphs paint on top of the
+     lines while the lines show through the transparent cell gaps. */
+  position: relative;
+  z-index: 1;
+}
+.hwt-row-label {
+  flex: 0 0 var(--hwt-label-w);
+  color: var(--muted);
+  font-size: 11px;
+  text-align: right;
+  padding-right: 4px;
+  border-right: 1px solid var(--border);
+  /* Pin the signal name to the left edge of the viewport while the
+     waveform scrolls under it — keeps the row identifiable at any
+     scroll position. */
+  position: sticky;
+  left: 0;
+  background: var(--bg);
+  z-index: 1;
+  /* M8b: input rows carry a checkbox next to the label; flexbox keeps
+     them aligned with the text and right-justified together. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+.hwt-row-label-text {
+  /* Suppress extra spacing in pure-text rows; the parent's gap covers
+     the input-bit case. */
+  display: inline-block;
+}
+.hwt-input-checkbox {
+  margin: 0;
+  /* Compact: input pins live in a narrow sticky column. Native checkbox
+     sizing varies by browser; size: 12px gives a consistent baseline. */
+  width: 12px;
+  height: 12px;
+  cursor: pointer;
+}
+.hwt-row-waveform {
+  /* Pre-rendered single string of glyphs — one DOM node per row, not
+     per cell, regardless of waveform width. */
+  /* letter-spacing MUST be 0: the block-element rails (▔/▁) are
+     edge-to-edge, so any inter-glyph gap would (a) break a HIGH/LOW
+     span into dashes and (b) make the cell pitch (1ch + spacing)
+     non-integral, which the M1 grid relies on staying exactly
+     1ch. See STR.hwTrace.glyphs width-invariant note. */
+  letter-spacing: 0;
+  color: var(--fg);
+  flex: 0 0 auto;
+}
+/* Wraps all signal rows + the gridline overlay in one max-content,
+   position:relative box so the absolutely-positioned gridlines (a) size
+   to the full stacked height of every row and (b) scroll horizontally in
+   lockstep with the rows (shared scrolled content). */
+.hwt-content {
+  position: relative;
+  width: max-content;
+  min-width: 100%;
+}
+/* M1-cycle grid: faint vertical rules at each nM1 falling edge. The
+   layer's left origin = the waveform's first cell; child lines offset
+   from there in `ch` units (= one HC cell, since glyphs advance exactly
+   1ch). width:0 so the layer never adds to the body's scrollWidth. */
+.hwt-gridlines {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--hwt-label-w) + var(--hwt-row-gap));
+  width: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+.hwt-gridline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+  opacity: 0.6;
+}
+/* DRAM-refresh addresses (addr while nRFSH is low): dimmed so they read
+   as non-operational without changing glyph advance (opacity only — no
+   width change, so the 1ch grid + M1 lines stay aligned). */
+.hwt-bus-refresh {
+  opacity: 0.4;
+}
+
+/* App-shell section (REQ §11). Header carries an always-visible Cold
+   boot button; body is collapsed by default and lives behind the
+   section frame's fold-lock when staged settings are dirty. */
+.appshell-header-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.appshell-version {
+  color: var(--muted);
+  font-size: 11px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  white-space: nowrap;
+}
+.appshell-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 8px 12px;
+}
+.appshell-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+}
+.appshell-row.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.appshell-row-label {
+  color: var(--muted);
+  font-size: 0.9em;
+}
+.appshell-byte-input {
+  font-family: var(--mono, monospace);
+}
+.appshell-split {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+}
+.appshell-split.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.appshell-split-label {
+  color: var(--muted);
+  font-size: 0.9em;
+}
+.appshell-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-end;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+/* Interrupts section (REQ §11). Minimal — just a labeled INT vector input
+   today; forward-looking generators will land here as additional rows. */
+.interrupts-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 12px;
+}
+.interrupts-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+}
+.interrupts-row-label {
+  color: var(--muted);
+  font-size: 0.9em;
+}
+.interrupts-vector-input {
+  font-family: var(--mono, monospace);
+}
+.interrupts-folded-summary {
+  color: var(--muted);
+  font-size: 0.9em;
+}

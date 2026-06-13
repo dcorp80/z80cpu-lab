@@ -49,6 +49,7 @@ CLAUDE.md
 tmp/
 temp/
 scratch/
+bins/
 
 # Runtime / pid files
 *.pid

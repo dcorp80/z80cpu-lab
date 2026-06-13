@@ -1,0 +1,62 @@
+name: Deploy explorer to GitHub Pages
+
+# Tag-triggered: bump apps/z80cpu-explorer/package.json to the new
+# version (e.g. 0.1.0), then
+#   git tag explorer-v0.1.0 && git push origin explorer-v0.1.0
+# to deploy. Also exposes a manual `workflow_dispatch` button in the
+# Actions UI for ad-hoc deploys of the current HEAD.
+on:
+  push:
+    tags:
+      - 'explorer-v*'
+  workflow_dispatch:
+
+# Pages deploy needs id-token to authenticate the upload and pages:write
+# to publish. `contents: read` is enough for checkout.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Don't cancel an in-progress deploy if a second tag lands close behind —
+# queue it instead, so we never interrupt mid-upload.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install
+        run: npm ci
+
+      - name: Build explorer
+        run: npm run build -w @dcorp80/z80cpu-explorer
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/z80cpu-explorer/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
