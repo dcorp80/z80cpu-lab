@@ -7,6 +7,8 @@ IO grids, and a hardware-pin waveform — side by side and live.
 
 **Live demo:** [dcorp80.github.io/z80cpu-lab](https://dcorp80.github.io/z80cpu-lab/)
 
+**Guided tour:** [Mandelbrot example](examples/mandelbrot/README.md) — a 7-step walkthrough that loads a binary, single-steps through fetch/execute, sets HC and PC breakpoints, watches a Mandelbrot fill in, and services an NMI against the halted CPU.
+
 ## What's in it
 
 A single page split into foldable, reorderable sections:

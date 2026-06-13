@@ -15,6 +15,7 @@ input pins (nINT, nNMI, nRESET), PC and HC breakpoints — all side by side,
 all live. Foldable, reorderable, persists across reloads.
 
 → Source and details: [`apps/z80cpu-explorer/`](apps/z80cpu-explorer/).
+→ Guided tour: [Mandelbrot example](apps/z80cpu-explorer/examples/mandelbrot/README.md) — load a binary, single-step, set HC and PC breakpoints, watch the picture fill in, and service an NMI against the halted CPU.
 
 ## Packages
 
