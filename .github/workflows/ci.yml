@@ -10,7 +10,7 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -20,6 +20,12 @@ jobs:
 
       - name: Install
         run: npm ci
+
+      # Explorer's vitest browser tier (apps/z80cpu-explorer/src/**/*.browser.test.tsx)
+      # drives a real Chromium via Playwright. The runner image doesn't ship one.
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: apps/z80cpu-explorer
 
       - name: Lint
         run: npm run lint
