@@ -16,6 +16,7 @@ all live. Foldable, reorderable, persists across reloads.
 
 → Source and details: [`apps/z80cpu-explorer/`](apps/z80cpu-explorer/).
 → Guided tour: [Mandelbrot example](apps/z80cpu-explorer/examples/mandelbrot/README.md) — load a binary, single-step, set HC and PC breakpoints, watch the picture fill in, and service an NMI against the halted CPU.
+→ Release notes: [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Packages
 
@@ -65,7 +66,9 @@ z80>                           # <enter> steps one instruction
 
 Full command reference in [`packages/z80cpu-cli/README.md`](packages/z80cpu-cli/README.md).
 
-## Using the debug context in your own code
+## Using the debug package in your own code
+
+### Tracing
 
 ```ts
 import { Z80Cpu } from "@dcorp80/z80cpu";
@@ -90,6 +93,40 @@ reported (the Z80 commits deferred A/F writes one M1 later, so earlier
 reporting would show stale flags). Use `trace.nextPc` for "PC after this
 instruction"; `dbg.state().pc` reads live and is off by one mid-fetch.
 The full timing model is in [`packages/z80cpu-debug/README.md`](packages/z80cpu-debug/README.md#timing--when-does-the-callback-fire).
+
+### Breakpoints and the HC counter
+
+As of [v0.2.0](CHANGELOG.md), PC-range
+breakpoints and the half-cycle counter live outside `Z80DebugContext`:
+`Z80Breakpoints` is a separate observer, and the consumer owns the HC
+slot. The split keeps the tracer pure and lets multi-CPU systems share
+one `Float64Array` buffer across counters.
+
+```ts
+import { Z80Breakpoints, type HcCounter } from "@dcorp80/z80cpu-debug";
+
+// Float64Array slot avoids HeapNumber sawtooth past V8's SMI range.
+// One buffer can back many CPUs' counters by varying `index`.
+const hcBox = new Float64Array(1);
+const hc: HcCounter = { box: hcBox, index: 0 };
+const bp = new Z80Breakpoints(dbg, hc);
+
+bp.addPcBreak(0x0010, 0x0010, ({ pc }) => {
+  console.log(`break @ ${pc.toString(16)}`);
+});
+
+// Per-edge loop: clock the dbg, tick the consumer-owned HC, then let
+// the bp do its post-edge PC and stepHc scan.
+for (;;) {
+  dbg.clockEdge();
+  hcBox[0]++;
+  bp.tickAfterEdge();
+}
+```
+
+The REPL ([`packages/z80cpu-cli/src/repl.ts`](packages/z80cpu-cli/src/repl.ts))
+wires all three together inside a single `tickEdge()` helper — useful as a
+reference when adapting the pattern to your own bus loop.
 
 ## Repository status
 
