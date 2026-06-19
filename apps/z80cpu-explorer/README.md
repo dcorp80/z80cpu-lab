@@ -7,7 +7,9 @@ IO grids, and a hardware-pin waveform — side by side and live.
 
 **Live demo:** [dcorp80.github.io/z80cpu-lab](https://dcorp80.github.io/z80cpu-lab/)
 
-**Guided tour:** [Mandelbrot example](examples/mandelbrot/README.md) — a 7-step walkthrough that loads a binary, single-steps through fetch/execute, sets HC and PC breakpoints, watches a Mandelbrot fill in, and services an NMI against the halted CPU.
+**Guided tours:**
+- [Mandelbrot example](examples/mandelbrot/README.md) — a 7-step walkthrough that loads a binary, single-steps through fetch/execute, sets HC and PC breakpoints, watches a Mandelbrot fill in, and services an NMI against the halted CPU.
+- [RAXOFT z80test example](examples/z80test/README.md) — run Patrik Rak's Z80 conformance suite against a minimal ZX ROM shim, configure split-direction IO with a seeded read, then sweep ~2.24B half-cycles and watch the effective clock climb as you switch off capture and tracing.
 
 ## What's in it
 

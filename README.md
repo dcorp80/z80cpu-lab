@@ -15,7 +15,9 @@ input pins (nINT, nNMI, nRESET), PC and HC breakpoints — all side by side,
 all live. Foldable, reorderable, persists across reloads.
 
 → Source and details: [`apps/z80cpu-explorer/`](apps/z80cpu-explorer/).
-→ Guided tour: [Mandelbrot example](apps/z80cpu-explorer/examples/mandelbrot/README.md) — load a binary, single-step, set HC and PC breakpoints, watch the picture fill in, and service an NMI against the halted CPU.
+→ Guided tours:
+   - [Mandelbrot example](apps/z80cpu-explorer/examples/mandelbrot/README.md) — load a binary, single-step, set HC and PC breakpoints, watch the picture fill in, and service an NMI against the halted CPU.
+   - [RAXOFT z80test example](apps/z80cpu-explorer/examples/z80test/README.md) — load the upstream Z80 conformance suite against a minimal ZX ROM shim, configure split-direction IO with a seeded read, then let ~2.24B half-cycles sweep by and watch the effective clock climb as you switch off capture and tracing.
 → Release notes: [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Packages
