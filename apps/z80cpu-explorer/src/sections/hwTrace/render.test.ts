@@ -127,6 +127,50 @@ describe("renderBusValueRow — addr (width=4)", () => {
     ).toBe("12ABCD....");
   });
 
+  it("surfaces the trailing chars of a pre-window value whose paint bleeds in", () => {
+    // 0x1234 at hc=8 paints chars '1','2','3','4' at HCs 8..11. With
+    // a window starting at 10, the user must still see '3' at HC=10
+    // and '4' at HC=11 — losing them would let horizontal scroll
+    // change which cells render for an unchanged HC.
+    expect(
+      renderBusValueRow([{ hc: 8, value: 0x1234 }], 10, 15, 4, undefined, G),
+    ).toBe("34....");
+  });
+
+  it("drops to filler when the pre-window value's paint ends before the window", () => {
+    // 0x1234 at hc=5 paints at HCs 5..8 — all pre-window for windowLo=10.
+    // currentValue is still 0x1234 (held), so cells are bus-hold filler.
+    expect(
+      renderBusValueRow([{ hc: 5, value: 0x1234 }], 10, 13, 4, undefined, G),
+    ).toBe("....");
+  });
+
+  it("a transition exactly at windowLo overrides a bleeding pre-window value", () => {
+    // 0x1234 at hc=8 would surface tail '34' at HCs 10..11, but
+    // 0xABCD at hc=10 starts a fresh paint from cell 0.
+    expect(
+      renderBusValueRow(
+        [
+          { hc: 8, value: 0x1234 },
+          { hc: 10, value: 0xabcd },
+        ],
+        10,
+        17,
+        4,
+        undefined,
+        G,
+      ),
+    ).toBe("ABCD....");
+  });
+
+  it("a pre-window tristate transition stays in tristate filler, not bleeding hex", () => {
+    // undefined at hc=8 — no hex chars to surface. Window must show
+    // tristate filler from windowLo onward.
+    expect(
+      renderBusValueRow([{ hc: 8, value: undefined }], 10, 13, 4, 0x4000, G),
+    ).toBe("ZZZZ");
+  });
+
   it("renders tristate (undefined) as ┈ chars in the value region and as filler", () => {
     expect(
       renderBusValueRow([{ hc: 2, value: undefined }], 0, 9, 4, 0x4000, G),

@@ -83,14 +83,14 @@ describe("IO section", () => {
 
   it("body edits route through store.setIoByte (not setMemByte)", async () => {
     harness = await mount("Body");
-    // Watch row's cell 0 = (watchAddr & 0xFFF0); pick a port-aligned
-    // watch so the first cell of the watch row is the address we
-    // want to write. IO defaults rowsBefore=1, so the watch row sits
-    // at index 1 (not 2 like the deeper Memory window).
+    // Page model: pick a watch addr whose row is mounted
+    // under happy-dom's 50-row virtualization fallback. Page base is
+    // 0x0000 at any shipped IO page size; watch row 0x00F0 is at index
+    // (0x00F0 - 0x0000)/16 = 15 — inside the fallback window.
     harness.store.setIoWatchAddr(0x00f0);
     const rows = harness.container.querySelectorAll(".hex-row");
-    expect(rows.length).toBe(3); // IO defaults: 1 + 1 + 1
-    const cell = rows[1].querySelector(".hex-cell") as HTMLElement;
+    // Watch row index = (0x00F0 - 0x0000) / 16 = 15.
+    const cell = rows[15].querySelector(".hex-cell") as HTMLElement;
     fireEvent.click(cell);
     const input = harness.container.querySelector(
       ".hex-cell-input",
@@ -114,23 +114,63 @@ describe("IO section", () => {
   });
 });
 
-describe("IO section — 8-bit view (REQ §6.7)", () => {
-  it("toggle switches the body to a windowed 8-bit port grid", async () => {
+describe("IO section — 8-bit view", () => {
+  it("toggle switches the body to a scrollable 8-bit port grid (all 256 ports rendered)", async () => {
     harness = await mount("Body");
-    // 16-bit defaults: 1 + 1 + 1 = 3 rows.
-    expect(harness.container.querySelectorAll(".hex-row").length).toBe(3);
+    // 16-bit uses the virtualized HexGrid (page model). Under
+    // happy-dom the fallback window mounts 50 rows.
+    expect(harness.container.querySelectorAll(".hex-row").length).toBe(50);
     harness.store.setIoViewMode("8bit");
-    // 8-bit honours the same rowsBefore/After defaults.
-    expect(harness.container.querySelectorAll(".hex-row").length).toBe(3);
-    // Cells use 2-hex-digit data-addr; the watchAddr=0 window wraps so
-    // port 0x00 is visible (the watch row).
+    // 8-bit renders all 256 ports as 16 rows × 16 cells (no pagination
+    // — 256 ports fits in any page; no virtualization — the row count
+    // is tiny). The viewport (`--hex-grid-visible-rows = 3`) shows ~3
+    // rows at a time; the rest is reachable by scrolling.
+    expect(harness.container.querySelectorAll(".hex-row").length).toBe(16);
+    // Cells use 2-hex-digit data-addr; both ends of the space are
+    // mounted in the same DOM tree.
     expect(
       harness.container.querySelector('.hex-cell[data-addr="00"]'),
+    ).not.toBeNull();
+    expect(
+      harness.container.querySelector('.hex-cell[data-addr="FF"]'),
     ).not.toBeNull();
     // 4-digit cells from 16-bit mode should be gone.
     expect(
       harness.container.querySelector('.hex-cell[data-addr="0000"]'),
     ).toBeNull();
+  });
+
+  it("8-bit grid uses the flow layout (no .hex-virt-spacer) so rows stack without collapsing", async () => {
+    harness = await mount("Body");
+    harness.store.setIoViewMode("8bit");
+    // The 16-bit HexGrid virtualizes via `.hex-virt-spacer`; the 8-bit
+    // `IoPortGrid` does NOT. If a future change accidentally moves the
+    // `.hex-row { position: absolute }` rule out from under the spacer
+    // scope, IoPortGrid's rows would all stack at top:0 and the body
+    // would visually collapse to a single line.
+    const grid = harness.container.querySelector(".hex-grid");
+    expect(grid).not.toBeNull();
+    expect(grid?.querySelector(".hex-virt-spacer")).toBeNull();
+    // Rows are direct children of the grid; full 8-bit space.
+    const rows = grid?.querySelectorAll(":scope > .hex-row");
+    expect(rows?.length).toBe(16);
+  });
+
+  it("8-bit grid omits the page-nav row (PageNavRow not even rendered in Pane8Bit)", async () => {
+    harness = await mount("Body");
+    harness.store.setIoViewMode("8bit");
+    // Sanity: page-nav buttons aren't part of the 8-bit body. The
+    // 16-bit pane wraps `.hex-grid` in `.hex-section-body` with a
+    // PageNavRow above; the 8-bit pane renders `<IoPortGrid>` directly.
+    expect(harness.container.querySelector(".page-nav-row")).toBeNull();
+  });
+
+  it("16-bit grid uses .hex-virt-spacer (virtualization on)", async () => {
+    harness = await mount("Body");
+    const grid = harness.container.querySelector(".hex-grid");
+    expect(grid).not.toBeNull();
+    // Default mode is 16-bit; HexGrid wraps rows in the spacer.
+    expect(grid?.querySelector(".hex-virt-spacer")).not.toBeNull();
   });
 
   it("editing a port broadcasts the byte to all 256 high-byte aliases", async () => {
@@ -153,11 +193,12 @@ describe("IO section — 8-bit view (REQ §6.7)", () => {
     }
   });
 
-  it("advance from the window-last port bumps watchAddr by bpr", async () => {
+  it("advance steps to the next port and never bumps watchAddr (all 256 ports are mounted)", async () => {
     harness = await mount("Body");
     harness.store.setIoViewMode("8bit");
-    // Defaults (watchAddr=0, bpr=16, rowsBefore=1, rowsAfter=1) → window
-    // covers 0xF0..0x1F; last visible port is 0x1F.
+    // Edit port 0x1F → advance moves cell focus to 0x20. watchAddr
+    // stays put — the whole 8-bit space is rendered, the viewport
+    // scrolls naturally if the next cell was off-screen.
     expect(harness.store.ioWatchAddr()).toBe(0);
     const cell = harness.container.querySelector(
       '.hex-cell[data-addr="1F"]',
@@ -168,33 +209,16 @@ describe("IO section — 8-bit view (REQ §6.7)", () => {
     ) as HTMLInputElement;
     fireEvent.input(input, { target: { value: "11" } });
     fireEvent.keyDown(input, { key: "Enter" });
-    // Bumped by bpr=16 so the next port (0x20) is brought into view.
-    expect(harness.store.ioWatchAddr()).toBe(0x10);
-  });
-
-  it("advance from a mid-window port does not bump watchAddr", async () => {
-    harness = await mount("Body");
-    harness.store.setIoViewMode("8bit");
-    // watchAddr=0; port 0x05 sits mid-window (well inside 0xF0..0x1F).
-    const cell = harness.container.querySelector(
-      '.hex-cell[data-addr="05"]',
-    ) as HTMLElement;
-    fireEvent.click(cell);
-    const input = harness.container.querySelector(
-      ".hex-cell-input",
-    ) as HTMLInputElement;
-    fireEvent.input(input, { target: { value: "22" } });
-    fireEvent.keyDown(input, { key: "Enter" });
+    expect(harness.bus.ioRead[0x1f]).toBe(0x11);
     expect(harness.store.ioWatchAddr()).toBe(0);
   });
 
-  it("advance wraps watchAddr in 8-bit space at the address-space edge", async () => {
+  it("advance wraps 0xFF → 0x00 (no watchAddr bump)", async () => {
     harness = await mount("Body");
     harness.store.setIoViewMode("8bit");
-    harness.store.setIoWatchAddr(0xf0);
-    // Window: rows 0xE0/0xF0/0x00 (third row wraps). Window last = 0x0F.
+    harness.store.setIoWatchAddr(0xff);
     const cell = harness.container.querySelector(
-      '.hex-cell[data-addr="0F"]',
+      '.hex-cell[data-addr="FF"]',
     ) as HTMLElement;
     fireEvent.click(cell);
     const input = harness.container.querySelector(
@@ -202,23 +226,21 @@ describe("IO section — 8-bit view (REQ §6.7)", () => {
     ) as HTMLInputElement;
     fireEvent.input(input, { target: { value: "33" } });
     fireEvent.keyDown(input, { key: "Enter" });
-    // (0xF0 + 16) & 0xff = 0x00 — bump wraps in 8-bit space.
-    expect(harness.store.ioWatchAddr()).toBe(0x00);
+    expect(harness.bus.ioRead[0xff]).toBe(0x33);
+    // watchAddr is unchanged; the next-cell selector wraps to 0x00.
+    expect(harness.store.ioWatchAddr()).toBe(0xff);
   });
 
-  it("window wraps in 8-bit space near the address-space edges", async () => {
+  it("renders ports from both ends of the 8-bit space simultaneously", async () => {
     harness = await mount("Body");
     harness.store.setIoViewMode("8bit");
-    // watchAddr=0 → rowsBefore wraps to 0xF0..0xFF on the top row.
-    expect(
-      harness.container.querySelector('.hex-cell[data-addr="F0"]'),
-    ).not.toBeNull();
-    expect(
-      harness.container.querySelector('.hex-cell[data-addr="00"]'),
-    ).not.toBeNull();
-    expect(
-      harness.container.querySelector('.hex-cell[data-addr="10"]'),
-    ).not.toBeNull();
+    // All 256 ports are in the DOM at once — the user scrolls the
+    // viewport; no window centering or wrap-around required.
+    for (const addr of ["00", "10", "F0", "FF"]) {
+      expect(
+        harness.container.querySelector(`.hex-cell[data-addr="${addr}"]`),
+      ).not.toBeNull();
+    }
   });
 
   it("watch input + bpr select stay present in both modes", async () => {
@@ -313,23 +335,24 @@ describe("IO section — 8-bit view (REQ §6.7)", () => {
     expect(watchCell?.classList.contains("is-watch-cell")).toBe(true);
   });
 
-  it("bpr widths keep the row count fixed and scale cells per row", async () => {
+  it("bpr widths keep the total cell count at 256 and re-shape rows × cols", async () => {
     harness = await mount("Body");
     harness.store.setIoViewMode("8bit");
-    // Default rowsBefore=1 + watch + rowsAfter=1 = 3 rows in every width.
-    expect(harness.container.querySelectorAll(".hex-row").length).toBe(3);
-    expect(harness.container.querySelectorAll(".hex-cell").length).toBe(3 * 16);
+    // The 8-bit grid renders the whole space (256 ports). Row count =
+    // 256 / bpr; cells per row = bpr.
+    expect(harness.container.querySelectorAll(".hex-row").length).toBe(16);
+    expect(harness.container.querySelectorAll(".hex-cell").length).toBe(256);
     harness.store.setIoBytesPerRow(32);
-    expect(harness.container.querySelectorAll(".hex-row").length).toBe(3);
-    expect(harness.container.querySelectorAll(".hex-cell").length).toBe(3 * 32);
+    expect(harness.container.querySelectorAll(".hex-row").length).toBe(8);
+    expect(harness.container.querySelectorAll(".hex-cell").length).toBe(256);
     harness.store.setIoBytesPerRow(64);
-    expect(harness.container.querySelectorAll(".hex-row").length).toBe(3);
-    expect(harness.container.querySelectorAll(".hex-cell").length).toBe(3 * 64);
+    expect(harness.container.querySelectorAll(".hex-row").length).toBe(4);
+    expect(harness.container.querySelectorAll(".hex-cell").length).toBe(256);
   });
 });
 
-describe("IO section — split RD/WR (REQ §11)", () => {
-  // The checkbox itself moved to the App-shell section header (REQ §11);
+describe("IO section — split RD/WR", () => {
+  // The checkbox itself moved to the App-shell section header;
   // coverage for its in-header behavior lives in appShell.test.tsx.
   // What's left here is the IO section's reaction to the persisted flag:
   // body layout and folded-summary text.
@@ -352,5 +375,47 @@ describe("IO section — split RD/WR (REQ §11)", () => {
     expect(text).toContain("split");
     expect(text).toContain("RD=4080");
     expect(text).toContain("WR=00FE");
+  });
+
+  it("RD and WR panes each get their own PageNavRow with independent watch state", async () => {
+    harness = await mount("Body");
+    harness.store.updateSectionConfig("io", { splitIo: true });
+    // Two panes → two .page-nav-row instances.
+    const navRows = harness.container.querySelectorAll(".page-nav-row");
+    expect(navRows.length).toBe(2);
+    // Locate the > buttons in each pane and click only the RD one.
+    const rdPane = harness.container.querySelector(
+      ".io-pane-rd",
+    ) as HTMLElement;
+    const wrPane = harness.container.querySelector(
+      ".io-pane-wr",
+    ) as HTMLElement;
+    expect(rdPane).not.toBeNull();
+    expect(wrPane).not.toBeNull();
+    const rdNext = rdPane.querySelector(".page-nav-next") as HTMLButtonElement;
+    fireEvent.click(rdNext);
+    // Page-nav drives `viewPageBase`, not `watchAddr` — the watch
+    // markers stay put. Only the RD view-page moved.
+    const ioPageSize = harness.store.ioPageSize();
+    expect(harness.store.ioViewPageBase()).toBe(ioPageSize);
+    expect(harness.store.ioViewPageBaseWrite()).toBe(0);
+    expect(harness.store.ioWatchAddr()).toBe(0);
+    expect(harness.store.ioWatchAddrWrite()).toBe(0);
+    // Now click WR pane's > → only WR view moves.
+    const wrNext = wrPane.querySelector(".page-nav-next") as HTMLButtonElement;
+    fireEvent.click(wrNext);
+    expect(harness.store.ioViewPageBase()).toBe(ioPageSize);
+    expect(harness.store.ioViewPageBaseWrite()).toBe(ioPageSize);
+  });
+
+  it("IO header no longer carries the page-size selector (moved to App-shell)", async () => {
+    const headerHarness = await mount("Header");
+    // Page size was relocated to the App-shell live-pane so the IO
+    // header isn't crowded with cross-pane settings; appShell tests
+    // assert the live-commit semantics.
+    expect(
+      headerHarness.container.querySelector(".appshell-page-select"),
+    ).toBeNull();
+    headerHarness.dispose();
   });
 });

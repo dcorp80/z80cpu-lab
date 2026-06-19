@@ -134,21 +134,27 @@ describe("HW trace (browser smoke)", () => {
 // real paint metrics, so it lives in the browser tier (happy-dom fakes
 // getBoundingClientRect width).
 describe("HW trace glyph width invariant", () => {
-  // Render `count` copies of `ch` inside the real waveform span (same
+  // Render `count` copies of `ch` inside the real glyph span (same
   // font-family/size + letter-spacing:0 as production) and return the
-  // laid-out width.
+  // laid-out width. Measures the inner `.hwt-row-glyphs` element — it
+  // is `display: inline-block` and sizes to its content, unlike the
+  // outer `.hwt-row-waveform` spacer whose width is driven by the
+  // `--hwt-cells` CSS var (horizontal virtualization).
   function measureWidth(ch: string, count: number): number {
     const body = document.createElement("div");
     body.className = "hwt-body";
     const row = document.createElement("div");
     row.className = "hwt-row";
-    const span = document.createElement("span");
-    span.className = "hwt-row-waveform";
-    span.textContent = ch.repeat(count);
-    row.append(span);
+    const waveform = document.createElement("span");
+    waveform.className = "hwt-row-waveform";
+    const glyphs = document.createElement("span");
+    glyphs.className = "hwt-row-glyphs";
+    glyphs.textContent = ch.repeat(count);
+    waveform.append(glyphs);
+    row.append(waveform);
     body.append(row);
     document.body.append(body);
-    const w = span.getBoundingClientRect().width;
+    const w = glyphs.getBoundingClientRect().width;
     body.remove();
     return w;
   }

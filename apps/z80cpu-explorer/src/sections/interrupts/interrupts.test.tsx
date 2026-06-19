@@ -1,5 +1,4 @@
-// Happy-dom render tests for the Interrupts section (REQ §11 "Nice to
-// have"). Covers folded summary, INT vector input commit path, and that
+// Happy-dom render tests for the Interrupts section (nice-to-have post-MVP). Covers folded summary, INT vector input commit path, and that
 // the section is registered + appears in the default order.
 
 import { fireEvent } from "@solidjs/testing-library";

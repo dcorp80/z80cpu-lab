@@ -81,7 +81,7 @@ export const SectionFrame: Component<SectionFrameProps> = (props) => {
 
   const FoldedSummary = mod.FoldedSummary;
 
-  // Sections opt in to a fold-lock (REQ §11 App-shell) by exporting an
+  // Sections opt in to a fold-lock (App-shell pattern) by exporting an
   // `isCollapseLocked` accessor. The lock blocks *collapse only* —
   // unfolding a locked section stays allowed so a user who somehow
   // ended up with a locked-and-folded section (e.g. async persist

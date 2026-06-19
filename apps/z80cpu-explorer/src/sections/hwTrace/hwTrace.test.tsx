@@ -93,10 +93,7 @@ describe("hwTrace section — folded summary", () => {
     const { container } = await open("folded");
     const text = container.querySelector(".hwt-folded-summary")?.textContent;
     expect(text).toBe(
-      STR.hwTrace.foldedSummaryEmpty(
-        STR.hwTrace.captureModeRing,
-        STR.hwTrace.viewingLive,
-      ),
+      STR.hwTrace.foldedSummaryEmpty(true, STR.hwTrace.viewingLive),
     );
   });
 
@@ -108,15 +105,15 @@ describe("hwTrace section — folded summary", () => {
     loop.emitTick(5);
     const text = container.querySelector(".hwt-folded-summary")?.textContent;
     expect(text).toContain("last HC: 5");
-    expect(text).toContain(`capture: ${STR.hwTrace.captureModeRing}`);
+    expect(text).toContain("capture: ring");
     expect(text).toContain(`viewing ${STR.hwTrace.viewingLive}`);
   });
 
   it("renders the disabled capture mode", async () => {
     const { container, store } = await open("folded");
-    store.setHwTraceMode("disabled");
+    store.setHwTraceCapture(false);
     const text = container.querySelector(".hwt-folded-summary")?.textContent;
-    expect(text).toContain(`capture: ${STR.hwTrace.captureModeDisabled}`);
+    expect(text).toContain("capture: off");
   });
 
   it("renders the detached viewing state with anchor HC", async () => {
@@ -128,13 +125,13 @@ describe("hwTrace section — folded summary", () => {
 });
 
 describe("hwTrace section — header", () => {
-  it("renders the capture toggle as a checkbox, checked in ring mode", async () => {
+  it("renders the capture toggle as a checkbox, checked by default", async () => {
     const { container } = await open("header");
     const cb = container.querySelector(
       ".hwt-capture-mode input[type=checkbox]",
     ) as HTMLInputElement | null;
     expect(cb).not.toBeNull();
-    expect(cb?.checked).toBe(true); // default mode is ring
+    expect(cb?.checked).toBe(true);
   });
 
   it("unchecking the capture toggle disables capture; rechecking re-enables", async () => {
@@ -144,13 +141,13 @@ describe("hwTrace section — header", () => {
     ) as HTMLInputElement;
     cb.checked = false;
     cb.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(store.hwTraceMode()).toBe("disabled");
-    expect(store.hwTrace.getMode()).toBe("disabled");
+    expect(store.hwTraceCapture()).toBe(false);
+    expect(store.hwTrace.getEnabled()).toBe(false);
 
     cb.checked = true;
     cb.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(store.hwTraceMode()).toBe("ring");
-    expect(store.hwTrace.getMode()).toBe("ring");
+    expect(store.hwTraceCapture()).toBe(true);
+    expect(store.hwTrace.getEnabled()).toBe(true);
   });
 
   it("snap-to-live button is hidden when the cursor is live", async () => {
@@ -178,7 +175,7 @@ describe("hwTrace section — header", () => {
   });
 });
 
-describe("hwTrace section — header step / zero controls (REQ §6.4)", () => {
+describe("hwTrace section — header step / zero controls", () => {
   it("Step HC forwards stepHC(1)", async () => {
     const { container, loop } = await open("header");
     buttonByText(container, STR.hwTrace.stepHc).click();
@@ -229,12 +226,11 @@ describe("hwTrace section — header step / zero controls (REQ §6.4)", () => {
 });
 
 describe("hwTrace section — body", () => {
-  it("renders signal rows + the empty-state status line on a fresh buffer", async () => {
+  it("renders signal rows on a fresh buffer without an empty-state hint", async () => {
     const { container } = await open("body");
     // M8b: row labels stay visible pre-step so the user can assert input
-    // pins before the first edge. The empty waveforms still convey
-    // "nothing recorded yet" via the status line above the rows.
-    expect(container.textContent).toContain(STR.hwTrace.bodyEmpty);
+    // pins before the first edge. No status hint is shown — its presence
+    // caused layout jumping as the rows appeared below it on first data.
     expect(container.querySelectorAll(".hwt-row").length).toBe(15);
     // Waveform cells stay empty (windowHi < windowLo) — no glyphs land.
     const wave = container.querySelector(".hwt-row-waveform");
@@ -243,9 +239,8 @@ describe("hwTrace section — body", () => {
 
   it("shows the capture-off message and hides rows when capture is disabled", async () => {
     const { container, store } = await open("body");
-    store.setHwTraceMode("disabled");
+    store.setHwTraceCapture(false);
     expect(container.textContent).toContain(STR.hwTrace.bodyDisabled);
-    expect(container.textContent).not.toContain(STR.hwTrace.bodyEmpty);
     // Capture OFF hides the row column entirely — no input pins to
     // assert toward, and the status line carries the message alone.
     expect(container.querySelectorAll(".hwt-row").length).toBe(0);
@@ -262,7 +257,7 @@ describe("hwTrace section — body", () => {
 
     // Disabling capture discards the ring (after the save placeholder) so
     // a later run can't carry stale levels into the window as dead lines.
-    store.setHwTraceMode("disabled");
+    store.setHwTraceCapture(false);
     expect(store.hwTrace.isEmpty()).toBe(true);
     // Row column is hidden entirely under capture-OFF.
     expect(container.querySelectorAll(".hwt-row").length).toBe(0);
@@ -425,6 +420,12 @@ describe("hwTrace section — body", () => {
     // to oldestHc() (here 100), NOT HC=1: store.hc() ran to 200 but the
     // ring starts at 100, and cells 1..99 would be carry-from-nothing
     // "dead lines." Scroll-driven cursor changes live in the browser tier.
+    //
+    // Post-virtualization: the spacer's `--hwt-cells` carries the full
+    // rendered HC extent (drives scrollWidth), while the visible glyph
+    // string is a viewport-bounded slice. We assert on the structural
+    // total via the inline CSS var; the rendered prefix is checked
+    // separately so we still catch glyph-level regressions.
     const { container, store, loop } = await open("body");
     const a = makeBusSample();
     recordSample(store.hwTrace, a, 100);
@@ -432,15 +433,17 @@ describe("hwTrace section — body", () => {
     loop.setHc(200);
     loop.emitTick(200);
     store.detachHwTraceCursor(105); // doesn't shrink rendered range
+    const content = container.querySelector(".hwt-content") as HTMLElement;
+    expect(content?.style.getPropertyValue("--hwt-cells")).toBe("101");
     const m1Row = Array.from(container.querySelectorAll(".hwt-row")).find(
       (el) => el.querySelector(".hwt-row-label")?.textContent === "nM1",
     ) as HTMLElement;
     const waveform = m1Row.querySelector(".hwt-row-waveform")?.textContent;
-    expect(waveform?.length).toBe(101); // HC 100..200
     const high = STR.hwTrace.glyphs.high;
     const low = STR.hwTrace.glyphs.low;
-    // HC 100..101 high (record + carried), 102..200 low.
-    expect(waveform).toBe(high.repeat(2) + low.repeat(99));
+    // Visible prefix: HC 100..101 high (record + carried), 102+ low. Length
+    // depends on the happy-dom fallback viewport (no real layout to measure).
+    expect(waveform?.startsWith(high.repeat(2) + low)).toBe(true);
   });
 
   it("trims the dead-line prefix when capture starts after HC has advanced", async () => {

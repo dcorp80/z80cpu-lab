@@ -6,8 +6,7 @@ import { IO_SIZE, MEM_SIZE, makeBus64k } from "./bus.ts";
 function freshBus(overrides: Partial<BusConfig> = {}) {
   // Pin splitIo to false here so the bulk of the suite tests the joined
   // path even when the shipped `DEFAULT_BUS_CONFIG.splitIo` is flipped
-  // on for in-app smoke-testing (REQ §11 — IndexedDB-backed persistence
-  // is post-MVP). Split-mode tests opt in explicitly via overrides.
+  // on for in-app smoke-testing (split-IO is post-MVP). Split-mode tests opt in explicitly via overrides.
   const cpu = new Z80Cpu();
   const bus = makeBus64k(cpu, {
     ...DEFAULT_BUS_CONFIG,
@@ -42,7 +41,7 @@ function setPins(
 }
 
 describe("makeBus64k", () => {
-  it("fills mem and IO with the configured init bytes (default FF per REQ §6.6/§6.7)", () => {
+  it("fills mem and IO with the configured init bytes (default FF)", () => {
     const { bus } = freshBus();
     expect(bus.mem.length).toBe(MEM_SIZE);
     expect(bus.ioRead.length).toBe(IO_SIZE);
@@ -72,7 +71,7 @@ describe("makeBus64k", () => {
     expect(bus.intVector()).toBe(0xab);
   });
 
-  it("defaults the INT vector to FF (REQ §6.4)", () => {
+  it("defaults the INT vector to FF", () => {
     const { bus } = freshBus();
     expect(bus.intVector()).toBe(0xff);
   });
@@ -297,7 +296,7 @@ describe("makeBus64k", () => {
     });
   });
 
-  describe("split IO (REQ §11)", () => {
+  describe("split IO", () => {
     it("joined mode: ioWrite null, single plane services both directions", () => {
       const { cpu, bus } = freshBus({ ioInit: 0, splitIo: false });
       expect(bus.splitIo).toBe(false);
@@ -356,7 +355,7 @@ describe("makeBus64k", () => {
     });
   });
 
-  // ── Input pins (M8b, REQ §6.4) ───────────────────────────────────
+  // ── Input pins (M8b) ───────────────────────────────────
 
   describe("input pins (M8b)", () => {
     it("defaults all five level pins to deasserted (1)", () => {

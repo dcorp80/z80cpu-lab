@@ -30,6 +30,9 @@ export interface StubDbg {
   /** Live in-flight instruction — store reads on pause. Default empty
    *  (length=0 means "no instruction in flight" → snapshot is null). */
   readonly curr: InstructionTrace;
+  /** Mirrors Z80DebugContext.enabled — store seeds this on cold boot and
+   *  writes it when the Trace-instructions toggle flips. */
+  enabled: boolean;
   /** Stage the in-flight instruction. `bytes` populates `curr.bytes[0..len]`
    *  and sets `length`. `nextPc` defaults to `startAddr` (mirroring the
    *  real dbg's `_initFreshCurr`, which seeds nextPc = M1 fetch addr
@@ -57,6 +60,7 @@ export function makeStubDbg(): StubDbg {
       next = { ...next, ...patch };
     },
     curr,
+    enabled: true,
     setCurr: (patch) => {
       if (patch.startAddr !== undefined) {
         curr.startAddr = patch.startAddr;

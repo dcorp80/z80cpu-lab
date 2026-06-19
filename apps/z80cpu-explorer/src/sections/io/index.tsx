@@ -1,7 +1,6 @@
 import { type Component, Show } from "solid-js";
 import {
-  DEFAULT_IO_ROWS_AFTER,
-  DEFAULT_IO_ROWS_BEFORE,
+  DEFAULT_IO_VIEWPORT_ROWS,
   IO_BYTES_PER_ROW_OPTIONS,
 } from "../../config/defaults.ts";
 import { useStore } from "../../store/index.ts";
@@ -9,6 +8,7 @@ import { STR } from "../../style/strings.ts";
 import { formatHex } from "../../util/hex.ts";
 import { BytesPerRowSelect } from "../bytesPerRowSelect.tsx";
 import { HexGrid } from "../hexGrid.tsx";
+import { PageNavRow } from "../pageNavRow.tsx";
 import type { SectionModule } from "../types.ts";
 import { WatchAddrInput } from "../watchAddrInput.tsx";
 import { IoPortGrid } from "./portGrid.tsx";
@@ -39,12 +39,25 @@ const Header: Component = () => {
   // The watch input is present in both modes; in 8-bit it shrinks to
   // 2 hex digits and rejects values > 0xFF. BPR also works in both
   // (16/32/64 → 16/8/4 rows for the 256-port window).
-  // Split RD/WR was moved to the App-shell section (REQ §11) since
+  // Split RD/WR was moved to the App-shell section since
   // toggling it requires a Cold boot; this header only exposes
   // per-port display controls.
   const padTo = () => (store.ioViewMode() === "8bit" ? 2 : 4);
   const maxValue = () => (store.ioViewMode() === "8bit" ? 0xff : 0xffff);
   const split = () => store.splitIo();
+  // setIoWatchAddr / setIoWatchAddrWrite auto-sync viewPageBase (see
+  // store/index.ts), so the watch inputs commit straight through.
+  // Recall reverses navigation: jump view back to where the marker
+  // lives, then bump the matching jumpVersion so the body scroll-
+  // centers it.
+  const recallReadToWatch = (): void => {
+    store.setIoViewPageBase(store.ioWatchAddr());
+    store.requestIoWatchJump();
+  };
+  const recallWriteToWatch = (): void => {
+    store.setIoViewPageBaseWrite(store.ioWatchAddrWrite());
+    store.requestIoWatchJumpWrite();
+  };
   return (
     <>
       <ViewModeToggle />
@@ -57,6 +70,17 @@ const Header: Component = () => {
         ariaLabel={split() ? STR.io.watchAriaLabelRd : STR.io.watchAriaLabel}
         padTo={padTo()}
         maxValue={maxValue()}
+        recall={{
+          // 8-bit mode renders all 256 ports — paging is a no-op,
+          // recall is meaningless. Force-hide there regardless of
+          // whatever ioWatchOnView was left at by the 16-bit pane.
+          onView: () => store.ioViewMode() === "8bit" || store.ioWatchOnView(),
+          onClick: recallReadToWatch,
+          tooltip: STR.io.recallTooltip,
+          ariaLabel: split()
+            ? STR.io.recallAriaLabelRd
+            : STR.io.recallAriaLabel,
+        }}
       />
       <Show when={split()}>
         <WatchAddrInput
@@ -68,6 +92,13 @@ const Header: Component = () => {
           ariaLabel={STR.io.watchAriaLabelWr}
           padTo={padTo()}
           maxValue={maxValue()}
+          recall={{
+            onView: () =>
+              store.ioViewMode() === "8bit" || store.ioWatchOnViewWrite(),
+            onClick: recallWriteToWatch,
+            tooltip: STR.io.recallTooltip,
+            ariaLabel: STR.io.recallAriaLabelWr,
+          }}
         />
       </Show>
       <BytesPerRowSelect
@@ -141,6 +172,9 @@ interface PlaneOps {
   watchAddr: () => number;
   setWatchAddr: (addr: number) => void;
   jumpVersion: () => number;
+  viewPageBase: () => number;
+  setViewPageBase: (addr: number) => void;
+  setWatchOnView: (visible: boolean) => void;
   readOnly: boolean;
 }
 
@@ -160,6 +194,9 @@ const planeOps = (
         watchAddr: store.ioWatchAddr,
         setWatchAddr: (a) => store.setIoWatchAddr(a),
         jumpVersion: store.ioWatchJumpVersion,
+        viewPageBase: store.ioViewPageBase,
+        setViewPageBase: (a) => store.setIoViewPageBase(a),
+        setWatchOnView: store.setIoWatchOnView,
         readOnly: false,
       }
     : {
@@ -171,46 +208,75 @@ const planeOps = (
         watchAddr: store.ioWatchAddrWrite,
         setWatchAddr: (a) => store.setIoWatchAddrWrite(a),
         jumpVersion: store.ioWatchJumpVersionWrite,
+        viewPageBase: store.ioViewPageBaseWrite,
+        setViewPageBase: (a) => store.setIoViewPageBaseWrite(a),
+        setWatchOnView: store.setIoWatchOnViewWrite,
         readOnly: true,
       };
 
 const Pane16Bit: Component<{ plane: Plane }> = (props) => {
   const store = useStore();
   const ops = planeOps(props.plane, store);
+  // Page-nav clicks move only the view; the watch stays put. If the
+  // user has navigated away from the watch, the header's recall
+  // button appears.
+  const pageJump = (addr: number): void => {
+    ops.setViewPageBase(addr);
+  };
   return (
-    <HexGrid
-      read={ops.read}
-      version={ops.version}
-      setByte={ops.setByte}
-      paused={ops.paused}
-      showAscii={false}
-      watchAddr={ops.watchAddr}
-      setWatchAddr={ops.setWatchAddr}
-      jumpVersion={ops.jumpVersion}
-      rowsBefore={DEFAULT_IO_ROWS_BEFORE}
-      rowsAfter={DEFAULT_IO_ROWS_AFTER}
-      bytesPerRow={store.ioBytesPerRow()}
-    />
+    <div
+      class="hex-section-body hex-section-body-io"
+      style={{ "--hex-grid-visible-rows": DEFAULT_IO_VIEWPORT_ROWS }}
+    >
+      <PageNavRow
+        addr={ops.viewPageBase}
+        pageSize={store.ioPageSize}
+        setAddr={pageJump}
+      />
+      <HexGrid
+        read={ops.read}
+        version={ops.version}
+        setByte={ops.setByte}
+        paused={ops.paused}
+        showBytes={() => true}
+        showAscii={() => false}
+        watchAddr={ops.watchAddr}
+        setWatchAddr={ops.setWatchAddr}
+        jumpVersion={ops.jumpVersion}
+        pageSize={store.ioPageSize}
+        viewPageBase={ops.viewPageBase}
+        bytesPerRow={store.ioBytesPerRow}
+        setWatchOnView={ops.setWatchOnView}
+      />
+    </div>
   );
 };
 
 const Pane8Bit: Component<{ plane: Plane }> = (props) => {
   const store = useStore();
   const ops = planeOps(props.plane, store);
+  // Wrap in the same body class as Pane16Bit so `--hex-grid-visible-rows`
+  // propagates and the grid clamps to the configured viewport — without
+  // this the `.hex-grid` falls back to 24 rows and the 16-row 8-bit
+  // grid mounts without ever needing to scroll. No PageNavRow here:
+  // 256 ports fits in one page of any size, paging would be a no-op.
   return (
-    <IoPortGrid
-      paused={ops.paused}
-      rowsBefore={DEFAULT_IO_ROWS_BEFORE}
-      rowsAfter={DEFAULT_IO_ROWS_AFTER}
-      bytesPerRow={store.ioBytesPerRow()}
-      read={ops.read}
-      version={ops.version}
-      watchAddr={ops.watchAddr}
-      setWatchAddr={ops.setWatchAddr}
-      jumpVersion={ops.jumpVersion}
-      setByte={ops.setByte8}
-      readOnly={ops.readOnly}
-    />
+    <div
+      class="hex-section-body hex-section-body-io"
+      style={{ "--hex-grid-visible-rows": DEFAULT_IO_VIEWPORT_ROWS }}
+    >
+      <IoPortGrid
+        paused={ops.paused}
+        bytesPerRow={store.ioBytesPerRow}
+        read={ops.read}
+        version={ops.version}
+        watchAddr={ops.watchAddr}
+        setWatchAddr={ops.setWatchAddr}
+        jumpVersion={ops.jumpVersion}
+        setByte={ops.setByte8}
+        readOnly={ops.readOnly}
+      />
+    </div>
   );
 };
 

@@ -46,7 +46,7 @@ export async function bootApp(opts: BootOptions = {}): Promise<BootedApp> {
   const backend = opts.backend ?? (await openDefaultBackend());
 
   // Persistence is read once up-front so the bus's construction
-  // (allocation + fill bytes per REQ §11 staging) matches the user's
+  // (allocation + fill bytes) matches the user's
   // last committed Save, then handed to the store via `preloadedUi` so
   // `createAppStore` doesn't issue a second load. When nothing is
   // persisted (fresh boot, IDB-unavailable fallback, corrupt value),
@@ -81,10 +81,9 @@ export async function bootApp(opts: BootOptions = {}): Promise<BootedApp> {
   const postEdge = (hcBox: ReadonlyHcBox): void => {
     // Record straight off the live bus — no intermediate sample. `record`
     // short-circuits before touching anything when capture is disabled
-    // (DESIGN §3.2). `nNMI` is injected separately (it isn't on cpu.bus —
-    // DESIGN §2.1); the bus owns the pin level. After the record we
-    // auto-clear nNMI so it reads as a 1-HC pulse in the trace (REQ §6.4
-    // / [[feedback-nmi-pulse-semantics]]). The store's reactive mirror
+    //. `nNMI` is injected separately (it isn't on cpu.bus); the bus owns the pin level. After the record we
+    // auto-clear nNMI so it reads as a 1-HC pulse in the trace
+    // ([[feedback-nmi-pulse-semantics]]). The store's reactive mirror
     // re-syncs on the next `loop.onTick` so the checkbox UI returns to
     // unchecked.
     //
@@ -110,10 +109,10 @@ export async function bootApp(opts: BootOptions = {}): Promise<BootedApp> {
     // Store closes over bus.mem for `writeFileToMemory` (file load) and
     // over `setIntVector`/`intVector` for the INT-vector UI mirror.
     // Not on the public Store interface — sections see only signals
-    // and verbs (DESIGN §4 "Layering rule").
+    // and verbs.
     bus,
     // dbg is the snapshot source for the cpuState section's reactive
-    // accessors (REQ §6.5); store calls `dbg.state()` on each pause.
+    // accessors; store calls `dbg.state()` on each pause.
     dbg,
     hwTrace,
     preloadedUi,

@@ -19,7 +19,7 @@ export type Unsubscribe = () => void;
  *
  * Subscribers can do `box[0]` reads (no HeapNumber materialization
  * inside V8's SMI range, then a typed-array → typed-array copy past it
- * — see `HwTraceBuffer.record`'s `chunk.hcs[pos] = box[0]`), but cannot
+ * — see `HwTraceBuffer.record`'s `_hcs[idx] = box[0]`), but cannot
  * write — TS rejects `box[0] = …` against the readonly index signature.
  * The runtime value is still the same `Float64Array`; this is a pure
  * compile-time guard with zero runtime cost (no Proxy, no copy, no
@@ -79,7 +79,7 @@ export interface RunLoopDeps {
    * Owns HW-trace recording — samples `cpu.bus` (the state post-edge,
    * at the now-incremented HC) and hands the sample to the buffer.
    * Receives the loop's `Float64Array` HC box by reference so the
-   * stamp flows to `HwTraceBuffer.record`'s `chunk.hcs[pos] = box[0]`
+   * stamp flows to `HwTraceBuffer.record`'s `_hcs[idx] = box[0]`
    * write as a pure typed-array copy, never materializing a
    * HeapNumber past V8's SMI range. Callees should read `hcBox[0]`
    * once into a local if they need to do arithmetic with it.
@@ -130,7 +130,7 @@ export function createRunLoop(deps: RunLoopDeps): RunLoop {
   //
   // The box itself is also passed by reference to `postEdge` (which
   // forwards to `HwTraceBuffer.record`), so the stamp flows from
-  // `++hcBox[0]` here straight into `chunk.hcs[pos] = hcBox[0]` as a
+  // `++hcBox[0]` here straight into `_hcs[idx] = hcBox[0]` as a
   // typed-array→typed-array copy — no number materialization on either
   // boundary. Internal hot-path comparisons (`breakpoints.checkAfterEdge`
   // and the external subscriber callbacks) still take `hc: number`; V8
@@ -268,7 +268,7 @@ export function createRunLoop(deps: RunLoopDeps): RunLoop {
       postEdge(hcBox);
       if (stepHcRemaining > 0) stepHcRemaining--;
       // Breakpoints never pause out of step mode — the step target is
-      // the only pause boundary while stepping (REQ §12). Without this
+      // the only pause boundary while stepping. Without this
       // gate, Step from a BP-paused state would refire the same BP on
       // the very next edge in many configurations (PC-range covering
       // the current PC, HC-count BP exactly at the current HC, BPs
@@ -284,7 +284,7 @@ export function createRunLoop(deps: RunLoopDeps): RunLoop {
         break;
       }
       // Step completion is checked after every edge so sub-frame stops
-      // (DESIGN §2.1 responsibility 6) land precisely on the target edge.
+      // land precisely on the target edge.
       const stop = shouldStopForStep();
       if (stop) {
         firePause(stop);
@@ -332,14 +332,14 @@ export function createRunLoop(deps: RunLoopDeps): RunLoop {
       scheduleFrame();
     },
     zeroHC() {
-      // Counter resets; CPU/dbg state untouched (REQ §7.3). Time-stamped
+      // Counter resets; CPU/dbg state untouched. Time-stamped
       // buffer clearing is the store's job — the loop just zeros its own.
       hcBox[0] = 0;
       // Re-arm HC-count BPs so any target > 0 fires again post-zero. A
       // target ≤ 0 would refire on the next edge — not a special case,
       // just the natural fallout of "everything > -1 is eligible again".
       breakpoints.resetHcCutoff();
-      // dbg's totalHc is independent (DESIGN §2.6) so we leave it alone.
+      // dbg's totalHc is independent so we leave it alone.
     },
     setBreakpoints(bps) {
       breakpoints.setBreakpoints(bps);

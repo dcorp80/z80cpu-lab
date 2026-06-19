@@ -18,7 +18,7 @@ import { memory } from "./memory/index.tsx";
 import { program } from "./program/index.tsx";
 import type { SectionModule } from "./types.ts";
 
-/** Top-to-bottom order new users see on first boot (REQ §6). Per-user
+/** Top-to-bottom order new users see on first boot. Per-user
  *  reorder via drag persists through `StorageBackend`; the store's
  *  `reconcileSections` keeps stored order for known ids and appends
  *  any new ids at the end. */

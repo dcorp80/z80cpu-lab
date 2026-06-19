@@ -1,4 +1,4 @@
-// Append-only, fixed-capacity instruction trace ring (DESIGN §3.1).
+// Append-only, fixed-capacity instruction trace ring.
 // Pre-allocated record pool; `push` mutates in place — zero allocations on
 // the hot path. Records are reused on wrap, so consumers must treat any
 // reference from `at()` as transient (re-fetch when `version()` changes).
@@ -28,7 +28,7 @@ export class TraceRecord {
   length = 0;
   m1Type: M1Type = "normal";
   /** Where execution went next — captured at the next M1's T1_0
-   *  (DESIGN §2.6 / CLAUDE.md "trace timing model"). */
+   *  (see CLAUDE.md "trace timing model"). */
   nextPc = 0;
   /** HC consumed by this instruction (the trace's own `hc` field). */
   instHc = 0;

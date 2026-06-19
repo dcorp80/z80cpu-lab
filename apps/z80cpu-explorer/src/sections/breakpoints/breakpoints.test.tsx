@@ -269,7 +269,7 @@ describe("Breakpoints section — body", () => {
     });
   });
 
-  it("edit lo > hi is rejected and marks the field invalid", async () => {
+  it("edit lo > hi clamps hi up to the new lo value", async () => {
     harness = await mount();
     harness.store.addBreakpoint({ kind: "pc-range", lo: 0x100, hi: 0x200 });
     await flush();
@@ -281,12 +281,12 @@ describe("Breakpoints section — body", () => {
     );
     fireEvent.input(loInput, { target: { value: "300" } });
     fireEvent.blur(loInput);
-    // Edit rejected — BP unchanged, input marked invalid.
+    // Both lo and hi collapse to the new value.
     expect(harness.store.breakpoints[0]).toMatchObject({
-      lo: 0x100,
-      hi: 0x200,
+      lo: 0x300,
+      hi: 0x300,
     });
-    expect(loInput.classList.contains("is-invalid")).toBe(true);
+    expect(loInput.classList.contains("is-invalid")).toBe(false);
   });
 
   it("HC target row edits and commits", async () => {

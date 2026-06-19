@@ -156,7 +156,7 @@ describe("cpuState section — body", () => {
     harness.loop.emitPause({ kind: "user" });
     const body = harness.container.querySelector(".cpuState-body");
     expect(body?.classList.contains("is-mid-instruction")).toBe(true);
-    // Per DESIGN §3.7 "CSS owns the gating" — DOM stays consistent;
+    // "CSS owns the gating" — DOM stays consistent;
     // the .is-mid-instruction rule on the parent neutralises the
     // highlight visually without removing the class.
     const pcCell = harness.container.querySelector('[data-key="pc"]');

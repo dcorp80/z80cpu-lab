@@ -23,7 +23,7 @@ export type { Breakpoint } from "../storage/types.ts";
 export type { TraceRecord, TraceRing } from "./traceRing.ts";
 
 /**
- * Per-section view cursor (DESIGN §3.6). `live` = follow the head of
+ * Per-section view cursor. `live` = follow the head of
  * the underlying buffer; `detached` = pinned at the given HC, ignoring
  * new appends until the user snaps back to live.
  */
@@ -32,7 +32,7 @@ export type ViewCursor =
   | { mode: "detached"; anchorHc: number };
 
 /**
- * Cursor slice — one entry per traced section (DESIGN §3.6). Both
+ * Cursor slice — one entry per traced section. Both
  * cursors default to `live` on boot and snap back to `live` on
  * `zeroHC` (rebased HC counter would invalidate any pinned anchor).
  * The `g` hotkey + section snap-to-live buttons drive these.
@@ -43,7 +43,7 @@ export interface CursorsState {
 }
 
 /**
- * Reactive mirror of the bus's input-pin state (REQ §6.4 / DESIGN §4).
+ * Reactive mirror of the bus's input-pin state.
  * The bus is authoritative (see [[feedback-bus-owns-state]]); this
  * SolidStore copy exists so HW-trace checkboxes + the Interrupts section
  * re-render when the user edits a value. `setInputPin` keeps both in
@@ -59,23 +59,26 @@ export interface InputPinsState {
   nRESET: 0 | 1;
   nBUSRQ: 0 | 1;
   nWAIT: 0 | 1;
-  /** Byte placed on `cpu.bus.data` during INT-acknowledge cycles (REQ §6.4). */
+  /** Byte placed on `cpu.bus.data` during INT-acknowledge cycles. */
   intVector: number;
 }
 
 /**
  * Snapshot of the in-flight instruction, copied out of `dbg.curr` at
- * pause time. `bytes` holds exactly `length` entries (1..4); the rest
- * of the encoding is unknown until further M-cycles run. `nextPc` is
- * NOT included because it's only valid after the *next* M1's T1_0 —
- * for an in-flight instruction it's stale/zero. Section that renders
- * this assumes the instruction is still under construction.
+ * pause time. `bytes` holds exactly `length` entries (0..4); the rest
+ * of the encoding is unknown until further M-cycles run.
+ *
+ * `nextPc` is always meaningful: `_initFreshCurr` seeds it to
+ * `startAddr` at this trace's own M1 T3_0, and the next M1's T1_0
+ * overwrites it with the real next-instruction fetch address. Used as
+ * the preview-pane origin so it doesn't slide through operand fetches.
  */
 export interface CurrentInstructionSnapshot {
   startAddr: number;
   bytes: readonly number[];
   length: number;
   m1Type: M1Type;
+  nextPc: number;
 }
 
 /** Input to `addFile` — id is generated, lastLoadedAddr lives in sessions. */
@@ -154,7 +157,7 @@ export interface Store {
   readonly lastPauseReason: Accessor<PauseReason | null>;
 
   /**
-   * Effective clock-speed indicator (REQ §11): host throughput expressed
+   * Effective clock-speed indicator: host throughput expressed
    * as an emulated Z80 T-state clock (MHz). Measured frame-to-frame in the
    * loop's `onTick` from `(hc, now)` deltas, guarded to a sane dt band so
    * idle / sub-resolution frames don't skew it. `null` before the first
@@ -163,7 +166,7 @@ export interface Store {
    */
   readonly effectiveClockMHz: Accessor<number | null>;
 
-  // ── CPU state (REQ §6.5). Sampled on every pause; the boundary flag
+  // ── CPU state. Sampled on every pause; the boundary flag
   // is true only when the pause landed exactly on M1_T3_1 (then the
   // register file is fully valid and the section paints diff highlights;
   // otherwise it dims to signal "transitional state").
@@ -190,31 +193,36 @@ export interface Store {
   stepHC(n: number): void;
   zeroHC(): void;
   /**
-   * Cold-boot the explorer (REQ §11 / §7.3): full page reload — fresh CPU,
+   * Cold-boot the explorer: full page reload — fresh CPU,
    * mem, IO; persisted files / breakpoints / layout survive; autoload
    * re-fires. Paused-only; silently no-ops while running so a held hotkey
    * doesn't yank an active CPU mid-frame. Single owner of the policy so
    * the App-shell button, Shift+R hotkey, and post-Save reload share one
-   * gate (eventually a save-or-skip modal — REQ §7.4 / M8c).
+   * gate (eventually a save-or-skip modal — M8c).
    */
   coldBoot(): void;
 
-  // ── HW trace (DESIGN §3.2, M8a — outputs only). The buffer itself is
+  // ── HW trace (M8a — outputs only). The buffer itself is
   // exposed for the section's `rangeView` queries; `hwTraceVersion`
   // bumps each frame that recorded any transitions, so consumers'
-  // createMemo re-runs without polling. `hwTraceMode` mirrors
-  // `buffer.getMode()` reactively. `setHwTraceMode` validates the
-  // literal at the boundary; cursors and the throttled mirror land in
-  // later M8a sub-tasks alongside the section UI.
+  // createMemo re-runs without polling. `hwTraceCapture` mirrors
+  // `buffer.getEnabled()` reactively. Cursors and the throttled mirror
+  // land in later M8a sub-tasks alongside the section UI.
   readonly hwTrace: HwTraceBuffer;
   readonly hwTraceVersion: Accessor<number>;
-  readonly hwTraceMode: Accessor<"disabled" | "ring">;
-  setHwTraceMode(mode: "disabled" | "ring"): void;
+  /**
+   * Whether the HW-trace ring captures per-edge bus snapshots. Mirrors
+   * the InsnTrace `capture` toggle in shape (boolean) — disabling clears
+   * the ring + snaps the cursor to live. Persisted under the `hwTrace`
+   * section config as `capture: boolean`. Defaults to `true`. Paused-only.
+   */
+  readonly hwTraceCapture: Accessor<boolean>;
+  setHwTraceCapture(v: boolean): void;
 
-  // ── instruction trace (DESIGN §3.1). Ring is the canonical buffer;
+  // ── instruction trace. Ring is the canonical buffer;
   // `traceRingVersion` bumps on push/clear; `traceRingVersionThrottled`
   // is the reactive mirror sections subscribe to — rAF-debounced
-  // during run, flushed immediately on pause-edge (REQ §7.5: trace
+  // during run, flushed immediately on pause-edge (trace
   // panes batch appends while running, flush on the next paint). When
   // the loop is already paused, the throttle is bypassed so step-pause
   // and tests observe updates synchronously.
@@ -232,16 +240,28 @@ export interface Store {
    *  belong here. */
   readonly traceRingVersionThrottled: Accessor<number>;
   /**
-   * Capture mode for the instruction trace ring (REQ §11). Mirrors the
-   * HW-trace toggle: `"ring"` pushes each completed instruction; `"disabled"`
-   * skips the push entirely. Disabling clears the ring (consistent with
-   * `setHwTraceMode`) — a save/export prompt will land here later.
-   * Defaults to `"ring"`.
+   * Whether the instruction-trace ring captures completed instructions
+   *. `true` pushes each completed instruction; `false` skips
+   * the push entirely. Going `true` → `false` clears the ring (consistent
+   * with `setHwTraceCapture`) — a save/export prompt will land here later.
+   * Implies `traceInstructions === true`: turning capture on while tracking
+   * is off auto-enables tracking; turning tracking off auto-disables
+   * capture. Defaults to `true`. Paused-only.
    */
-  readonly traceRingMode: Accessor<"disabled" | "ring">;
-  setTraceRingMode(mode: "disabled" | "ring"): void;
+  readonly capture: Accessor<boolean>;
+  setCapture(v: boolean): void;
+  /**
+   * Whether the dbg observer is active (`dbg.enabled`). When `false`,
+   * `clockEdge` skips all per-edge trace bookkeeping — the
+   * `onInstructionComplete` callback never fires, so step-by-instruction
+   * is unavailable and the Current / Preview rows are suppressed. PC- and
+   * HC-range breakpoints run independently of this. Paused-only. Persisted
+   * under the `appShell` section. Defaults to `true`.
+   */
+  readonly traceInstructions: Accessor<boolean>;
+  setTraceInstructions(v: boolean): void;
 
-  // ── view cursors (DESIGN §3.6, REQ §7.2). Default `live`; detached
+  // ── view cursors. Default `live`; detached
   // by scroll-back; snap-to-live button (and `g` hotkey, which snaps
   // both at once) reattaches.
   readonly cursors: SolidStore<CursorsState>;
@@ -250,10 +270,10 @@ export interface Store {
   detachHwTraceCursor(anchorHc: number): void;
   snapHwTraceCursorToLive(): void;
 
-  // ── memory & IO read/write (REQ §6.6 / §6.7). Sections read through
+  // ── memory & IO read/write. Sections read through
   // `memByte` / `ioByte`; the createMemo tracking the matching version
   // signal re-runs after writes. `setMemByte` / `setIoByte` are
-  // paused-only — calls during run no-op (REQ §7.5).
+  // paused-only — calls during run no-op.
   memByte(addr: number): number;
   readonly memVersion: Accessor<number>;
   setMemByte(addr: number, value: number): void;
@@ -261,7 +281,7 @@ export interface Store {
   readonly ioVersion: Accessor<number>;
   setIoByte(addr: number, value: number): void;
   /**
-   * 8-bit-decoded IO write (REQ §6.7). Writes `value` to all 256
+   * 8-bit-decoded IO write. Writes `value` to all 256
    * high-byte aliases of `port` in the RD plane so subsequent CPU
    * reads return the same value regardless of the upper address byte.
    * `port` is 0..0xFF; out-of-range throws `RangeError`. Paused-only;
@@ -270,7 +290,7 @@ export interface Store {
   setIoBytePort8(port: number, value: number): void;
 
   /**
-   * WR-plane read paths (REQ §11 split mode). The IO section's
+   * WR-plane read paths (split-IO mode). The IO section's
    * second pane renders these. In joined mode (`splitIo() === false`)
    * the WR plane is not allocated; `ioByteWrite` returns 0 and the
    * pane is hidden — consumers must gate on `splitIo()`.
@@ -285,7 +305,7 @@ export interface Store {
   readonly ioWatchJumpVersionWrite: Accessor<number>;
   requestIoWatchJumpWrite(): void;
 
-  // ── bus last-touched (REQ §6.6 / §6.7 folded summaries). Sampled
+  // ── bus last-touched for folded summaries. Sampled
   // from the bus on every `loop.onPause`, so they reflect what the
   // CPU did before pausing — frozen during run per §7.5. `null` until
   // the corresponding cycle has occurred at least once.
@@ -311,6 +331,44 @@ export interface Store {
   requestIoWatchJump(): void;
 
   /**
+   * View-page-base — which page is currently displayed in the section
+   * body. Distinct from `watchAddr` so page-nav buttons can move the
+   * view without disturbing the marker. Not persisted (view state, not
+   * config); boots from `pageBase(watchAddr, pageSize)`. Setter masks
+   * to 16-bit and snaps to the current page alignment.
+   */
+  readonly memViewPageBase: Accessor<number>;
+  setMemViewPageBase(addr: number): void;
+  readonly ioViewPageBase: Accessor<number>;
+  setIoViewPageBase(addr: number): void;
+  readonly ioViewPageBaseWrite: Accessor<number>;
+  setIoViewPageBaseWrite(addr: number): void;
+
+  /**
+   * `*WatchOnView` — true when the watched address is currently
+   * visible in the section body (its page is the one shown AND its
+   * row is within the scroll viewport). HexGrid drives the signal
+   * via an effect on scroll / pageBase / watchAddr; the section
+   * header's recall button reads it to gate its render.
+   */
+  readonly memWatchOnView: Accessor<boolean>;
+  setMemWatchOnView(visible: boolean): void;
+  readonly ioWatchOnView: Accessor<boolean>;
+  setIoWatchOnView(visible: boolean): void;
+  readonly ioWatchOnViewWrite: Accessor<boolean>;
+  setIoWatchOnViewWrite(visible: boolean): void;
+
+  /**
+   * Page size — one of `PAGE_SIZE_OPTIONS`. Persisted via section
+   * config. Drives the per-section page-navigation model: body
+   * renders one page at a time, page-nav buttons step by `pageSize`.
+   */
+  readonly memPageSize: Accessor<number>;
+  setMemPageSize(n: number): void;
+  readonly ioPageSize: Accessor<number>;
+  setIoPageSize(n: number): void;
+
+  /**
    * Bytes-per-row for each hex grid. Persisted via
    * `SectionUiState.config.bytesPerRow`. Setters validate against the
    * grid's allowed set — `MEMORY_BYTES_PER_ROW_OPTIONS` (16…128) for
@@ -320,11 +378,15 @@ export interface Store {
    */
   readonly memBytesPerRow: Accessor<number>;
   setMemBytesPerRow(n: number): void;
+  readonly memShowBytes: Accessor<boolean>;
+  setMemShowBytes(v: boolean): void;
+  readonly memShowAscii: Accessor<boolean>;
+  setMemShowAscii(v: boolean): void;
   readonly ioBytesPerRow: Accessor<number>;
   setIoBytesPerRow(n: number): void;
 
   /**
-   * IO render mode (REQ §6.7). '16bit' (default) shows the 64K-port
+   * IO render mode. '16bit' (default) shows the 64K-port
    * grid; '8bit' shows a fixed 256-cell low-byte-decoded view whose
    * edits broadcast through `setIoBytePort8`. Persisted via the IO
    * section's config; malformed values fall back to '16bit'.
@@ -333,7 +395,7 @@ export interface Store {
   setIoViewMode(mode: "16bit" | "8bit"): void;
 
   /**
-   * Reload-required settings (REQ §11). Each is baked into bus
+   * Reload-required settings. Each is baked into bus
    * construction (`splitIo`/`memInit`/`ioInit` decide allocation and
    * fill bytes), so changes only land on a fresh page boot. Each lives
    * in its natural-owner section's config (`io` for the IO pair,
@@ -367,7 +429,7 @@ export interface Store {
   readonly reloadSettingsDirty: Accessor<boolean>;
   commitReloadSettings(): void;
 
-  // ── input pins (REQ §6.4). The HW-trace per-row checkboxes call
+  // ── input pins. The HW-trace per-row checkboxes call
   // `setInputPin`; the Interrupts section calls `setIntVector`.
   readonly inputPins: SolidStore<InputPinsState>;
   /**
@@ -382,7 +444,7 @@ export interface Store {
   setInputPin(name: InputPinName, value: 0 | 1): void;
   setIntVector(byte: number): void;
 
-  // ── program files (REQ §6.1)
+  // ── program files
   readonly files: SolidStore<ProgramFile[]>;
   readonly fileSessions: SolidStore<Record<string, ProgramFileSession>>;
   addFile(input: NewProgramFile): void;
@@ -390,14 +452,14 @@ export interface Store {
   setFileLoadAddr(id: string, addr: number): void;
   setFileAutoload(id: string, on: boolean): void;
   reorderFiles(orderedIds: string[]): void;
-  /** Writes one file at its current loadAddr (REQ §6.1 "load" button). */
+  /** Writes one file at its current loadAddr ("load" button). */
   writeFileToMemory(id: string): void;
   /** Writes autoload-flagged files; used at boot. */
   loadAutoloadFiles(): void;
-  /** Writes every file at its loadAddr (REQ §6.1 "reload all"). */
+  /** Writes every file at its loadAddr ("reload all"). */
   reloadAllFiles(): void;
 
-  // ── breakpoints (REQ §6.2; DESIGN §3.5). Each mutation calls
+  // ── breakpoints. Each mutation calls
   // loop.setBreakpoints with the current full list and persists via
   // the backend (fire-and-forget — store updates synchronously).
   readonly breakpoints: SolidStore<Breakpoint[]>;
@@ -407,7 +469,7 @@ export interface Store {
   editBreakpoint(id: string, patch: BreakpointPatch): void;
 
   /**
-   * UI throttle cadence (REQ §7.5). Defaults to `DEFAULT_UI_CONFIG`
+   * UI throttle cadence. Defaults to `DEFAULT_UI_CONFIG`
    * (30 Hz). Live-editable via `setUiConfig` and persisted through
    * the storage backend so a reload restores the user's choice.
    */

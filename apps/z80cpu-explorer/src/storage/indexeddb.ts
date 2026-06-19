@@ -1,6 +1,6 @@
-// IndexedDB StorageBackend (REQUIREMENTS §6.1, DESIGN §5). The default
-// at boot; falls back to MemoryBackend when IDB is unavailable (private
-// mode, security policy, ancient browser) via `openDefaultBackend`.
+// IndexedDB StorageBackend. The default at boot; falls back to
+// MemoryBackend when IDB is unavailable (private mode, security policy,
+// ancient browser) via `openDefaultBackend`.
 
 import { MemoryBackend } from "./memory.ts";
 import type {
@@ -123,7 +123,7 @@ export class IndexedDbBackend implements StorageBackend {
   async putFile(f: ProgramFile): Promise<void> {
     // Open the transaction synchronously so the IDB engine's per-store
     // `readwrite` queue serializes a put/delete pair issued from rapid
-    // store actions (DESIGN §5 "Persist order"). Anything that awaits
+    // store actions. Anything that awaits
     // before opening the tx would forfeit that ordering guarantee.
     const tx = this.db.transaction(STORE_FILES, "readwrite");
     tx.objectStore(STORE_FILES).put(f);

@@ -1,10 +1,10 @@
 // 64K mem + (one or two) 64K IO planes bus resolver with INT-ack
-// injection. Per DESIGN §2.1 duty 1 of busTick: on memory read/write
+// injection: on memory read/write
 // resolve against mem[]; on IO read/write resolve against ioRead[] /
 // ioWrite[] per split mode; on INT acknowledge (`nM1` low + `nIORQ`
 // low) place the configured INT vector byte on `cpu.bus.data`.
 //
-// IO split mode (REQ §11): when `splitIo` is true, IN cycles read from
+// IO split mode: when `splitIo` is true, IN cycles read from
 // `ioRead` (user-editable, pre-loaded) and OUT cycles land in `ioWrite`
 // (passive record, never user-edited). When false, both directions
 // target `ioRead` — the original single-plane behavior. Allocation is
@@ -42,7 +42,7 @@ export const IO_SIZE = 0x10000;
 
 /**
  * Snapshot of the most recent mem/IO read or write the bus resolved.
- * Used by the Memory and IO sections' folded summaries (REQ §6.6 / §6.7)
+ * Used by the Memory and IO sections' folded summaries
  * — the store samples these on `loop.onPause`, so they always reflect
  * what the CPU did before pausing, not stale per-edge churn during run.
  */
@@ -71,7 +71,7 @@ export interface Bus64k {
    * Fill byte applied to every mem cell at construction; mirrors
    * `BusConfig.memInit`. Exposed so the App-shell can show the live
    * value next to its pending-edit input, with the same fallback
-   * pattern as `splitIo` (REQ §11 staging).
+   * pattern as `splitIo`.
    */
   memInit: number;
   /** Fill byte applied to every IO cell at construction; mirrors `BusConfig.ioInit`. */
@@ -79,7 +79,7 @@ export interface Bus64k {
   /**
    * Write `value` into all 256 high-byte aliases of `port` in `ioRead`
    * (`ioRead[(hi<<8) | port] = value` for hi in 0..255). Used by the
-   * IO section's 8-bit view (REQ §6.7) so the user can seed an
+   * IO section's 8-bit view so the user can seed an
    * A0–A7-only-decoded port without minding the upper address bits.
    * Always targets the RD plane — the WR plane is not user-editable.
    * Inputs are masked at the boundary; caller bumps the version signal.
@@ -97,7 +97,7 @@ export interface Bus64k {
   lastIoRead(): BusAccessRecord | null;
   lastIoWrite(): BusAccessRecord | null;
   /**
-   * Read the current level of a CPU input pin (REQ §6.4 — M8b). All five
+   * Read the current level of a CPU input pin (M8b). All five
    * pins default to deasserted (1, active-low). `nNMI` is held as a
    * level here but translated to an edge on the way to the CPU —
    * `resolve()` calls `cpu.nmi()` once on the 1→0 transition, so
@@ -108,7 +108,7 @@ export interface Bus64k {
   getInputPin(name: InputPinName): 0 | 1;
   /** Update an input-pin level. Value is masked to 0|1 at the boundary. */
   setInputPin(name: InputPinName, value: 0 | 1): void;
-  /** Byte placed on `cpu.bus.data` during INT-acknowledge cycles (REQ §6.4). */
+  /** Byte placed on `cpu.bus.data` during INT-acknowledge cycles. */
   intVector(): number;
   /** Updates the INT vector. Value is masked to 8 bits at the boundary. */
   setIntVector(byte: number): void;

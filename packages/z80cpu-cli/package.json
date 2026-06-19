@@ -15,7 +15,7 @@
     "repl": "node dist/repl.js"
   },
   "dependencies": {
-    "@dcorp80/z80cpu": "^0.1.1",
+    "@dcorp80/z80cpu": "^0.1.2",
     "@dcorp80/z80cpu-debug": "*",
     "@dcorp80/z80cpu-disasm": "*"
   }

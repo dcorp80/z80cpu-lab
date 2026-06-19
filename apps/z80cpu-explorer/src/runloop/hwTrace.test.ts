@@ -10,13 +10,12 @@ import {
   HwTraceBuffer,
 } from "./hwTrace.ts";
 
-// Tiny config — small ring + small chunks make boundary behavior visible
+// Tiny config — a small power-of-two ring makes wrap/eviction visible
 // without driving millions of edges per assertion.
 function tinyConfig(overrides: Partial<HwTraceConfig> = {}): HwTraceConfig {
   return {
-    mode: "ring",
-    ringChunks: 2,
-    chunkSize: 4,
+    enabled: true,
+    capacity: 8,
     ...overrides,
   };
 }
@@ -30,31 +29,30 @@ function collect(it: Iterable<BusSnapshotRecord>): BusSnapshotRecord[] {
 }
 
 describe("HwTraceBuffer — construction", () => {
-  it("rejects non-positive or non-integer ringChunks", () => {
-    expect(() => new HwTraceBuffer(tinyConfig({ ringChunks: 0 }))).toThrow(
+  it("rejects non-positive or non-integer capacity", () => {
+    expect(() => new HwTraceBuffer(tinyConfig({ capacity: 0 }))).toThrow(
       RangeError,
     );
-    expect(() => new HwTraceBuffer(tinyConfig({ ringChunks: -1 }))).toThrow(
+    expect(() => new HwTraceBuffer(tinyConfig({ capacity: -1 }))).toThrow(
       RangeError,
     );
-    expect(() => new HwTraceBuffer(tinyConfig({ ringChunks: 1.5 }))).toThrow(
+    expect(() => new HwTraceBuffer(tinyConfig({ capacity: 1.5 }))).toThrow(
       RangeError,
     );
   });
 
-  it("rejects non-positive or non-integer chunkSize", () => {
-    expect(() => new HwTraceBuffer(tinyConfig({ chunkSize: 0 }))).toThrow(
+  it("rejects non-power-of-two capacity", () => {
+    expect(() => new HwTraceBuffer(tinyConfig({ capacity: 6 }))).toThrow(
       RangeError,
     );
-    expect(() => new HwTraceBuffer(tinyConfig({ chunkSize: -5 }))).toThrow(
+    expect(() => new HwTraceBuffer(tinyConfig({ capacity: 12 }))).toThrow(
       RangeError,
     );
   });
 
   it("default config is usable", () => {
     const buf = new HwTraceBuffer(DEFAULT_HW_TRACE_CONFIG);
-    expect(buf.ringCapacity()).toBe(DEFAULT_HW_TRACE_CONFIG.ringChunks);
-    expect(buf.chunkCapacity()).toBe(DEFAULT_HW_TRACE_CONFIG.chunkSize);
+    expect(buf.capacity()).toBe(DEFAULT_HW_TRACE_CONFIG.capacity);
     expect(buf.oldestHc()).toBeUndefined();
     expect(buf.newestHc()).toBeUndefined();
     expect(buf.size()).toBe(0);
@@ -62,28 +60,27 @@ describe("HwTraceBuffer — construction", () => {
 });
 
 describe("HwTraceBuffer — record", () => {
-  it("opens the first chunk on the first record", () => {
+  it("opens slot 0 on the first record", () => {
     const buf = new HwTraceBuffer(tinyConfig());
     const sample = makeBusSample();
     recordSample(buf, sample, 1);
     expect(buf.size()).toBe(1);
     expect(buf.oldestHc()).toBe(1);
     expect(buf.newestHc()).toBe(1);
-    expect(buf.recordedCount()).toBe(1);
   });
 
-  it("does not advance pointer when nothing changed", () => {
+  it("does not advance head when nothing changed", () => {
     const buf = new HwTraceBuffer(tinyConfig());
     const sample = makeBusSample();
     recordSample(buf, sample, 1);
     recordSample(buf, sample, 2);
     recordSample(buf, sample, 3);
-    expect(buf.recordedCount()).toBe(1);
+    expect(buf.size()).toBe(1);
     // newestHc reflects the only stored record, not the latest no-op call.
     expect(buf.newestHc()).toBe(1);
   });
 
-  it("advances pointer when any signal changed", () => {
+  it("advances head when any signal changed", () => {
     const buf = new HwTraceBuffer(tinyConfig());
     const a = makeBusSample();
     const b = withOverrides(a, { nM1: 0 });
@@ -91,7 +88,7 @@ describe("HwTraceBuffer — record", () => {
     recordSample(buf, a, 1);
     recordSample(buf, b, 2);
     recordSample(buf, c, 3);
-    expect(buf.recordedCount()).toBe(3);
+    expect(buf.size()).toBe(3);
     expect(buf.newestHc()).toBe(3);
   });
 
@@ -103,38 +100,34 @@ describe("HwTraceBuffer — record", () => {
     recordSample(buf, a, 1);
     recordSample(buf, b, 2);
     recordSample(buf, c, 3);
-    expect(buf.recordedCount()).toBe(3);
+    expect(buf.size()).toBe(3);
   });
 
-  it("rotates to a new chunk when chunkSize is exceeded", () => {
-    const buf = new HwTraceBuffer(tinyConfig({ chunkSize: 4 }));
-    // 4 distinct snapshots fill chunk[0]; 5th forces rotation.
+  it("wraps the head past capacity without dropping records below cap", () => {
+    const buf = new HwTraceBuffer(tinyConfig({ capacity: 4 }));
     let prev = makeBusSample();
     recordSample(buf, prev, 1);
-    for (let i = 2; i <= 5; i++) {
-      // Toggle nM1 on each step to guarantee a state change.
+    for (let i = 2; i <= 4; i++) {
       prev = withOverrides(prev, { nM1: (i & 1) as 0 | 1 });
       recordSample(buf, prev, i);
     }
-    expect(buf.size()).toBe(2);
+    // Exactly at capacity — nothing evicted yet.
+    expect(buf.size()).toBe(4);
     expect(buf.oldestHc()).toBe(1);
-    expect(buf.newestHc()).toBe(5);
+    expect(buf.newestHc()).toBe(4);
   });
 
-  it("evicts the oldest chunk when the ring is full", () => {
-    const buf = new HwTraceBuffer(tinyConfig({ ringChunks: 2, chunkSize: 4 }));
-    // Fill 3 chunks worth — 4 + 4 + 4 distinct snapshots.
+  it("evicts the oldest record when the ring overflows", () => {
+    const buf = new HwTraceBuffer(tinyConfig({ capacity: 8 }));
+    // Write 12 distinct snapshots into a cap-8 ring — 4 oldest evicted.
     let prev = makeBusSample();
-    let hc = 0;
-    for (let i = 0; i < 12; i++) {
-      hc++;
-      prev = withOverrides(prev, { nM1: (i & 1) as 0 | 1 });
+    for (let hc = 1; hc <= 12; hc++) {
+      prev = withOverrides(prev, { nM1: (hc & 1) as 0 | 1 });
       recordSample(buf, prev, hc);
     }
-    // Ring holds 2 chunks → only 8 of the 12 snapshots survive.
-    expect(buf.size()).toBe(2);
-    expect(buf.recordedCount()).toBe(8);
-    expect(buf.oldestHc()).toBe(5); // first 4 evicted
+    expect(buf.size()).toBe(8);
+    expect(buf.oldestHc()).toBe(5); // first 4 evicted one at a time
+    expect(buf.newestHc()).toBe(12);
   });
 });
 
@@ -145,7 +138,7 @@ describe("HwTraceBuffer — rangeView", () => {
   });
 
   it("yields snapshots in ascending HC order", () => {
-    const buf = new HwTraceBuffer(tinyConfig({ chunkSize: 4 }));
+    const buf = new HwTraceBuffer(tinyConfig({ capacity: 8 }));
     let prev = makeBusSample();
     for (let hc = 1; hc <= 6; hc++) {
       prev = withOverrides(prev, { nM1: (hc & 1) as 0 | 1 });
@@ -156,7 +149,7 @@ describe("HwTraceBuffer — rangeView", () => {
   });
 
   it("filters to the [lo, hi] window", () => {
-    const buf = new HwTraceBuffer(tinyConfig({ chunkSize: 8 }));
+    const buf = new HwTraceBuffer(tinyConfig({ capacity: 16 }));
     let prev = makeBusSample();
     for (let hc = 1; hc <= 8; hc++) {
       prev = withOverrides(prev, { nM1: (hc & 1) as 0 | 1 });
@@ -173,18 +166,17 @@ describe("HwTraceBuffer — rangeView", () => {
     expect(collect(buf.rangeView(10, 1))).toEqual([]);
   });
 
-  it("walks across chunk boundaries", () => {
-    const buf = new HwTraceBuffer(tinyConfig({ chunkSize: 2 }));
+  it("walks correctly across the ring wrap point", () => {
+    const buf = new HwTraceBuffer(tinyConfig({ capacity: 4 }));
     let prev = makeBusSample();
-    for (let hc = 1; hc <= 5; hc++) {
+    for (let hc = 1; hc <= 6; hc++) {
       prev = withOverrides(prev, { nM1: (hc & 1) as 0 | 1 });
       recordSample(buf, prev, hc);
     }
-    expect(buf.size()).toBe(2); // ring=2, chunkSize=2: 5 records → evicted to 4 in 2 chunks
+    // Ring=4, 6 distinct records → oldest two (HCs 1, 2) evicted.
+    expect(buf.size()).toBe(4);
     const out = collect(buf.rangeView(0, 10));
-    // Two oldest chunks (HCs 1-2) get evicted by the 5th record's rotation;
-    // surviving HCs are 3, 4, 5.
-    expect(out.map((s) => s.hc)).toEqual([3, 4, 5]);
+    expect(out.map((s) => s.hc)).toEqual([3, 4, 5, 6]);
   });
 
   it("yielded snapshots preserve every field including tristate", () => {
@@ -215,7 +207,7 @@ describe("HwTraceBuffer — latestBefore", () => {
   });
 
   it("returns undefined when nothing is older than hc", () => {
-    const buf = new HwTraceBuffer(tinyConfig({ chunkSize: 8 }));
+    const buf = new HwTraceBuffer(tinyConfig({ capacity: 16 }));
     recordSample(buf, makeBusSample(), 5);
     recordSample(buf, withOverrides(makeBusSample(), { nM1: 0 }), 8);
     // First record is at HC=5; nothing strictly before HC=5.
@@ -224,7 +216,7 @@ describe("HwTraceBuffer — latestBefore", () => {
   });
 
   it("returns the most recent full snapshot strictly before hc", () => {
-    const buf = new HwTraceBuffer(tinyConfig({ chunkSize: 8 }));
+    const buf = new HwTraceBuffer(tinyConfig({ capacity: 16 }));
     let prev = makeBusSample();
     for (let hc = 1; hc <= 6; hc++) {
       prev = withOverrides(prev, { nM1: (hc & 1) as 0 | 1, addr: hc });
@@ -239,63 +231,62 @@ describe("HwTraceBuffer — latestBefore", () => {
     expect(buf.latestBefore(100)?.hc).toBe(6);
   });
 
-  it("finds the boundary snapshot across chunk boundaries", () => {
-    const buf = new HwTraceBuffer(tinyConfig({ chunkSize: 2, ringChunks: 4 }));
+  it("finds the boundary snapshot across the ring wrap", () => {
+    const buf = new HwTraceBuffer(tinyConfig({ capacity: 4 }));
     let prev = makeBusSample();
     for (let hc = 1; hc <= 6; hc++) {
       prev = withOverrides(prev, { nM1: (hc & 1) as 0 | 1, addr: hc });
       recordSample(buf, prev, hc);
     }
-    // HC 1-2 in chunk0, 3-4 in chunk1, 5-6 in chunk2. Before HC=5 ⇒ HC=4.
+    // Cap=4 with 6 records → surviving HCs are 3,4,5,6 (head wrapped twice).
     const s = buf.latestBefore(5);
     expect(s?.hc).toBe(4);
     expect(s?.addr).toBe(4);
   });
 
   it("honors eviction — returns undefined when the seed aged out", () => {
-    const buf = new HwTraceBuffer(tinyConfig({ chunkSize: 2, ringChunks: 2 }));
+    const buf = new HwTraceBuffer(tinyConfig({ capacity: 2 }));
     let prev = makeBusSample();
     for (let hc = 1; hc <= 5; hc++) {
       prev = withOverrides(prev, { nM1: (hc & 1) as 0 | 1, addr: hc });
       recordSample(buf, prev, hc);
     }
-    // Surviving HCs are 3, 4, 5 (1-2 evicted). Nothing before HC=3 remains.
-    expect(buf.latestBefore(3)).toBeUndefined();
+    // Cap=2, 5 records → only HCs 4, 5 survive. Nothing before HC=4 remains.
+    expect(buf.latestBefore(4)).toBeUndefined();
     expect(buf.latestBefore(5)?.hc).toBe(4);
   });
 });
 
-describe("HwTraceBuffer — modes", () => {
-  it("mode='disabled' makes record a no-op", () => {
-    const buf = new HwTraceBuffer(tinyConfig({ mode: "disabled" }));
+describe("HwTraceBuffer — capture toggle", () => {
+  it("enabled=false makes record a no-op", () => {
+    const buf = new HwTraceBuffer(tinyConfig({ enabled: false }));
     const a = makeBusSample();
     recordSample(buf, a, 1);
     recordSample(buf, withOverrides(a, { nM1: 0 }), 2);
     expect(buf.size()).toBe(0);
-    expect(buf.recordedCount()).toBe(0);
     expect(collect(buf.rangeView(0, 10))).toEqual([]);
   });
 
-  it("setMode toggles capture without rewriting existing history", () => {
+  it("setEnabled toggles capture without rewriting existing history", () => {
     const buf = new HwTraceBuffer(tinyConfig());
     recordSample(buf, makeBusSample(), 1);
     recordSample(buf, withOverrides(makeBusSample(), { nM1: 0 }), 2);
-    buf.setMode("disabled");
+    buf.setEnabled(false);
     recordSample(buf, withOverrides(makeBusSample(), { nM1: 1 }), 3); // dropped
-    buf.setMode("ring");
+    buf.setEnabled(true);
     recordSample(buf, withOverrides(makeBusSample(), { nM1: 0, nMREQ: 0 }), 4);
     const hcs = collect(buf.rangeView(0, 10)).map((s) => s.hc);
     expect(hcs).toEqual([1, 2, 4]);
   });
 
-  it("setMode is a no-op when mode is unchanged", () => {
+  it("setEnabled is a no-op when the value is unchanged", () => {
     const buf = new HwTraceBuffer(tinyConfig());
     const v0 = buf.version();
-    buf.setMode("ring");
+    buf.setEnabled(true);
     expect(buf.version()).toBe(v0);
-    buf.setMode("disabled");
+    buf.setEnabled(false);
     expect(buf.version()).toBe(v0 + 1);
-    buf.setMode("disabled");
+    buf.setEnabled(false);
     expect(buf.version()).toBe(v0 + 1);
   });
 });
@@ -323,7 +314,7 @@ describe("HwTraceBuffer — version", () => {
 });
 
 describe("HwTraceBuffer — clear", () => {
-  it("empties the ring; next record reopens chunk[0]", () => {
+  it("empties the ring; next record reopens slot 0", () => {
     const buf = new HwTraceBuffer(tinyConfig());
     let prev = makeBusSample();
     for (let hc = 1; hc <= 6; hc++) {
@@ -333,7 +324,6 @@ describe("HwTraceBuffer — clear", () => {
     expect(buf.size()).toBeGreaterThan(0);
     buf.clear();
     expect(buf.size()).toBe(0);
-    expect(buf.recordedCount()).toBe(0);
     expect(buf.oldestHc()).toBeUndefined();
     expect(buf.newestHc()).toBeUndefined();
     expect(collect(buf.rangeView(0, 10))).toEqual([]);
@@ -345,16 +335,16 @@ describe("HwTraceBuffer — clear", () => {
 });
 
 describe("HwTraceBuffer — long-run survival", () => {
-  it("survives many rotations without pool/ring accounting drift", () => {
-    const buf = new HwTraceBuffer(tinyConfig({ ringChunks: 3, chunkSize: 4 }));
+  it("survives many wraps without ring accounting drift", () => {
+    const buf = new HwTraceBuffer(tinyConfig({ capacity: 16 }));
     let prev = makeBusSample();
     for (let i = 0; i < 100; i++) {
       prev = withOverrides(prev, { nM1: (i & 1) as 0 | 1 });
       recordSample(buf, prev, i + 1);
     }
-    // Ring caps at 3 chunks × 4 records = 12 records max.
-    expect(buf.size()).toBe(3);
-    expect(buf.recordedCount()).toBeLessThanOrEqual(12);
+    // Ring caps at 16 records max; the newest record is always tracked.
+    expect(buf.size()).toBe(16);
     expect(buf.newestHc()).toBe(100);
+    expect(buf.oldestHc()).toBe(85); // 100 - 16 + 1
   });
 });

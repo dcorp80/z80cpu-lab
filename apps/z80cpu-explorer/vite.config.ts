@@ -1,5 +1,6 @@
 /// <reference types="vitest/config" />
 import { execSync } from "node:child_process";
+import { playwright } from "@vitest/browser-playwright";
 import { defineConfig } from "vite";
 import solid from "vite-plugin-solid";
 import pkg from "./package.json" with { type: "json" };
@@ -62,8 +63,15 @@ export default defineConfig(({ command }) => ({
           include: ["src/**/*.browser.test.ts", "src/**/*.browser.test.tsx"],
           browser: {
             enabled: true,
-            provider: "playwright",
+            provider: playwright(),
             headless: true,
+            // Pin viewport — vitest 4 / @vitest/browser-playwright defaults
+            // landed at a narrow window where `.app` (max-width 1200) wraps
+            // to ~333px and the HW trace body's virtual window collapses to
+            // an empty range. Set a desktop-typical width so layout-sensitive
+            // assertions (scrollWidth > clientWidth, gridline counts) match
+            // the live app.
+            viewport: { width: 1280, height: 800 },
             instances: [{ browser: "chromium" }],
           },
         },

@@ -5,9 +5,9 @@ import { filterHexInput, formatHex, parseAddr16 } from "../../util/hex.ts";
 import { HexAddrInput } from "../hexAddrInput.tsx";
 import type { SectionModule } from "../types.ts";
 
-// Step / Step N live in Instruction trace header (REQ §6.3); Step HC /
-// Step N HC / Zero HC live in HW trace header (REQ §6.4); Cold boot
-// lives in the App-shell header (REQ §11). Only Run / Pause remain
+// Step / Step N live in Instruction trace header; Step HC /
+// Step N HC / Zero HC live in HW trace header; Cold boot
+// lives in the App-shell header. Only Run / Pause remain
 // here.
 
 // Compact decimal formatter for HC + instruction counts. Thousands
@@ -46,7 +46,7 @@ function reasonToText(
 
 const Header = () => {
   const store = useStore();
-  // Effective clock-speed read-out (REQ §11): fixed MHz / 1 decimal, or "—"
+  // Effective clock-speed read-out: fixed MHz / 1 decimal, or "—"
   // when there's no valid measurement (before the first run, after zeroHC).
   const clockText = () => {
     const v = store.effectiveClockMHz();
@@ -121,7 +121,9 @@ const PcRow = (props: PcRowProps) => {
   const commitLo = (v: number): boolean => {
     if (v === props.bp.lo) return true;
     try {
-      store.editBreakpoint(props.bp.id, { lo: v });
+      // If new lo exceeds current hi, clamp hi up to match (single-addr range).
+      const patch = v > props.bp.hi ? { lo: v, hi: v } : { lo: v };
+      store.editBreakpoint(props.bp.id, patch);
       return true;
     } catch {
       return false;
@@ -180,7 +182,7 @@ interface HcRowProps {
 // Decimal target — HC counts are big numbers humans read as decimal.
 const filterDecInput = (s: string): string => s.replace(/[^0-9]/g, "");
 // Clamped at Number.MAX_SAFE_INTEGER because the HC counter is itself a
-// JS number (REQ §7.3). A target past safe-int could never match — reject
+// JS number. A target past safe-int could never match — reject
 // at the parse boundary so the store assertion never sees one.
 const parseHcTarget = (s: string): number | null => {
   const v = Number.parseInt(s.trim(), 10);

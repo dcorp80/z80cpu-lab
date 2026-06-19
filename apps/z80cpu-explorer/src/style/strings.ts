@@ -20,7 +20,7 @@ export const STR = {
     dragTooltip: "Drag to reorder",
   },
   appShell: {
-    // Header is the app name itself (REQ §11) — pulled from STR.app.title
+    // Header is the app name itself — pulled from STR.app.title
     // so the name lives in exactly one place.
     version: (v: string, sha: string) => `v${v} (${sha})`,
     versionTooltip: (v: string, sha: string) => `Version ${v} · commit ${sha}`,
@@ -44,6 +44,26 @@ export const STR = {
       "Persist changes and Cold boot — required for the bus to re-allocate / refill",
     discard: "Discard",
     discardTooltip: "Revert to the values currently in effect",
+    // Page-size selectors — UI-only, applied immediately on change
+    // (no Save/Discard staging, no fold-lock contribution). Hosted
+    // here because both sections share the same control set; per-
+    // section was visually noisy.
+    memPageLabel: "Memory page",
+    memPageAriaLabel: "Memory section page size",
+    memPageTooltip:
+      "Page size for the Memory section's body grid. Applied immediately.",
+    ioPageLabel: "IO page",
+    ioPageAriaLabel: "IO section page size",
+    ioPageTooltip:
+      "Page size for the IO section's body grid (16-bit view only). Applied immediately.",
+    // Trace-instructions toggle — drives `dbg.enabled`. Sits in the live
+    // pane (non-destructive, paused-only). Off skips all per-edge dbg
+    // bookkeeping for max throughput; the instruction-trace section's
+    // step controls, Current row, Preview, and Capture all gate on this.
+    traceInstructionsLabel: "Trace instructions",
+    traceInstructionsAriaLabel: "Trace each instruction (drives dbg observer)",
+    traceInstructionsTooltip:
+      "Observe the CPU at every instruction boundary. Required for step-by-instruction, the Current row, the Preview, and instruction capture. Turn off for maximum run throughput when you only need PC/HC breakpoints and free-running execution.",
   },
   breakpoints: {
     title: "Breakpoints",
@@ -61,7 +81,7 @@ export const STR = {
     reasonStepComplete: "step done",
     reasonPcBreakpoint: (pc: string) => `BP PC=${pc}`,
     reasonHcTarget: (target: string) => `HC target ${target}`,
-    // Effective clock-speed indicator (REQ §11). Host throughput as an
+    // Effective clock-speed indicator. Host throughput as an
     // emulated Z80 clock; fixed MHz, 1 decimal. Em-dash before the first
     // run / after zeroHC.
     clock: (mhz: string) => `${mhz} MHz`,
@@ -126,7 +146,7 @@ export const STR = {
     foldedEmpty: "CPU idle",
     flagsLabel: "Flags",
     // Bit labels for `F`. Order matches MSB→LSB (S Z Y5 H X3 P/V N C),
-    // per REQ §6.5. Style mod will let users override these in M11.
+    // Style mod will let users override these in M11.
     flagBits: ["S", "Z", "Y5", "H", "X3", "P/V", "N", "C"] as const,
     iff1: "IFF1",
     iff2: "IFF2",
@@ -148,6 +168,12 @@ export const STR = {
     watchLabel: "Watch:",
     watchTooltip: "Hex address to watch — press Enter to jump back to this row",
     watchAriaLabel: "Memory watch address",
+    recallTooltip: "Recall — jump back to the watched address",
+    recallAriaLabel: "Recall memory watch address",
+    showBytesLabel: "Hex",
+    showBytesAriaLabel: "Show hex bytes column",
+    showAsciiLabel: "ASCII",
+    showAsciiAriaLabel: "Show ASCII column",
   },
   instructionTrace: {
     title: "Instruction trace",
@@ -163,20 +189,17 @@ export const STR = {
       pc: string,
       status: string,
       insns: string,
-      capture: string,
-    ) => `PC=${pc} · ${status} · ${insns} insns · capture: ${capture}`,
+      capture: boolean,
+    ) =>
+      `PC=${pc} · ${status} · ${insns} insns · capture: ${capture ? "ring" : "off"}`,
     foldedSummaryWithLast: (
       pc: string,
       status: string,
       insns: string,
-      capture: string,
+      capture: boolean,
       lastDisasm: string,
     ) =>
-      `PC=${pc} · ${status} · ${insns} insns · capture: ${capture} · last: ${lastDisasm}`,
-    // Used by the folded-summary "capture: …" clause. Matches the
-    // HW-trace strings so the two sections share vocabulary.
-    captureModeRing: "ring",
-    captureModeDisabled: "off",
+      `PC=${pc} · ${status} · ${insns} insns · capture: ${capture ? "ring" : "off"} · last: ${lastDisasm}`,
     statusPaused: "paused",
     statusRunning: "running",
     statusStepping: "stepping",
@@ -185,7 +208,7 @@ export const STR = {
     detachedBadge: "detached",
     detachedBadgeTooltip: (anchor: string) =>
       `Pinned at HC=${anchor} — scroll back to history`,
-    // Step controls — moved from the Breakpoints header (REQ §6.3).
+    // Step controls — moved from the Breakpoints header.
     step: "Step",
     stepN: "Step N",
     stepTooltip: "Step one instruction (s)",
@@ -200,13 +223,14 @@ export const STR = {
     currentHeading: "Current",
     previewHeading: "Preview (next at PC)",
     previewEmpty: "(no bytes at PC)",
+    // Shown in place of Current / Preview when "Trace instructions" (in
+    // the topmost section's live-pane) is off — dbg.curr is then stale.
+    previewTrackingOff: "(tracing off — no instruction position)",
     previewAddrAddBpTooltip: "Click to set a PC breakpoint here",
     previewAddrRemoveBpTooltip: "Click to remove the PC breakpoint here",
     emptyExecuted: "(no instructions executed yet)",
-    // Capture toggle (REQ §11) — mirrors the HW-trace checkbox. Unchecking
-    // stops the per-instruction ring push and discards the captured ring;
-    // dbg still observes (PC-range BPs and HC stepping depend on it), so
-    // this is purely about UI memory, not bench dbg-off speed.
+    // Capture toggle — mirrors the HW-trace checkbox. Unchecking
+    // stops the per-instruction ring push and discards the captured ring.
     captureToggleLabel: "Capture",
     captureToggleAriaLabel: "Enable instruction trace capture",
     captureToggleTooltip:
@@ -227,7 +251,7 @@ export const STR = {
       halt: "HALT",
       special_reset: "RESET",
       // Synthetic — set by the section when length===1 and bytes[0] ∈ {DD,FD}
-      // (DESIGN §3.1: wasted prefix M1s surface as their own short traces).
+      // (wasted prefix M1s surface as their own short traces).
       prefix: "PREFIX",
     },
   },
@@ -249,6 +273,10 @@ export const STR = {
     watchAriaLabelRd: "IO RD-plane watch address",
     watchLabelWr: "WR watch:",
     watchAriaLabelWr: "IO WR-plane watch address",
+    recallTooltip: "Recall — jump back to the watched address",
+    recallAriaLabel: "Recall IO watch address",
+    recallAriaLabelRd: "Recall IO RD-plane watch address",
+    recallAriaLabelWr: "Recall IO WR-plane watch address",
     paneTitleRd: "RD (CPU IN, user-editable)",
     paneTitleWr: "WR (CPU OUT, read-only)",
     viewModeLabel: "Decode:",
@@ -270,9 +298,25 @@ export const STR = {
     bytesPerRowLabel: "Width:",
     bytesPerRowAriaLabel: "Bytes per row",
   },
+  // Memory / IO page-nav row. Strings centralized here so a
+  // future restyle (e.g. ⏮ ⏪ ⏩ ⏭ glyphs) is one file's change.
+  pageNav: {
+    first: "<<",
+    firstTooltip: "Jump to page 0",
+    prev: (base: string) => `< ${base}`,
+    prevTooltip: "Previous page",
+    next: (base: string) => `${base} >`,
+    nextTooltip: "Next page",
+    last: ">>",
+    lastTooltip: "Jump to last page",
+    ariaLabel: "Page navigation",
+    // Used by both the section page-nav row and the App-shell page-size
+    // selects to format option labels ("1 KB", "16 KB", ...).
+    pageSizeOption: (n: number) => `${n / 1024} KB`,
+  },
   hwTrace: {
     title: "Hardware trace",
-    // Glyph table — REQ §6.4. Lives in strings.ts (and not the section
+    // Glyph table. Lives in strings.ts (and not the section
     // component) so any later restyle is a single-file change. See
     // feedback-hw-trace-glyphs in memory for the rationale.
     //
@@ -294,15 +338,19 @@ export const STR = {
       tristate: "┈", // ┈  BOX DRAWINGS LIGHT QUADRUPLE DASH HORIZONTAL
       busHoldFiller: "·", // ·  MIDDLE DOT — bus value held until next change
     },
-    // Folded summary — DESIGN §6.4 example:
+    // Folded summary example:
     //   "last HC: 124 M1↓ addr=0042 · capture: ring · viewing live"
     // We elide the last-edge clause when the buffer is empty so a fresh
     // boot reads cleanly. `viewingState` is "live" or "HC=NNNN" when
     // detached.
-    foldedSummaryEmpty: (capture: string, viewing: string) =>
-      `capture: ${capture} · viewing ${viewing}`,
-    foldedSummaryWithLast: (lastHc: string, capture: string, viewing: string) =>
-      `last HC: ${lastHc} · capture: ${capture} · viewing ${viewing}`,
+    foldedSummaryEmpty: (capture: boolean, viewing: string) =>
+      `capture: ${capture ? "ring" : "off"} · viewing ${viewing}`,
+    foldedSummaryWithLast: (
+      lastHc: string,
+      capture: boolean,
+      viewing: string,
+    ) =>
+      `last HC: ${lastHc} · capture: ${capture ? "ring" : "off"} · viewing ${viewing}`,
     // Capture is a single enable checkbox: checked ⇒ ring capture,
     // unchecked ⇒ off. Unchecking discards the ring (a save/export
     // prompt lands in M8c), so the tooltip warns about the clear.
@@ -310,9 +358,6 @@ export const STR = {
     captureToggleAriaLabel: "Enable HW-trace capture",
     captureToggleTooltip:
       "Capture bus activity into the ring. Unchecking stops capture and discards the captured ring.",
-    // Still used by the folded summary's "capture: …" clause.
-    captureModeRing: "ring",
-    captureModeDisabled: "off",
     viewingLive: "live",
     viewingDetached: (anchor: string) => `HC=${anchor}`,
     snapToLive: "Snap to live",
@@ -321,7 +366,7 @@ export const STR = {
     detachedBadgeTooltip: (anchor: string) =>
       `Pinned at HC=${anchor} — scroll back to history`,
     // Step / Zero HC controls — moved from the Breakpoints header
-    // (REQ §6.4). Zero HC's save-or-skip modal still pending (REQ §7.4).
+    //. Zero HC's save-or-skip modal still pending.
     stepHc: "Step HC",
     stepNHc: "Step N HC",
     zeroHc: "Zero HC",
@@ -329,14 +374,13 @@ export const STR = {
     stepNHcTooltip: "Step N half-cycles",
     zeroHcTooltip: "Zero the HC counter (Shift+Z)",
     stepHcCountLabel: "Half-cycle step count",
-    bodyEmpty: "(no transitions captured yet)",
-    // Shown instead of bodyEmpty when capture is OFF and nothing is in the
+    // Shown instead of a "no data yet" hint when capture is OFF and nothing is in the
     // buffer — distinguishes "intentionally not recording" from "running
     // but nothing yet," so an empty pane in disabled mode reads as expected
     // rather than broken. Disabling capture clears the ring (see
-    // setHwTraceMode), so in practice a disabled pane always lands here.
+    // setHwTraceCapture), so in practice a disabled pane always lands here.
     bodyDisabled: "(capture off — enable Capture to record bus activity)",
-    // Input-pin row checkbox (M8b, REQ §6.4). Left-header control on
+    // Input-pin row checkbox (M8b). Left-header control on
     // each input signal row. Checked = signal asserted (level 0, active
     // low). nNMI is special — see [[feedback-nmi-pulse-semantics]].
     inputPinAriaLabel: (signal: string) => `Assert ${signal}`,

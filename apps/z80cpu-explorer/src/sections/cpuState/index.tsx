@@ -13,7 +13,7 @@ const bc = (b: RegBank) => (b.b << 8) | b.c;
 const de = (b: RegBank) => (b.d << 8) | b.e;
 const hl = (b: RegBank) => (b.h << 8) | b.l;
 
-// Decode `F` into 8 named bits, MSB first. Matches REQ §6.5 label order
+// Decode `F` into 8 named bits, MSB first. Label order:
 // (S Z Y5 H X3 P/V N C). We don't depend on the dbg's `decodeFlags()`
 // helper here because the order it returns is fixed; we want explicit
 // MSB→LSB iteration for the bit grid.
@@ -32,7 +32,7 @@ function flagBits(f: number): boolean[] {
 
 // "Did this register change since the diff baseline?" — feeds the
 // .is-changed class. Computed on every cpuState/prev change per
-// DESIGN §3.7 ("Cells always carry .is-changed when diff differs").
+// Cells always carry .is-changed when diff differs.
 // `prevCpuStateAtBoundary` is advanced ONLY at boundary pauses, so
 // mid-instruction states naturally inherit the most recent boundary's
 // highlight set. The body wrapper's .is-mid-instruction rule suppresses
@@ -161,7 +161,7 @@ const FlagsRow = (props: { f: number; changed: boolean }) => {
 
 const Body = () => {
   const store = useStore();
-  // No per-cell or per-memo boundary gate (DESIGN §3.7 "CSS owns the
+  // No per-cell or per-memo boundary gate ("CSS owns the
   // gating"). The store advances `prevCpuStateAtBoundary` only at
   // boundary pauses, so the diff is naturally boundary-to-current;
   // mid-instruction states inherit the most recent boundary's
@@ -239,7 +239,7 @@ const Body = () => {
         </div>
       </div>
 
-      {/* Shadow bank — REQ §6.5 says "always visible", no fold. */}
+      {/* Shadow bank — always visible, no fold. */}
       <div class="cpuState-shadow">
         <Cell
           label={`AF${STR.cpuState.shadowMark}`}

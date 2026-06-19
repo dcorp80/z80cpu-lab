@@ -2,7 +2,7 @@
 // `lastMem*` / `lastIo*` via the `setLast*` helpers to simulate "the
 // CPU just did X" before firing a pause through the stub loop.
 //
-// Mirrors the real bus's split-IO shape (REQ §11): `ioRead` is always
+// Mirrors the real bus's split-IO shape: `ioRead` is always
 // present, `ioWrite` is allocated only when the `splitIo` option is on.
 // Joined-mode tests get the default single-plane stub; split-mode tests
 // pass `makeStubBus({ splitIo: true })` to exercise the dual-plane path.

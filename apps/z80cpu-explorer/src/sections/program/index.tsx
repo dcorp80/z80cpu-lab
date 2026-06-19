@@ -44,7 +44,7 @@ export const defaultPickFile: PickFile = () =>
         // `new Uint8Array(buf)` is a VIEW over the FileReader buffer;
         // `.slice(0, MAX_FILE_BYTES)` materialises a fresh Uint8Array
         // with its own ArrayBuffer (detached from the File's storage)
-        // AND caps to REQ §6.1's 128KB per-file storage limit in one
+        // AND caps to the 128KB per-file storage limit in one
         // pass. Oversized picks are truncated (the prefix that fits)
         // and warned — the user explicitly chose this file, dropping
         // it entirely would feel like a silent picker failure.
@@ -124,7 +124,7 @@ interface FileRowProps {
 const FileRow = (props: FileRowProps) => {
   const store = useStore();
   const session = createMemo(() => store.fileSessions[props.file.id]);
-  // "Dirty" iff loaded once already at a different addr (DESIGN §3.4).
+  // "Dirty" iff loaded once already at a different addr.
   const dirty = createMemo(() => {
     const s = session();
     if (!s || s.lastLoadedAddr === null) return false;

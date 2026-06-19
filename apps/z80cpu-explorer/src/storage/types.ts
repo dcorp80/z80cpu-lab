@@ -1,7 +1,6 @@
-// Pluggable storage backend per REQUIREMENTS §6.1 and DESIGN §5.
-// Milestone 1 only exercises the UI-state surface; the file and breakpoint
-// methods are defined here so backends can implement them once and stay
-// stable across later milestones.
+// Pluggable storage backend. The UI-state surface is wired first; file
+// and breakpoint methods are defined here so backends implement them once
+// and stay stable as more sections come online.
 
 import type { UiConfig } from "../config/defaults.ts";
 
@@ -31,7 +30,7 @@ export interface UiState {
 }
 
 /**
- * Per-file storage cap (REQ §6.1). Enforced at two layers:
+ * Per-file storage cap. Enforced at two layers:
  *   1. `defaultPickFile` truncates oversized picks on read (and warns), so
  *      the rest of the app only ever sees ≤cap bytes from the picker path.
  *   2. `store.addFile` rejects with `RangeError` — defense against
@@ -50,7 +49,7 @@ export interface ProgramFile {
 }
 
 /**
- * Session-only sibling of `ProgramFile` (DESIGN §3.4). Lives in the
+ * Session-only sibling of `ProgramFile`. Lives in the
  * store, never round-trips through the backend — recomputed from boot
  * (autoload writes set `lastLoadedAddr`; manual loads update it).
  * `dirty` is derived: `loadAddr !== lastLoadedAddr && lastLoadedAddr !== null`.
@@ -60,7 +59,7 @@ export interface ProgramFileSession {
 }
 
 /**
- * Two breakpoint kinds in MVP (REQ §6.2; DESIGN §3.5). Memory / IO /
+ * Two breakpoint kinds in MVP. Memory / IO /
  * flag-conditional kinds are post-MVP. `id` is store-assigned; UI never
  * sees a BP without one. Lives here (storage/types) because BPs
  * round-trip through the backend; re-exported from store/types for

@@ -9,16 +9,20 @@
 import { fireEvent } from "@solidjs/testing-library";
 import { render } from "solid-js/web";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  DEFAULT_MEMORY_ROWS_AFTER,
-  DEFAULT_MEMORY_ROWS_BEFORE,
-} from "../../config/defaults.ts";
+import { DEFAULT_MEMORY_PAGE_SIZE } from "../../config/defaults.ts";
 import { MemoryBackend } from "../../storage/memory.ts";
+import { STR } from "../../style/strings.ts";
+import { VIRTUAL_FALLBACK_ROWS } from "../instructionTrace/virtualWindow.ts";
 
-// Total memory rows = rowsBefore + watch row + rowsAfter. Tied to the
-// config so retuning DEFAULT_MEMORY_ROWS_* doesn't break these tests.
-const DEFAULT_MEMORY_ROWS_TOTAL =
-  DEFAULT_MEMORY_ROWS_BEFORE + 1 + DEFAULT_MEMORY_ROWS_AFTER;
+// Under happy-dom the scroll container has no measurable layout
+// (clientHeight === 0), so HexGrid's virtualization renders the
+// `VIRTUAL_FALLBACK_ROWS` (=50) starting at the page base. The
+// grid memo still produces `pageSize / bytesPerRow` rows; this
+// constant is just how many are mounted.
+const RENDERED_ROWS_UNDER_HAPPY_DOM = VIRTUAL_FALLBACK_ROWS;
+// `pageSize / bytesPerRow` rows per page; the watch row sits at
+// index (watchRowAddr - pageBase) / bytesPerRow inside the page.
+const DEFAULT_PAGE_ROWS = DEFAULT_MEMORY_PAGE_SIZE / 16;
 
 import {
   createAppStore,
@@ -132,13 +136,75 @@ describe("Memory section — watch input", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     expect(harness.store.memWatchAddr()).toBe(0x1234);
   });
+
+  it("watch input commit also snaps the view to the watched page", async () => {
+    harness = await mount("Header");
+    const input = harness.container.querySelector(
+      "input.watch-input-field",
+    ) as HTMLInputElement;
+    fireEvent.input(input, { target: { value: "4321" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(harness.store.memWatchAddr()).toBe(0x4321);
+    // 4 KB page → pageBase(0x4321) = 0x4000.
+    expect(harness.store.memViewPageBase()).toBe(0x4000);
+  });
+});
+
+describe("Memory section — recall watch", () => {
+  it("recall button is hidden by default (watch on view)", async () => {
+    harness = await mount("Header");
+    expect(harness.container.querySelector(".watch-recall-btn")).toBeNull();
+  });
+
+  it("recall button shows when memWatchOnView is false", async () => {
+    harness = await mount("Header");
+    harness.store.setMemWatchOnView(false);
+    const btn = harness.container.querySelector(".watch-recall-btn");
+    expect(btn).not.toBeNull();
+    // Label shows the watch address (the place it would jump to).
+    expect(btn?.textContent?.trim().endsWith("0000")).toBe(true);
+  });
+
+  it("clicking recall jumps viewPageBase to the watched page and bumps jumpVersion", async () => {
+    harness = await mount("Header");
+    // Stage: navigate the view away (simulate page-nav) and mark off-view.
+    harness.store.setMemWatchAddr(0x4321); // also snaps view to 0x4000
+    harness.store.setMemViewPageBase(0x8000); // user clicked page-nav `>`
+    harness.store.setMemWatchOnView(false);
+    expect(harness.store.memViewPageBase()).toBe(0x8000);
+    const v0 = harness.store.memWatchJumpVersion();
+    const btn = harness.container.querySelector(
+      ".watch-recall-btn",
+    ) as HTMLButtonElement;
+    expect(btn).not.toBeNull();
+    fireEvent.click(btn);
+    // View snapped back to the watched page; jumpVersion bumped so the
+    // body scroll-centers the watch row.
+    expect(harness.store.memViewPageBase()).toBe(0x4000);
+    expect(harness.store.memWatchAddr()).toBe(0x4321);
+    expect(harness.store.memWatchJumpVersion()).toBeGreaterThan(v0);
+  });
+
+  it("recall hides again after the watch comes back into view", async () => {
+    harness = await mount("Header");
+    harness.store.setMemWatchOnView(false);
+    expect(harness.container.querySelector(".watch-recall-btn")).not.toBeNull();
+    harness.store.setMemWatchOnView(true);
+    expect(harness.container.querySelector(".watch-recall-btn")).toBeNull();
+  });
 });
 
 describe("Memory section — body grid", () => {
-  it("renders rowsBefore + 1 + rowsAfter rows by default", async () => {
+  it("renders the virtualization fallback window from the page base under happy-dom", async () => {
     harness = await mount("Body");
+    // watchAddr defaults to 0 → page 0. Under happy-dom virtualization
+    // renders only the fallback rows from the top. The page itself is
+    // larger than what's mounted (`pageSize / bytesPerRow` rows).
     const rows = harness.container.querySelectorAll(".hex-row");
-    expect(rows.length).toBe(DEFAULT_MEMORY_ROWS_TOTAL);
+    expect(rows.length).toBe(
+      Math.min(DEFAULT_PAGE_ROWS, RENDERED_ROWS_UNDER_HAPPY_DOM),
+    );
+    expect(rows[0].querySelector(".hex-row-addr")?.textContent).toBe("0000");
   });
 
   it("renders 16 cells per row at default width", async () => {
@@ -160,10 +226,12 @@ describe("Memory section — body grid", () => {
     harness.store.setMemWatchAddr(0x4033);
     harness.store.setMemBytesPerRow(32);
     const rows = harness.container.querySelectorAll(".hex-row");
-    expect(rows[2].querySelector(".hex-row-addr")?.textContent).toBe("4020");
-    expect(rows[2].classList.contains("is-watch-row")).toBe(true);
-    expect(rows[2].querySelectorAll(".hex-cell").length).toBe(32);
-    const cells = rows[2].querySelectorAll(".hex-cell");
+    // Page model: page base for 0x4033 (16 KB page) = 0x4000;
+    // watch row addr 0x4020 sits at index (0x4020 - 0x4000)/32 = 1.
+    expect(rows[1].querySelector(".hex-row-addr")?.textContent).toBe("4020");
+    expect(rows[1].classList.contains("is-watch-row")).toBe(true);
+    expect(rows[1].querySelectorAll(".hex-cell").length).toBe(32);
+    const cells = rows[1].querySelectorAll(".hex-cell");
     expect(cells[0x13].classList.contains("is-watch-cell")).toBe(true);
   });
 
@@ -172,17 +240,19 @@ describe("Memory section — body grid", () => {
     harness.store.setMemWatchAddr(0x4045);
     harness.store.setMemBytesPerRow(64);
     const rows = harness.container.querySelectorAll(".hex-row");
-    // Watch row = 0x4045 & ~63 = 0x4040.
-    expect(rows[2].querySelector(".hex-row-addr")?.textContent).toBe("4040");
-    expect(rows[2].querySelectorAll(".hex-cell").length).toBe(64);
+    // Page base for 0x4045 (16 KB page) = 0x4000; watch row 0x4040
+    // sits at index (0x4040 - 0x4000)/64 = 1.
+    expect(rows[1].querySelector(".hex-row-addr")?.textContent).toBe("4040");
+    expect(rows[1].querySelectorAll(".hex-cell").length).toBe(64);
   });
 
-  it("centers the watch row at index rowsBefore (=2)", async () => {
+  it("watch row lands at index (watchRowAddr - pageBase) / bpr inside the page", async () => {
     harness = await mount("Body");
     harness.store.setMemWatchAddr(0x4023);
     const rows = harness.container.querySelectorAll(".hex-row");
-    // Watch row = (watchAddr & 0xFFF0) = 0x4020. With rowsBefore=2,
-    // the row at index 0 starts at 0x4020 - 32 = 0x4000.
+    // Default page size = 4 KB → pageBase(0x4023) = 0x4000. The first
+    // rendered row is the page base; the watch row 0x4020 sits at
+    // index (0x4020 - 0x4000) / 16 = 2 within the page.
     expect(rows[0].querySelector(".hex-row-addr")?.textContent).toBe("4000");
     expect(rows[2].querySelector(".hex-row-addr")?.textContent).toBe("4020");
     expect(rows[2].classList.contains("is-watch-row")).toBe(true);
@@ -199,12 +269,17 @@ describe("Memory section — body grid", () => {
     expect(allCells[3].classList.contains("is-watch-cell")).toBe(true);
   });
 
-  it("wraps the start address past 0xFFFF", async () => {
+  it("watchAddr near 0 lands on page 0 starting at 0x0000", async () => {
     harness = await mount("Body");
-    harness.store.setMemWatchAddr(0x0008); // row 0x0000, before=2 → start=0xFFE0
+    // The page model doesn't wrap inside a page: 0x0008 lives in page
+    // 0x0000, and the first rendered row is at 0x0000 — distinct from
+    // a hypothetical center-on-watch window that would have to wrap
+    // around to fill rows above the watch.
+    harness.store.setMemWatchAddr(0x0008);
     const rows = harness.container.querySelectorAll(".hex-row");
-    expect(rows[0].querySelector(".hex-row-addr")?.textContent).toBe("FFE0");
-    expect(rows[2].querySelector(".hex-row-addr")?.textContent).toBe("0000");
+    expect(rows[0].querySelector(".hex-row-addr")?.textContent).toBe("0000");
+    // Watch row = 0x0000 (aligned), index 0 within the page.
+    expect(rows[0].classList.contains("is-watch-row")).toBe(true);
   });
 
   it("renders hex bytes from store.memByte", async () => {
@@ -319,7 +394,7 @@ describe("Memory section — rapid entry", () => {
     harness = await mount("Body");
     harness.store.setMemWatchAddr(0x4020);
     const rows = harness.container.querySelectorAll(".hex-row");
-    // Watch row (index rowsBefore = 2), first cell = 0x4020.
+    // Watch row (page base 0x4000 + 2 × 16 = 0x4020), first cell = 0x4020.
     const cell = rows[2].querySelector(".hex-cell") as HTMLElement;
     fireEvent.click(cell);
     const input = harness.container.querySelector(
@@ -380,37 +455,83 @@ describe("Memory section — rapid entry", () => {
     expect(harness.container.querySelector(".hex-cell-input")).not.toBeNull();
   });
 
-  it("Enter at the bottom-right cell scrolls the watch window forward by one row", async () => {
+  it("Enter on a cell inside the page advances within the page (no page jump)", async () => {
     harness = await mount("Body");
-    // Pick a watch addr; figure out the window's bottom-right addr.
     harness.store.setMemWatchAddr(0x4020);
-    const bpr = harness.store.memBytesPerRow();
-    const rowsCount = harness.container.querySelectorAll(".hex-row").length;
-    // start = watchRowAddr - rowsBefore*bpr;
-    //  last = start + rowsCount*bpr - 1
-    expect(rowsCount).toBe(DEFAULT_MEMORY_ROWS_TOTAL);
-    expect(bpr).toBe(16);
-    const startAddr = 0x4020 - DEFAULT_MEMORY_ROWS_BEFORE * bpr;
-    const lastAddr = startAddr + rowsCount * bpr - 1;
-    const lastAddrHex = lastAddr.toString(16).toUpperCase().padStart(4, "0");
-    const bottomCell = harness.container.querySelector(
-      `.hex-cell[data-addr="${lastAddrHex}"]`,
-    ) as HTMLElement;
-    expect(bottomCell).not.toBeNull();
-    fireEvent.click(bottomCell);
+    const rows = harness.container.querySelectorAll(".hex-row");
+    // Watch row at idx 2 (page base 0x4000; (0x4020-0x4000)/16 = 2).
+    const cell = rows[2].querySelector(".hex-cell") as HTMLElement;
+    fireEvent.click(cell);
     const input = harness.container.querySelector(
       ".hex-cell-input",
     ) as HTMLInputElement;
     fireEvent.input(input, { target: { value: "AA" } });
     fireEvent.keyDown(input, { key: "Enter" });
-    expect(harness.bus.mem[lastAddr]).toBe(0xaa);
-    // watchAddr bumped by one row → next cell at 0x40C0 is now visible
-    // and is in the rendered window.
-    expect(harness.store.memWatchAddr()).toBe(0x4030);
+    expect(harness.bus.mem[0x4020]).toBe(0xaa);
+    // 0x4020 is NOT the page-last byte (page 0x4000 ends at 0x7FFF),
+    // so watchAddr must NOT jump pages.
+    expect(harness.store.memWatchAddr()).toBe(0x4020);
     await flushMicrotasks();
-    expect(
-      harness.container.querySelector('.hex-cell[data-addr="40C0"]'),
-    ).not.toBeNull();
+    // Next cell (0x4021) opens its input — within-page advance.
+    const nextInput = harness.container.querySelector(
+      '.hex-cell[data-addr="4021"] .hex-cell-input',
+    );
+    expect(nextInput).not.toBeNull();
+  });
+});
+
+describe("Memory section — column toggles", () => {
+  it("shows both columns by default", async () => {
+    harness = await mount("Body");
+    const row = harness.container.querySelector(".hex-row") as HTMLElement;
+    expect(row.querySelectorAll(".hex-cell").length).toBe(16);
+    expect(row.querySelectorAll(".hex-ascii-cell").length).toBe(16);
+  });
+
+  it("hides the hex bytes column when memShowBytes is false", async () => {
+    harness = await mount("Body");
+    harness.store.setMemShowBytes(false);
+    const row = harness.container.querySelector(".hex-row") as HTMLElement;
+    expect(row.querySelectorAll(".hex-cell").length).toBe(0);
+    expect(row.querySelectorAll(".hex-ascii-cell").length).toBe(16);
+    expect(row.querySelector(".hex-row-addr")).not.toBeNull();
+  });
+
+  it("hides the ASCII column when memShowAscii is false", async () => {
+    harness = await mount("Body");
+    harness.store.setMemShowAscii(false);
+    const row = harness.container.querySelector(".hex-row") as HTMLElement;
+    expect(row.querySelectorAll(".hex-cell").length).toBe(16);
+    expect(row.querySelectorAll(".hex-ascii-cell").length).toBe(0);
+    expect(row.querySelector(".hex-row-addr")).not.toBeNull();
+  });
+
+  it("body is empty (addr-only rows) when both columns are off", async () => {
+    harness = await mount("Body");
+    harness.store.setMemShowBytes(false);
+    harness.store.setMemShowAscii(false);
+    const row = harness.container.querySelector(".hex-row") as HTMLElement;
+    expect(row.querySelectorAll(".hex-cell").length).toBe(0);
+    expect(row.querySelectorAll(".hex-ascii-cell").length).toBe(0);
+    expect(row.querySelector(".hex-row-addr")).not.toBeNull();
+  });
+
+  it("Header renders Hex and ASCII checkboxes, both checked by default", async () => {
+    harness = await mount("Header");
+    const checkboxes = harness.container.querySelectorAll<HTMLInputElement>(
+      'input[type="checkbox"]',
+    );
+    expect(checkboxes.length).toBeGreaterThanOrEqual(2);
+    const hexCb = Array.from(checkboxes).find(
+      (cb) => cb.getAttribute("aria-label") === STR.memory.showBytesAriaLabel,
+    );
+    const asciiCb = Array.from(checkboxes).find(
+      (cb) => cb.getAttribute("aria-label") === STR.memory.showAsciiAriaLabel,
+    );
+    expect(hexCb).toBeDefined();
+    expect(asciiCb).toBeDefined();
+    expect(hexCb?.checked).toBe(true);
+    expect(asciiCb?.checked).toBe(true);
   });
 });
 

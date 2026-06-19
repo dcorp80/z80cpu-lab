@@ -639,23 +639,29 @@ body {
   letter-spacing: 0.04em;
 }
 .itrace-executed {
-  /* Subgrid parent — defines the column tracks for every executed row
-     so the auto-sized disasm column expands to the widest text across
-     ALL visible rows. That gives HC a tabulated x-position one gap
-     after the disasm content (rather than at the far right of the
-     container, which is what `1fr` per-row produced).
-     Columns: gutter · addr · bytes · disasm · hc · 1fr (right-anchor for tag). */
-  display: grid;
-  grid-template-columns: 1ch 5ch 13ch auto minmax(8ch, auto) 1fr;
-  column-gap: 8px;
-  row-gap: 1px;
-  align-content: start;
+  /* Virtualized scroll container. Rows are absolutely positioned inside
+     a spacer of total virtual height; `position: relative` here anchors
+     the children. Layout columns moved to per-row grids (see below) so
+     the row template is stable across the virtual window (subgrid would
+     re-fit the auto disasm column to whatever rows are currently
+     visible, jiggling horizontally as the user scrolls). */
+  position: relative;
   max-height: 240px;
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 4px 6px;
   background: var(--bg);
+  /* Canonical row stride. Must match in JS for window math; read via
+     getComputedStyle(...).getPropertyValue('--itrace-row-h'). 12px mono
+     + line-height 1.4 + 1px top + 1px bottom padding ≈ 20px. */
+  --itrace-row-h: 20px;
+}
+.itrace-virt-spacer {
+  /* Positioned wrapper inside .itrace-executed; height set inline as
+     N × --itrace-row-h so scrollHeight reflects the full virtual log. */
+  position: relative;
+  width: 100%;
 }
 .itrace-seam {
   display: flex;
@@ -743,22 +749,26 @@ body {
   color: var(--accent);
   text-decoration: underline;
 }
-/* Executed rows inherit the parent's column tracks via subgrid, so
-   disasm / hc tabulate across rows. Tag pinned to the right edge of
-   the trailing `1fr` filler. */
-.itrace-executed > .itrace-row {
-  grid-template-columns: subgrid;
-  grid-column: 1 / -1;
+/* Virtualized executed rows: each row is absolutely positioned inside
+   the spacer (`top` set inline per row) and carries its own grid
+   template so column widths stay stable as the visible window changes.
+   The fixed `19ch` disasm column accommodates the widest Z80 disasm
+   text (undocumented CB-indexed forms like `RES 0,A,(IX-80)` ≈ 15 chars
+   in bare-hex STYLE, with slack for `$`-prefixed or `h`-suffixed hex).
+   Was `auto` under the parent's subgrid; see .itrace-executed comment
+   for rationale. */
+.itrace-executed > .itrace-virt-spacer > .itrace-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: var(--itrace-row-h);
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 1ch 5ch 13ch 19ch minmax(8ch, auto) 1fr;
   column-gap: 8px;
 }
-.itrace-executed > .itrace-row > .itrace-tag {
+.itrace-executed > .itrace-virt-spacer > .itrace-row > .itrace-tag {
   justify-self: end;
-}
-/* Empty-state placeholders ("(no instructions executed yet)" /
-   "(capture off — ...)") span the full row width — otherwise they'd
-   land in the 1ch gutter column and clip. */
-.itrace-executed > .muted {
-  grid-column: 1 / -1;
 }
 .itrace-row.is-preview,
 .itrace-row.is-current {
@@ -827,11 +837,49 @@ body {
 .watch-input-field.is-invalid {
   border-color: var(--danger);
 }
+/* Recall-to-watch button — shows inline after the watch input only
+   when navigation has carried the user away from the watched address.
+   Uses tabular numerics so the addr glyph stays put as the watch
+   value changes. */
+.watch-recall-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 6px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  cursor: pointer;
+  text-transform: uppercase;
+}
+.watch-recall-btn:hover {
+  background: var(--highlight-bg);
+}
+.watch-recall-btn:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: 0;
+}
 
 /* ── Hex grid (shared by Memory + IO bodies) ───────────────────────── */
 
 .hex-grid {
-  max-height: 480px;
+  /* Virtualized scroll container. Rows are absolutely positioned inside
+     a spacer of total virtual height; `position: relative` here anchors
+     the children. Pattern mirrors `.itrace-executed` — same
+     `computeVirtualWindow` helper drives both. Needed for the per-page
+     model (REQ §11): 16 KB at 16 bytes/row = 1024 rows, would stall
+     layout without virtualization.
+     Height = visible rows × row stride + container padding. The
+     `--hex-grid-visible-rows` knob is set by `.hex-section-body-*`
+     inline from `DEFAULT_*_VIEWPORT_ROWS` in `config/defaults.ts`
+     so 8-bit and 16-bit IO panes share the same viewport, and a
+     single config retune drives both. */
+  position: relative;
+  max-height: calc(var(--hex-row-h) * var(--hex-grid-visible-rows, 24) + 8px);
   overflow-y: auto;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: 12px;
@@ -839,14 +887,40 @@ body {
   border-radius: 4px;
   background: var(--bg);
   padding: 4px 6px;
+  /* Canonical row stride. JS reads via
+     getComputedStyle(...).getPropertyValue('--hex-row-h'). Matches the
+     intrinsic height of `.hex-row` content (12px mono · line-height
+     1.4 · 1+1px padding) ≈ 20px. */
+  --hex-row-h: 20px;
+}
+.hex-virt-spacer {
+  /* Positioned wrapper; height set inline as N × --hex-row-h so the
+     scrollbar reflects the full virtual content height. */
+  position: relative;
+  width: 100%;
 }
 
 .hex-row {
+  /* Base flow layout — used directly by `IoPortGrid` (8-bit IO view,
+     small fixed window so no virtualization). The virtualized
+     `HexGrid` wraps rows in `.hex-virt-spacer` and overrides this to
+     absolute positioning below. */
   display: flex;
   align-items: baseline;
   gap: 12px;
   padding: 1px 4px;
   white-space: pre;
+}
+.hex-virt-spacer > .hex-row {
+  /* Anchor at top:0; JSX writes `transform: translateY(Npx)` per row so
+     the scroll handler avoids layout invalidation on each tick (vs the
+     older `top: Npx` form). */
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--hex-row-h);
+  box-sizing: border-box;
 }
 .hex-row.is-watch-row {
   background: var(--highlight-bg);
@@ -1096,6 +1170,37 @@ body {
   border-color: var(--accent);
 }
 
+/* Page-nav row (REQ §11): `<<` / `< NNNN` / `NNNN >` / `>>` sitting
+   above the hex grid. Buttons use the shared `.btn` look + tabular
+   numerics so the address labels stay aligned across the prev / next
+   pair as the page changes. */
+.page-nav-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.page-nav-row .btn {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  min-width: 4ch;
+}
+.page-nav-first,
+.page-nav-last {
+  min-width: 3ch;
+}
+
+/* Memory / IO section body wrapper — vertical stack of `.page-nav-row`
+   on top of the `.hex-grid`. Small gap so the nav row sits visibly
+   above the grid without crowding it. Each `.hex-section-body-*`
+   sets `--hex-grid-visible-rows` inline from the matching
+   `DEFAULT_*_VIEWPORT_ROWS` constant; .hex-grid reads it via
+   `max-height: calc(var(--hex-row-h) * var(--hex-grid-visible-rows))`. */
+.hex-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 /* Hardware trace section. Layout: fixed-width left column for signal
    names + a monospace waveform pane to the right. One row per signal;
    strict 1-cell-per-HC inside the waveform (no expansion at edges). */
@@ -1216,8 +1321,12 @@ body {
   cursor: pointer;
 }
 .hwt-row-waveform {
-  /* Pre-rendered single string of glyphs — one DOM node per row, not
-     per cell, regardless of waveform width. */
+  /* Horizontal virtualization spacer: the waveform's natural width is
+     `totalCells × 1ch` so the body's scrollWidth represents the full
+     virtual range even though only the visible viewport (+ overscan)
+     is mounted. Each row inherits `--hwt-cells` from .hwt-content. */
+  flex: 0 0 auto;
+  width: calc(var(--hwt-cells, 0) * 1ch);
   /* letter-spacing MUST be 0: the block-element rails (▔/▁) are
      edge-to-edge, so any inter-glyph gap would (a) break a HIGH/LOW
      span into dashes and (b) make the cell pitch (1ch + spacing)
@@ -1225,7 +1334,17 @@ body {
      1ch. See STR.hwTrace.glyphs width-invariant note. */
   letter-spacing: 0;
   color: var(--fg);
-  flex: 0 0 auto;
+  /* `pre` preserves intra-glyph spacing AND prevents wrapping past the
+     spacer width. */
+  white-space: pre;
+}
+.hwt-row-glyphs {
+  /* The inner glyph node carries only the visible window's substring;
+     translateX shifts it into the right cell of the spacer. Using
+     `inline-block` keeps the spacer's intrinsic line-height intact
+     even when the glyph string is empty (`""` for an empty ring). */
+  display: inline-block;
+  transform: translateX(calc(var(--hwt-first, 0) * 1ch));
 }
 /* Wraps all signal rows + the gridline overlay in one max-content,
    position:relative box so the absolutely-positioned gridlines (a) size
@@ -1322,6 +1441,32 @@ body {
   align-self: flex-end;
   padding-top: 4px;
   border-top: 1px solid var(--border);
+}
+
+/* Live-applied settings pane (page sizes — no Save/Discard staging,
+   no fold-lock contribution). Visually separated from the destructive
+   reload-only rows above so the two are not conflated. */
+.appshell-livepane {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.appshell-page-select {
+  appearance: auto;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: var(--mono, monospace);
+  font-size: 12px;
+  padding: 1px 4px;
+}
+.appshell-page-select:focus {
+  outline: 1px solid var(--accent);
+  border-color: var(--accent);
 }
 
 /* Interrupts section (REQ §11). Minimal — just a labeled INT vector input

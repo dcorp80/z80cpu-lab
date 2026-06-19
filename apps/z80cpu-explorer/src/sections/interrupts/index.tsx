@@ -1,8 +1,8 @@
-// Interrupts section (REQ §11 "Nice to have"). Currently hosts only the
+// Interrupts section (nice-to-have post-MVP). Currently hosts only the
 // INT vector byte input — the byte the bus places on `cpu.bus.data`
 // during INT-acknowledge cycles (`nM1` low + `nIORQ` low).
 //
-// Forward-looking: REQ §11 plans configurable INT-at-HC / NMI-at-HC
+// Forward-looking: a future build adds configurable INT-at-HC / NMI-at-HC
 // generators here. The section is intentionally small for now so adding
 // those later is a body extension, not a new section.
 

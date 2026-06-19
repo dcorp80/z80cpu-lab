@@ -126,7 +126,7 @@ describe("instructionTrace section — folded summary", () => {
     expect(text).toContain("PC=0000");
     expect(text).toContain("paused");
     expect(text).toContain("0 insns");
-    expect(text).toContain(`capture: ${STR.instructionTrace.captureModeRing}`);
+    expect(text).toContain("capture: ring");
     expect(text).not.toContain("last:");
   });
 
@@ -147,17 +147,24 @@ describe("instructionTrace section — folded summary", () => {
     expect(text).toContain("last:");
     expect(text).toContain("LD A,B");
     expect(text).toContain("1 insns");
-    expect(text).toContain(`capture: ${STR.instructionTrace.captureModeRing}`);
+    expect(text).toContain("capture: ring");
   });
 
   it("flips the capture clause to 'off' when capture is disabled", async () => {
     harness = await mount({ folded: true });
-    harness.store.setTraceRingMode("disabled");
+    harness.store.setCapture(false);
     const text = harness.container.textContent ?? "";
-    expect(text).toContain(
-      `capture: ${STR.instructionTrace.captureModeDisabled}`,
-    );
+    expect(text).toContain("capture: off");
     expect(text).not.toContain("last:");
+  });
+
+  it("capture clause is reactive — toggles live between 'ring' and 'off'", async () => {
+    harness = await mount({ folded: true });
+    expect(harness.container.textContent).toContain("capture: ring");
+    harness.store.setCapture(false);
+    expect(harness.container.textContent).toContain("capture: off");
+    harness.store.setCapture(true);
+    expect(harness.container.textContent).toContain("capture: ring");
   });
 });
 
@@ -422,7 +429,7 @@ describe("instructionTrace section — Current row", () => {
   });
 });
 
-describe("instructionTrace section — header step controls (REQ §6.3)", () => {
+describe("instructionTrace section — header step controls", () => {
   let h: Awaited<ReturnType<typeof mountHeader>> | undefined;
   afterEach(() => h?.dispose());
 
@@ -464,11 +471,11 @@ describe("instructionTrace section — header step controls (REQ §6.3)", () => 
   });
 });
 
-describe("instructionTrace section — capture toggle (REQ §11)", () => {
+describe("instructionTrace section — capture toggle", () => {
   let h: Harness | undefined;
   afterEach(() => h?.dispose());
 
-  it("checkbox flips traceRingMode; unchecking from a populated ring clears it", async () => {
+  it("checkbox flips capture; unchecking from a populated ring clears it", async () => {
     h = await mount();
     h.loop.emitInstruction(mkTrace({ startAddr: 0x100, bytes: [0x78] }));
     h.loop.emitInstruction(mkTrace({ startAddr: 0x101, bytes: [0x79] }));
@@ -492,7 +499,7 @@ describe("instructionTrace section — capture toggle (REQ §11)", () => {
       );
       expect(cb.checked).toBe(true);
       fireEvent.click(cb);
-      expect(headerHarness.store.traceRingMode()).toBe("disabled");
+      expect(headerHarness.store.capture()).toBe(false);
     } finally {
       headerHarness.dispose();
     }
@@ -506,7 +513,7 @@ describe("instructionTrace section — capture toggle (REQ §11)", () => {
         ".itrace-row:not(.is-preview):not(.is-current)",
       ).length,
     ).toBe(1);
-    h.store.setTraceRingMode("disabled");
+    h.store.setCapture(false);
     // After disable: rows gone, muted disabled string in their place.
     expect(
       h.container.querySelectorAll(
@@ -535,6 +542,129 @@ describe("instructionTrace section — capture toggle (REQ §11)", () => {
     } finally {
       headerHarness.dispose();
     }
+  });
+});
+
+describe("instructionTrace section — traceInstructions gate (owned by appShell)", () => {
+  // The Trace-instructions checkbox itself lives in the appShell section's
+  // live-pane; the toggle's effects on the InsnTrace header (greyed-out
+  // step controls, greyed-out Capture, forced capture-off, restored
+  // dbg.enabled) belong here.
+  let h: Harness | undefined;
+  afterEach(() => h?.dispose());
+
+  it("turning off traceInstructions greys out Step, Step-N count input, and Capture in the header", async () => {
+    const headerHarness = await mountHeader();
+    try {
+      const stepBtn = buttonByText(
+        headerHarness.container,
+        STR.instructionTrace.step,
+      );
+      const stepNBtn = buttonByText(
+        headerHarness.container,
+        STR.instructionTrace.stepN,
+      );
+      const countInput = req(
+        headerHarness.container.querySelector<HTMLInputElement>(
+          `input[aria-label="${STR.instructionTrace.stepCountLabel}"]`,
+        ),
+        "step-N count input",
+      );
+      const captureCb = req(
+        headerHarness.container.querySelector<HTMLInputElement>(
+          `.itrace-capture-mode input[type=checkbox]`,
+        ),
+        "capture checkbox",
+      );
+      // Default: tracking on → all enabled.
+      expect(stepBtn.disabled).toBe(false);
+      expect(stepNBtn.disabled).toBe(false);
+      expect(countInput.disabled).toBe(false);
+      expect(captureCb.disabled).toBe(false);
+
+      headerHarness.store.setTraceInstructions(false);
+      await flush();
+      expect(stepBtn.disabled).toBe(true);
+      expect(stepNBtn.disabled).toBe(true);
+      expect(countInput.disabled).toBe(true);
+      expect(captureCb.disabled).toBe(true);
+
+      // Re-enabling tracking re-enables every control.
+      headerHarness.store.setTraceInstructions(true);
+      await flush();
+      expect(stepBtn.disabled).toBe(false);
+      expect(stepNBtn.disabled).toBe(false);
+      expect(countInput.disabled).toBe(false);
+      expect(captureCb.disabled).toBe(false);
+    } finally {
+      headerHarness.dispose();
+    }
+  });
+
+  it("turning off traceInstructions forces capture off, clears the ring, and writes dbg.enabled=false", async () => {
+    const backend = new MemoryBackend();
+    const loop = makeStubLoop();
+    const bus = makeStubBus();
+    const dbg = makeStubDbg();
+    const store = await createAppStore({ backend, loop, bus, dbg });
+    loop.emitInstruction(mkTrace({ startAddr: 0x100, bytes: [0x78] }));
+    expect(store.capture()).toBe(true);
+    store.setTraceInstructions(false);
+    expect(store.traceInstructions()).toBe(false);
+    expect(store.capture()).toBe(false);
+    expect(store.traceRing.size()).toBe(0);
+    expect(dbg.enabled).toBe(false);
+  });
+
+  it("turning traceInstructions back on restores dbg.enabled but leaves capture off", async () => {
+    const backend = new MemoryBackend();
+    const loop = makeStubLoop();
+    const bus = makeStubBus();
+    const dbg = makeStubDbg();
+    const store = await createAppStore({ backend, loop, bus, dbg });
+    store.setTraceInstructions(false);
+    store.setTraceInstructions(true);
+    expect(store.traceInstructions()).toBe(true);
+    expect(dbg.enabled).toBe(true);
+    // Capture stays off — re-enabling tracking doesn't auto-restore it.
+    expect(store.capture()).toBe(false);
+  });
+
+  it("Current row + Preview survive Capture-off (regression) but vanish on tracking-off", async () => {
+    // Repro for the fixed regression: previously the gate keyed on
+    // `traceRingMode !== "ring"`, so turning Capture off while keeping
+    // tracking on wrongly hid Current/Preview even though dbg.curr was
+    // still fresh. Now Capture-off keeps both visible and only
+    // tracking-off suppresses them.
+    h = await mount();
+    // Stage an in-flight instruction on the stub dbg, then emit a pause
+    // so the store's pause-edge handler copies dbg.curr into
+    // currentInstruction (its source of truth).
+    h.dbg.setCurr({
+      startAddr: 0x100,
+      bytes: [0x3e, 0x42],
+      nextPc: 0x102,
+    });
+    h.loop.emitPause({ kind: "user" });
+    await flush();
+    expect(h.container.querySelector(".itrace-current")).not.toBeNull();
+
+    // Tracking on, capture off → Current row + Preview still render
+    // (regression check).
+    h.store.setCapture(false);
+    await flush();
+    expect(h.container.querySelector(".itrace-current")).not.toBeNull();
+    expect(
+      h.container.querySelector(".itrace-preview")?.textContent ?? "",
+    ).not.toContain(STR.instructionTrace.previewTrackingOff);
+
+    // Tracking off → both vanish, preview shows tracking-off placeholder.
+    h.store.setTraceInstructions(false);
+    await flush();
+    expect(h.container.querySelector(".itrace-current")).toBeNull();
+    expect(
+      h.container.querySelector(".itrace-preview")?.textContent ?? "",
+    ).toContain(STR.instructionTrace.previewTrackingOff);
   });
 });
 
@@ -571,7 +701,7 @@ describe("instructionTrace section — cursor + snap-to-live", () => {
   });
 });
 
-describe("instructionTrace section — run-time freeze (REQ §7.5)", () => {
+describe("instructionTrace section — run-time freeze", () => {
   // Same rAF-queue trick as the store test: take control of the
   // throttle's scheduler so we can pin down what the body sees while
   // running, then again after the user pauses.

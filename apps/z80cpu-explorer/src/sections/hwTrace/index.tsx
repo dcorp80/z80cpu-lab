@@ -1,4 +1,4 @@
-// HW-trace section UI (REQ §6.4 / DESIGN §6.4). Renders a logic-
+// HW-trace section UI. Renders a logic-
 // analyzer view of recent bus transitions: one row per signal, glyphs
 // laid out at strict 1-cell-per-HC. Header carries the capture-mode
 // toggle and (when the cursor is detached) the snap-to-live button.
@@ -10,7 +10,7 @@
 // M8b status: input-signal rows (nINT/nNMI/nRESET/nBUSRQ/nWAIT) carry
 // a checkbox in their left header column that drives the bus pin via
 // `store.setInputPin`. The INT vector input moved to the new
-// Interrupts section (REQ §6.8) so the HW trace stays a pure
+// Interrupts section so the HW trace stays a pure
 // logic-analyzer view. VCD export lands in M8c.
 
 import {
@@ -19,9 +19,10 @@ import {
   createMemo,
   createSignal,
   For,
+  onCleanup,
+  onMount,
   Show,
 } from "solid-js";
-import { DEFAULT_HW_TRACE_RENDER_MAX_HCS } from "../../config/defaults.ts";
 import type { InputPinName } from "../../runloop/bus.ts";
 import {
   ALL_SIGNALS,
@@ -39,6 +40,11 @@ import { useStore } from "../../store/index.ts";
 import { STR } from "../../style/strings.ts";
 import { formatHex } from "../../util/hex.ts";
 import { parsePositiveInt } from "../../util/num.ts";
+import {
+  VIRTUAL_FALLBACK_ROWS,
+  VIRTUAL_OVERSCAN_ROWS,
+  VIRTUAL_SPACER_MAX_PX,
+} from "../instructionTrace/virtualWindow.ts";
 import type { SectionModule } from "../types.ts";
 import {
   type BitTransition,
@@ -121,11 +127,9 @@ const Header: Component = () => {
         <input
           type="checkbox"
           aria-label={STR.hwTrace.captureToggleAriaLabel}
-          checked={store.hwTraceMode() === "ring"}
+          checked={store.hwTraceCapture()}
           disabled={!store.isPaused()}
-          onChange={(e) =>
-            store.setHwTraceMode(e.currentTarget.checked ? "ring" : "disabled")
-          }
+          onChange={(e) => store.setHwTraceCapture(e.currentTarget.checked)}
         />
         <span class="hwt-capture-mode-label">
           {STR.hwTrace.captureToggleLabel}
@@ -161,13 +165,10 @@ const FoldedSummary: Component = () => {
   const store = useStore();
   const summary = createMemo(() => {
     // Subscribe to the version signal so the summary refreshes when
-    // new records land. Per DESIGN §3.2 the version advances at rAF
+    // new records land. The version advances at rAF
     // cadence (gated by `loop.onTick` in the store).
     store.hwTraceVersion();
-    const capture =
-      store.hwTraceMode() === "ring"
-        ? STR.hwTrace.captureModeRing
-        : STR.hwTrace.captureModeDisabled;
+    const capture = store.hwTraceCapture();
     const cursor = store.cursors.hwTrace;
     const viewing =
       cursor.mode === "live"
@@ -199,8 +200,7 @@ interface RowData {
 }
 
 /**
- * Per-signal row component (REQ §6.4 "Each signal row is an isolated
- * component instance — one per signal"). Isolation preps for post-MVP
+ * Per-signal row component — one per signal. Isolation preps for post-MVP
  * drag-to-reorder of rows and keeps render cost per signal flat.
  *
  * M8b: input-signal rows (nINT/nNMI/nRESET/nBUSRQ/nWAIT) carry a small
@@ -233,13 +233,20 @@ const InputPinCheckbox: Component<{ signal: InputBitSignal }> = (props) => {
 
 const SignalRow: Component<{
   signal: SignalName;
-  windowLo: number;
-  windowHi: number;
+  /**
+   * HC bounds of the cells this row should render. The waveform spacer
+   * sits in the wider `[renderBounds.lo, renderBounds.hi]` span (driven
+   * by `--hwt-cells` on `.hwt-content`); the inner glyph node renders
+   * only `[emitLo, emitHi]` and translates into place via `--hwt-first`.
+   */
+  emitLo: number;
+  emitHi: number;
   row: RowData;
   /**
    * Optional per-cell dim mask (true ⇒ render that cell dimmed). Only the
    * `addr` row passes one — it marks DRAM-refresh cells (nRFSH low) so
-   * refresh addresses read distinctly from operational ones.
+   * refresh addresses read distinctly from operational ones. Length must
+   * match the emit window (`emitHi - emitLo + 1`).
    */
   dimMask?: ReadonlyArray<boolean>;
 }> = (props) => {
@@ -253,8 +260,8 @@ const SignalRow: Component<{
       const width = props.signal === "addr" ? 4 : 2;
       text = renderBusValueRow(
         props.row.bus,
-        props.windowLo,
-        props.windowHi,
+        props.emitLo,
+        props.emitHi,
         width,
         props.row.initialBus,
         glyphs,
@@ -264,16 +271,16 @@ const SignalRow: Component<{
     } else if (isTri(props.signal)) {
       text = renderTriRow(
         props.row.tri,
-        props.windowLo,
-        props.windowHi,
+        props.emitLo,
+        props.emitHi,
         props.row.initialTri,
         glyphs,
       );
     } else {
       text = renderBitRow(
         props.row.bit,
-        props.windowLo,
-        props.windowHi,
+        props.emitLo,
+        props.emitHi,
         props.row.initialBit,
         glyphs,
       );
@@ -291,11 +298,17 @@ const SignalRow: Component<{
         </Show>
       </span>
       <span class="hwt-row-waveform">
-        <For each={segments()}>
-          {(seg) =>
-            seg.dim ? <span class="hwt-bus-refresh">{seg.text}</span> : seg.text
-          }
-        </For>
+        <span class="hwt-row-glyphs">
+          <For each={segments()}>
+            {(seg) =>
+              seg.dim ? (
+                <span class="hwt-bus-refresh">{seg.text}</span>
+              ) : (
+                seg.text
+              )
+            }
+          </For>
+        </span>
       </span>
     </div>
   );
@@ -385,23 +398,65 @@ function buildRowData(
  */
 const SCROLL_PIN_EPSILON_PX = 4;
 
+// Conservative px-per-cell for the `renderBounds` spacer clamp. Slight
+// overestimate of a typical 12 px monospace `1ch` (~7.2 px) so the
+// resulting `maxFittingCells` underestimates, keeping the rendered
+// spacer comfortably below `VIRTUAL_SPACER_MAX_PX`. Safe across browser
+// zoom: page zoom doesn't change font-size in CSS px, so 1ch stays put
+// in the same unit space getBCR / scrollWidth report in. We deliberately
+// do NOT use a measured pitch here — feeding the spacer's own width
+// back into the clamp couples renderBounds to contentW and adds a
+// reactive cycle that has no payoff over the constant. Virtualization
+// itself still uses contentW — see the math below.
+const FALLBACK_CELL_PX = 8;
+
 const Body: Component = () => {
   const store = useStore();
   let scrollEl: HTMLDivElement | undefined;
+  // `contentEl` is a SIGNAL, not a let-binding: Solid's `<Show>` unmounts
+  // the spacer when capture is toggled off and mounts a fresh node when
+  // it goes back on, so a let-bound ref would leave the ResizeObserver
+  // attached to the detached old node forever. Tracking via a signal
+  // lets the RO-binding effect below re-run and rebind on each remount.
+  const [contentEl, setContentEl] = createSignal<HTMLDivElement | undefined>(
+    undefined,
+  );
 
-  // Render extent = the full available HC range (capped to
-  // RENDER_MAX_HCS so the DOM stays bounded on long runs). The visible
-  // viewport is a CSS-driven subset; horizontal scroll moves within
-  // this rendered range. The cursor controls scroll POSITION, not
-  // render bounds — a `live` cursor pins the scroll to the right
-  // edge; a `detached` cursor leaves it where the user dragged.
+  // Horizontal virtualization signals — all in DOM pixels, all sourced
+  // from the same browser-reported layout values:
+  //   `scrollLeft` ← onScroll
+  //   `viewportW`  ← ResizeObserver on the scroll element (clientWidth)
+  //   `contentW`   ← ResizeObserver on the spacer (.hwt-content) PLUS a
+  //                  synchronous re-read in the auto-pin effect to avoid
+  //                  one frame of stale data immediately after pause.
+  //
+  // Critically we do NOT keep a separately-measured cell-pitch (e.g.
+  // getBCR of an "M" or a `width: 1ch` probe span). The browser's own
+  // resolution of `1ch` accumulates a sub-pixel rounding error across
+  // `totalCells * 1ch`; if JS measures `1ch` even fractionally
+  // differently, then `floor(scrollLeft / cellW)` drifts off the cell
+  // grid and — at the right edge, where `last` is already capped at
+  // `total` — the emit window collapses to the rightmost few cells.
+  // Using `scrollLeft / contentW` as a fraction of `total` keeps JS
+  // perfectly aligned with whatever pitch CSS actually rendered.
+  const [scrollLeft, setScrollLeft] = createSignal(0);
+  const [viewportW, setViewportW] = createSignal(0);
+  const [contentW, setContentW] = createSignal(0);
+
+  // Render extent = the full reachable HC range = `[max(1, oldestHc), hc]`.
+  // No HC cap: horizontal virtualization (`virtualWindow` below) means
+  // only the visible cells + overscan are mounted regardless of total HC
+  // span, so the renderable range can equal the buffer's natural range.
+  // The only backstop is Chrome's max element width — when the spacer
+  // would exceed `VIRTUAL_SPACER_MAX_PX`, the left edge is pulled in so
+  // the scroll position stays in sync with the cell math.
   //
   // The body renders ONLY while stopped: during a run these memos return
   // their previous value untouched (they don't track `hc`/version while
-  // running), so the expensive buffer walk happens once per pause, not
-  // per frame. A future "live mode" would lift this gate — and would also
-  // need the detached cursor to anchor render bounds, since a sliding
-  // window can't hold a pinned HC while data grows.
+  // running), so the buffer walk happens once per pause, not per frame.
+  // A future "live mode" would lift this gate — and would also need the
+  // detached cursor to anchor render bounds, since a sliding window
+  // can't hold a pinned HC while data grows.
   const renderBounds = createMemo<{ lo: number; hi: number }>(
     (prev) => {
       if (store.status() !== "paused") return prev;
@@ -410,27 +465,34 @@ const Body: Component = () => {
       if (hi < 1) return { lo: 1, hi: 0 };
       // Empty ring → collapse to an empty window (hi<lo) so every row's
       // waveform renders as "" rather than filling the [1, hc] span with
-      // carry-forward default levels. M8b: rows render unconditionally
-      // so the user can assert pins pre-step; this guards against the
-      // post-Zero-HC / post-disable case where `store.hc()` is large but
-      // nothing's in the ring.
+      // carry-forward default levels. Rows still render (M8b: input-pin
+      // checkboxes must stay reachable pre-step) — this only zeros the
+      // emit range until something has actually been captured.
       const oldest = store.hwTrace.oldestHc();
       if (oldest === undefined) return { lo: 1, hi: 0 };
-      // Clamp the left edge UP to the oldest recorded HC. `store.hc()` is a
-      // free-running counter that keeps advancing while capture is DISABLED,
-      // but the ring records nothing then — so a window left edge of
-      // `hi - RENDER_MAX + 1` can fall before the first record. The renderer
-      // would then fill `[lo, oldestHc)` with carry-forward from
-      // `latestBefore(lo)` = undefined → default deasserted levels: the
-      // "dead lines" bug (visible after enabling capture mid-session, when
-      // HC already advanced past where the ring starts). Pinning `lo` to
-      // `oldestHc()` keeps the window over real data; the carry-forward seed
-      // then always has a record behind it.
-      const lo = Math.max(1, hi - DEFAULT_HW_TRACE_RENDER_MAX_HCS + 1, oldest);
+      // Clamp the left edge UP to the oldest recorded HC. `store.hc()` is
+      // a free-running counter that keeps advancing while capture is
+      // DISABLED, but the ring records nothing then — so an `hc`-anchored
+      // left edge can fall before the first record and the renderer would
+      // fill `[lo, oldestHc)` with default-deasserted carry-forward (the
+      // "dead lines" bug). Pinning `lo` to `oldestHc()` keeps the window
+      // over real data.
+      let lo = Math.max(1, oldest);
+      // Backstop the spacer against Chrome's ~33.5 Mpx element-width
+      // limit: a spacer wider than that gets silently clipped and the
+      // scrollbar desyncs from the cell math. Uses `FALLBACK_CELL_PX`
+      // as a conservative overestimate of `1ch` — see the constant's
+      // comment for why a measured pitch isn't used here.
+      const maxFittingCells = Math.floor(
+        VIRTUAL_SPACER_MAX_PX / FALLBACK_CELL_PX,
+      );
+      const minLo = hi - maxFittingCells + 1;
+      if (lo < minLo) lo = minLo;
       return { lo, hi };
     },
     { lo: 1, hi: 0 },
   );
+
   const rowData = createMemo<Record<SignalName, RowData>>((prev) => {
     if (store.status() !== "paused") return prev;
     store.hwTraceVersion();
@@ -444,77 +506,144 @@ const Body: Component = () => {
       store.hwTrace.rangeView(lo, hi),
     );
   }, emptyRowData());
-  // Gate the whole body on the ring actually holding records (head/tail
-  // emptiness), NOT on store.hc(). An emptied ring after a long run still
-  // leaves store.hc() large; keying off hc would render a window full of
-  // carried-forward "dead lines." If there's nothing in the ring, show
-  // nothing.
-  const hasData = createMemo<boolean>((prev) => {
-    if (store.status() !== "paused") return prev;
-    store.hwTraceVersion();
-    return !store.hwTrace.isEmpty();
-  }, false);
 
-  // M1-cycle start markers: the cell offset (relative to windowLo) of
-  // every nM1 falling edge (1→0) inside the window. Rendered as faint
-  // vertical rules so instruction boundaries are visible at a glance —
-  // and as a built-in alignment ruler: because the lines live on the
-  // same 1ch grid as the glyphs, any row that drifted off-grid would
-  // show its glyphs sliced mid-cell by the lines. Derived from the nM1
-  // bit row we already build. Walking with the carried-in level
-  // (`initialBit`) avoids marking a spurious edge when the window opens
-  // mid-M1 (nM1 already low, so the first emitted transition isn't a
-  // real 1→0).
+  // Total cell count in the rendered HC range. Drives the spacer width
+  // (`width: calc(--hwt-cells * 1ch)`) so the scrollbar represents the
+  // full virtual range even though only a viewport's worth is mounted.
+  const totalCells = createMemo<number>(() => {
+    const { lo, hi } = renderBounds();
+    return Math.max(0, hi - lo + 1);
+  });
+
+  // Map (scrollLeft, viewportW, contentW) onto the inclusive-exclusive
+  // cell index range to mount. Uses `scrollLeft / contentW` as a fraction
+  // of `total` rather than a JS-measured cell pitch — so the result is
+  // *exactly* aligned with the cell positions CSS renders at, by
+  // construction, with no accumulated rounding error.
+  //
+  // `equals` suppresses re-execution on sub-cell scrolls: every scroll
+  // event sets scrollLeft, but the window only shifts when the floor /
+  // ceil result actually changes.
+  const virtualWindow = createMemo(
+    () => {
+      const total = totalCells();
+      if (total <= 0) return { first: 0, last: 0 };
+      const sw = contentW();
+      const vw = viewportW();
+      if (sw <= 0 || vw <= 0) {
+        return { first: 0, last: Math.min(total, VIRTUAL_FALLBACK_ROWS) };
+      }
+      const sl = scrollLeft();
+      const startFrac = Math.max(0, Math.min(1, sl / sw));
+      const endFrac = Math.max(0, Math.min(1, (sl + vw) / sw));
+      const first = Math.max(
+        0,
+        Math.floor(startFrac * total) - VIRTUAL_OVERSCAN_ROWS,
+      );
+      const last = Math.min(
+        total,
+        Math.ceil(endFrac * total) + VIRTUAL_OVERSCAN_ROWS,
+      );
+      return { first, last };
+    },
+    undefined,
+    { equals: (a, b) => a.first === b.first && a.last === b.last },
+  );
+
+  // Emit window in HC terms — what each row renderer paints, sliced from
+  // the full `rowData` transition lists. Walks transitions whose
+  // `hc < emitLo` silently into the carry-forward; nothing past `emitHi`
+  // is touched. Cost per row ≈ O(transitions_before_emit) + O(viewport).
+  const emitBounds = createMemo<{ lo: number; hi: number }>(() => {
+    const { lo, hi } = renderBounds();
+    if (hi < lo) return { lo: 1, hi: 0 };
+    const { first, last } = virtualWindow();
+    if (last <= first) return { lo: 1, hi: 0 };
+    return { lo: lo + first, hi: lo + last - 1 };
+  });
+
+  // M1-cycle start markers: cell offsets (relative to renderBounds.lo)
+  // of every nM1 falling edge (1→0). Rendered as faint vertical rules so
+  // instruction boundaries are visible at a glance — and as an alignment
+  // ruler: lines + glyphs share the same 1ch grid, so any row drifted
+  // off-grid would show its glyphs sliced mid-cell. Walking with the
+  // carried-in level (`initialBit`) avoids marking a spurious edge when
+  // the window opens mid-M1.
+  //
+  // Filtered to the virtual window (with overscan baked into `first`/
+  // `last` already) so only on-screen gridline divs get mounted.
   const m1Starts = createMemo<number[]>(() => {
     const { lo } = renderBounds();
+    const { first, last } = virtualWindow();
+    if (last <= first) return [];
     const row = rowData().nM1;
     if (!row) return [];
+    const transitions = row.bit;
+    // Binary-search for the first transition with `offset >= first` so a
+    // capacity-many nM1 transition list doesn't pay O(N) per scroll
+    // boundary. The carry-forward `prev` at the cut point is the
+    // previous transition's value, or `initialBit` if none exists.
+    let bsLo = 0;
+    let bsHi = transitions.length;
+    while (bsLo < bsHi) {
+      const mid = (bsLo + bsHi) >>> 1;
+      if (transitions[mid].hc - lo < first) bsLo = mid + 1;
+      else bsHi = mid;
+    }
+    let prev: 0 | 1 = bsLo === 0 ? row.initialBit : transitions[bsLo - 1].value;
     const offsets: number[] = [];
-    let prev = row.initialBit;
-    for (const t of row.bit) {
-      if (prev === 1 && t.value === 0) offsets.push(t.hc - lo);
+    for (let i = bsLo; i < transitions.length; i++) {
+      const t = transitions[i];
+      const offset = t.hc - lo;
+      if (offset >= last) break;
+      if (prev === 1 && t.value === 0) offsets.push(offset);
       prev = t.value;
     }
     return offsets;
   });
 
-  // Per-cell DRAM-refresh mask: true where nRFSH is asserted (low). The
-  // addr row uses it to dim refresh addresses (I:R on the bus during
-  // M1 T3–T4) so they read distinctly from operational addresses. Keyed
-  // purely on nRFSH level — never on whether addr changed, since a
-  // refresh address can coincidentally equal the prior operational one.
+  // Per-cell DRAM-refresh mask for the EMIT window only (length matches
+  // the rendered addr-row string, not the full HC span). Keyed on nRFSH
+  // level — never on whether addr changed, since a refresh address can
+  // coincidentally equal the prior operational one.
   const refreshMask = createMemo<boolean[]>(() => {
-    const { lo, hi } = renderBounds();
+    const { lo, hi } = emitBounds();
     const row = rowData().nRFSH;
-    if (!row) return [];
+    if (!row || hi < lo) return [];
     return bitLevelRow(row.bit, lo, hi, row.initialBit).map((v) => v === 0);
   });
 
-  // Scroll-driven cursor management. When the user scrolls left,
-  // detach the cursor at the rightmost visible HC; when they scroll
-  // back to the right edge, snap to live. Mirrors the instruction-trace
-  // section's scroll-bottom semantics, rotated 90°.
+  // Scroll-driven cursor management + virtualization signal feed. When
+  // the user scrolls left, detach the cursor at the rightmost visible
+  // HC; when they scroll back to the right edge, snap to live. Mirrors
+  // the instruction-trace section's scroll-bottom semantics, rotated 90°.
   const onScroll = (): void => {
     if (!scrollEl) return;
+    setScrollLeft(scrollEl.scrollLeft);
     const { lo, hi } = renderBounds();
     if (hi < lo) return;
+    // Use the spacer's fractional `contentW` as the proportion
+    // denominator — same source virtualWindow uses, so the rightmost-
+    // visible HC computed here matches the rightmost cell virtualWindow
+    // is mounting. `scrollEl.scrollWidth` is rounded to an integer and
+    // can disagree at the sub-pixel scale × millions-of-cells span.
+    const sw = contentW() || scrollEl.scrollWidth;
     const atRight =
-      scrollEl.scrollWidth - scrollEl.scrollLeft - scrollEl.clientWidth <
-      SCROLL_PIN_EPSILON_PX;
+      sw - scrollEl.scrollLeft - scrollEl.clientWidth < SCROLL_PIN_EPSILON_PX;
     const cursor = store.cursors.hwTrace;
     if (atRight) {
       if (cursor.mode === "detached") store.snapHwTraceCursorToLive();
       return;
     }
-    // Compute rightmost visible HC from scroll position. scrollWidth
-    // covers exactly `(hi - lo + 1)` cells, so the cell-width factor
-    // cancels out in the proportion.
-    const totalCells = hi - lo + 1;
+    // Compute rightmost visible HC from scroll position. `sw` covers
+    // exactly `(hi - lo + 1)` cells, so the cell-width factor cancels
+    // out in the proportion.
+    const cells = hi - lo + 1;
     const rightPx = scrollEl.scrollLeft + scrollEl.clientWidth;
-    const rightProp = Math.min(1, Math.max(0, rightPx / scrollEl.scrollWidth));
+    const rightProp = Math.min(1, Math.max(0, rightPx / sw));
     const rightmostHc = Math.min(
       hi,
-      Math.max(lo, lo + Math.floor(rightProp * totalCells) - 1),
+      Math.max(lo, lo + Math.floor(rightProp * cells) - 1),
     );
     if (cursor.mode === "live") {
       store.detachHwTraceCursor(rightmostHc);
@@ -523,11 +652,50 @@ const Body: Component = () => {
     }
   };
 
+  const setScrollRef = (el: HTMLDivElement) => {
+    scrollEl = el;
+  };
+  const setContentRef = (el: HTMLDivElement) => {
+    setContentEl(el);
+  };
+  onMount(() => {
+    if (!scrollEl) return;
+    setViewportW(scrollEl.clientWidth);
+    setScrollLeft(scrollEl.scrollLeft);
+    const ro = new ResizeObserver(() => {
+      if (scrollEl) setViewportW(scrollEl.clientWidth);
+    });
+    ro.observe(scrollEl);
+    onCleanup(() => ro.disconnect());
+  });
+
+  // Re-bind a fresh ResizeObserver every time the spacer node changes.
+  // Solid's `<Show>` unmounts the spacer when capture is toggled off
+  // and mounts a new node when it goes back on; without re-binding,
+  // the original RO keeps observing the detached old node and `contentW`
+  // never updates after the first toggle (or — if capture started off
+  // — never gets measured at all). The spacer's width = totalCells *
+  // resolved `1ch`, so its resize ticks also catch browser-zoom shifts.
+  createEffect(() => {
+    const el = contentEl();
+    if (!el) return;
+    const measure = (): void => {
+      const w = el.getBoundingClientRect().width;
+      if (w > 0) setContentW(w);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    onCleanup(() => ro.disconnect());
+  });
+
   // Auto-pin scroll to right edge when the cursor is live. Re-fires
   // whenever data grows (version bump) or the cursor flips live (e.g.,
-  // snap-to-live click / `g` hotkey). Gated on `paused` to match the
-  // instruction-trace section's "frozen during run" UX — auto-scrolling
-  // each tick during run would compete with the user's mid-run scroll.
+  // snap-to-live click / `g` hotkey). Sync-reads spacer width + viewport
+  // and updates the reactive signals FIRST so virtualWindow / emitBounds
+  // recompute against the just-rendered spacer (without this the RO is
+  // one frame behind the version bump and the first paint after pause
+  // computes its window against the OLD contentW).
   createEffect(() => {
     store.hwTraceVersion();
     const mode = store.cursors.hwTrace.mode;
@@ -535,32 +703,39 @@ const Body: Component = () => {
     queueMicrotask(() => {
       if (!scrollEl) return;
       if (mode !== "live") return;
-      scrollEl.scrollLeft = scrollEl.scrollWidth;
+      const el = contentEl();
+      const sw = el ? el.getBoundingClientRect().width : scrollEl.scrollWidth;
+      const cw = scrollEl.clientWidth;
+      setContentW(sw);
+      setViewportW(cw);
+      const newLeft = Math.max(0, sw - cw);
+      setScrollLeft(newLeft);
+      scrollEl.scrollLeft = newLeft;
     });
   });
 
   return (
-    <div
-      class="hwt-body"
-      ref={(el) => {
-        scrollEl = el;
-      }}
-      onScroll={onScroll}
-    >
+    <div class="hwt-body" ref={setScrollRef} onScroll={onScroll}>
       {/* Capture ON: rows render even when the ring is empty so the
-          user can assert input pins before the first edge (REQ §6.4).
+          user can assert input pins before the first edge.
           Capture OFF: hide the row column entirely — there's nothing to
           assert toward, and the muted status line carries the message
-          on its own. The empty status line still shows under capture-
-          ON when the ring has no transitions yet. */}
-      <Show when={store.hwTraceMode() === "disabled"}>
+          on its own. */}
+      <Show when={!store.hwTraceCapture()}>
         <span class="hwt-body-status muted">{STR.hwTrace.bodyDisabled}</span>
       </Show>
-      <Show when={store.hwTraceMode() === "ring"}>
-        <Show when={!hasData()}>
-          <span class="hwt-body-status muted">{STR.hwTrace.bodyEmpty}</span>
-        </Show>
-        <div class="hwt-content">
+      <Show when={store.hwTraceCapture()}>
+        <div
+          class="hwt-content"
+          ref={setContentRef}
+          style={{
+            // Inherited by .hwt-row-waveform (spacer width) and
+            // .hwt-row-glyphs (translateX offset) so each row doesn't
+            // need its own inline style.
+            "--hwt-cells": String(totalCells()),
+            "--hwt-first": String(virtualWindow().first),
+          }}
+        >
           <div class="hwt-gridlines" aria-hidden="true">
             <For each={m1Starts()}>
               {(offset) => (
@@ -575,8 +750,8 @@ const Body: Component = () => {
             {(name) => (
               <SignalRow
                 signal={name}
-                windowLo={renderBounds().lo}
-                windowHi={renderBounds().hi}
+                emitLo={emitBounds().lo}
+                emitHi={emitBounds().hi}
                 row={rowData()[name]}
                 dimMask={name === "addr" ? refreshMask() : undefined}
               />

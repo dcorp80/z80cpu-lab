@@ -1,5 +1,5 @@
 // Hotkey registry. The registry IS the catalog — there is no second
-// source of truth for the cheat-sheet overlay (DESIGN §6.1).
+// source of truth for the cheat-sheet overlay.
 
 export interface HotkeyBinding {
   /**
@@ -30,7 +30,7 @@ export function createHotkeyRegistry(): HotkeyRegistry {
   const bindings: HotkeyBinding[] = [];
   return {
     register(b) {
-      // Last-registered wins on conflict (DESIGN §6.1). Detect & warn in
+      // Last-registered wins on conflict. Detect & warn in
       // dev so the post-MVP customization path stays obvious.
       const existing = bindings.findIndex((x) => sameTrigger(x, b));
       if (existing >= 0) {

@@ -1,6 +1,6 @@
 {
   "name": "@dcorp80/z80cpu-explorer",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Visual debugger / tracer for @dcorp80/z80cpu",
   "license": "MIT",
   "author": "dcorp80",
@@ -15,19 +15,20 @@
     "clean": "rm -rf dist node_modules/.vite"
   },
   "dependencies": {
-    "@dcorp80/z80cpu": "^0.1.1",
+    "@dcorp80/z80cpu": "^0.1.2",
     "@dcorp80/z80cpu-debug": "*",
     "@dcorp80/z80cpu-disasm": "*",
-    "solid-js": "^1.9.7"
+    "solid-js": "^1.9.13"
   },
   "devDependencies": {
     "@solidjs/testing-library": "^0.8.10",
-    "@vitest/browser": "^3.2.4",
+    "@vitest/browser": "^4.1.9",
+    "@vitest/browser-playwright": "^4.1.9",
     "fake-indexeddb": "^6.2.5",
-    "happy-dom": "20.8.9",
-    "playwright": "^1.60.0",
-    "vite": "^6.0.7",
-    "vite-plugin-solid": "^2.11.0",
-    "vitest": "^3.0.0"
+    "happy-dom": "20.10.5",
+    "playwright": "^1.61.0",
+    "vite": "^8.0.16",
+    "vite-plugin-solid": "^2.11.12",
+    "vitest": "^4.1.9"
   }
 }

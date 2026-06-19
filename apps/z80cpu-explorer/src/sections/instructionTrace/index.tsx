@@ -4,6 +4,8 @@ import {
   createMemo,
   createSignal,
   Index,
+  onCleanup,
+  onMount,
   Show,
 } from "solid-js";
 import { useStore } from "../../store/index.ts";
@@ -13,9 +15,13 @@ import { STR } from "../../style/strings.ts";
 import { formatHex } from "../../util/hex.ts";
 import { parsePositiveInt } from "../../util/num.ts";
 import type { SectionModule } from "../types.ts";
+import {
+  computeVirtualWindow,
+  VIRTUAL_DEFAULT_ROW_H_PX,
+  VIRTUAL_SPACER_MAX_PX,
+} from "./virtualWindow.ts";
 
-// How many instructions to forward-disassemble after current PC. REQ §6.3:
-// "next ~10–20 instructions". 12 is a comfortable middle.
+// How many instructions to forward-disassemble after current PC: 12 is a comfortable middle.
 const PREVIEW_INSN_COUNT = 12;
 // Max bytes a single Z80 instruction can consume (DDCB d op, DD 21 nn nn,
 // DD 36 d n). Per-iteration the disasm is always handed exactly this many
@@ -33,7 +39,7 @@ const fmt = (n: number): string => n.toLocaleString("en-US");
  * common case and produces no tag. Wasted-prefix M1s (DD/FD followed by
  * another prefix) arrive tagged `"normal"` but with `length === 1` —
  * we synthesize a `"PREFIX"` badge for them so the user sees the
- * pipeline event. DESIGN §3.1 spells out this split.
+ * pipeline event.
  */
 function m1Tag(rec: TraceRecord): string | null {
   if (rec.m1Type === "normal") {
@@ -88,7 +94,7 @@ const Header: Component = () => {
         type="button"
         class="btn"
         onClick={() => store.stepInstructions(1)}
-        disabled={!store.isPaused()}
+        disabled={!store.isPaused() || !store.traceInstructions()}
         title={STR.instructionTrace.stepTooltip}
       >
         {STR.instructionTrace.step}
@@ -100,13 +106,14 @@ const Header: Component = () => {
         value={stepN()}
         onInput={(e) => setStepN(e.currentTarget.value)}
         aria-label={STR.instructionTrace.stepCountLabel}
+        disabled={!store.traceInstructions()}
         size={4}
       />
       <button
         type="button"
         class="btn"
         onClick={onStepN}
-        disabled={!store.isPaused()}
+        disabled={!store.isPaused() || !store.traceInstructions()}
         title={STR.instructionTrace.stepNTooltip}
       >
         {STR.instructionTrace.stepN}
@@ -118,13 +125,9 @@ const Header: Component = () => {
         <input
           type="checkbox"
           aria-label={STR.instructionTrace.captureToggleAriaLabel}
-          checked={store.traceRingMode() === "ring"}
-          disabled={!store.isPaused()}
-          onChange={(e) =>
-            store.setTraceRingMode(
-              e.currentTarget.checked ? "ring" : "disabled",
-            )
-          }
+          checked={store.capture()}
+          disabled={!store.isPaused() || !store.traceInstructions()}
+          onChange={(e) => store.setCapture(e.currentTarget.checked)}
         />
         <span class="itrace-capture-mode-label">
           {STR.instructionTrace.captureToggleLabel}
@@ -178,11 +181,8 @@ const FoldedSummary: Component = () => {
     const insns = fmt(store.insnCountThrottled());
     // Mirrors the HW-trace folded summary: "capture: ring/off" surfaces
     // capture state when the section is folded, so the user can see at a
-    // glance that the ring stopped recording (REQ §11).
-    const capture =
-      store.traceRingMode() === "ring"
-        ? STR.instructionTrace.captureModeRing
-        : STR.instructionTrace.captureModeDisabled;
+    // glance that the ring stopped recording.
+    const capture = store.capture();
     const size = store.traceRing.size();
     if (size === 0) {
       return STR.instructionTrace.foldedSummary(pc, status, insns, capture);
@@ -204,6 +204,9 @@ const FoldedSummary: Component = () => {
 
 interface ExecutedRowProps {
   rec: TraceRecord;
+  /** Px offset within the virtualization spacer. Applied as inline
+   *  `top`; CSS pins the row absolutely with the canonical row height. */
+  top: number;
 }
 
 const ExecutedRow: Component<ExecutedRowProps> = (props) => {
@@ -213,7 +216,7 @@ const ExecutedRow: Component<ExecutedRowProps> = (props) => {
   // sits after disasm (was leftmost — growing digit counts shifted
   // the trace visually); m1Type tag stays at the far right.
   return (
-    <div class="itrace-row">
+    <div class="itrace-row" style={{ top: `${props.top}px` }}>
       <span class="itrace-gutter" aria-hidden="true" />
       <span class="itrace-addr">{formatHex(props.rec.startAddr, 4)}</span>
       <span class="itrace-bytes">{formatBytes(props.rec)}</span>
@@ -355,12 +358,23 @@ const Body: Component = () => {
   const store = useStore();
   let scrollEl: HTMLDivElement | undefined;
 
+  // Virtualization state: viewport metrics drive which slice of the
+  // (potentially massive) Executed log is mounted. With tens of
+  // thousands of rows in the ring, mounting all of them stalls layout
+  // every paused step.
+  // `scrollTop` updates from `onScroll`; `viewportH` from a ResizeObserver
+  // on the scroll container; `rowH` is read once from the CSS custom
+  // property `--itrace-row-h` on mount.
+  const [scrollTop, setScrollTop] = createSignal(0);
+  const [viewportH, setViewportH] = createSignal(0);
+  const [rowH, setRowH] = createSignal(VIRTUAL_DEFAULT_ROW_H_PX);
+
   // Records snapshot. Two gates work together:
   //   1. Subscribe to the throttled version so we don't allocate a new
   //      array (and trigger <Index> diff) on every push during run.
   //   2. When status is not paused, return the previous snapshot
   //      unchanged. The body is frozen during run (per the user's
-  //      directive and REQ §7.5) — rebuilding 10k entries every frame
+  //      — rebuilding 10k entries every frame
   //      starves rAF when the ring is full.
   // On pause-edge: throttle flushes (store writes the current ring
   // version), status flips to paused, the memo re-runs, and the body
@@ -389,6 +403,13 @@ const Body: Component = () => {
   // T1_0 and T3_0.
   const currentLine = createMemo<CurrentLine | null>(() => {
     if (store.status() !== "paused") return null;
+    // When tracing is off dbg.enabled is false → `dbg.curr` never refreshes,
+    // so the snapshot the store grabbed on the last pause is stale. Suppress
+    // the row rather than render a zero/garbage address. Capture (the ring
+    // push) is orthogonal — the in-flight curr is fresh whenever tracing
+    // is on, regardless of whether each completed instruction is being
+    // pushed into the ring.
+    if (!store.traceInstructions()) return null;
     const cur = store.currentInstruction();
     if (!cur) return null;
     // Disasm tolerates short input: `readN` / `readNN` return
@@ -411,10 +432,10 @@ const Body: Component = () => {
   });
 
   // Preview origin: in-flight `nextPc` (which the dbg keeps meaningful
-  // at all times). When there's no in-flight (pre-first-pause), fall
-  // back to 0 — the explorer's CPU starts at PC=0, so this matches the
-  // cold-boot reality.
-  const previewOrigin = (): number => currentLine()?.nextPc ?? 0;
+  // at all times). Null when tracing is off — dbg.curr is stale so we
+  // have no reliable position; the preview is suppressed in that case.
+  const previewOrigin = (): number | null =>
+    !store.traceInstructions() ? null : (currentLine()?.nextPc ?? 0);
 
   const previewLines = createMemo<PreviewLine[]>((prev) => {
     // Track memVersion so writes (file load, etc.) refresh the preview.
@@ -424,6 +445,8 @@ const Body: Component = () => {
     // execution has stopped.
     if (store.status() !== "paused") return prev;
     const pc0 = previewOrigin();
+    // No reliable position when capture is off.
+    if (pc0 === null) return [];
     const lines: PreviewLine[] = [];
     let offset = 0;
     for (let i = 0; i < PREVIEW_INSN_COUNT; i++) {
@@ -447,12 +470,62 @@ const Body: Component = () => {
     return lines;
   }, []);
 
+  // Virtualization derivations. `windowRange` maps the scroll position +
+  // viewport to the inclusive-exclusive index range that should be
+  // mounted; `windowSlice` is the record array passed to `<Index>`;
+  // `spacerH` is the spacer's virtual height (drives the scrollbar).
+  // `equals` on windowRange suppresses no-op rerenders: every scroll
+  // event writes scrollTop, but the window only shifts when scrollTop
+  // crosses a rowH boundary — without the predicate, windowSlice and
+  // each row's `top` binding refire 60+ times/sec during smooth scroll.
+  const windowRange = createMemo(
+    () =>
+      computeVirtualWindow(scrollTop(), viewportH(), rowH(), records().length),
+    undefined,
+    { equals: (a, b) => a.first === b.first && a.last === b.last },
+  );
+  const windowSlice = createMemo(() => {
+    const w = windowRange();
+    return records().slice(w.first, w.last);
+  });
+  // Clamp to Chrome's max element height. The current ring cap (10 000
+  // × 20 px) is nowhere near, but a future cap bump above ~1.6 M rows
+  // would silently desync the scrollbar from the window math.
+  const spacerH = createMemo(() =>
+    Math.min(records().length * rowH(), VIRTUAL_SPACER_MAX_PX),
+  );
+
+  // Ref captures the element; measurement runs in onMount so the
+  // initial signal writes (rowH/scrollTop/viewportH) don't trigger a
+  // mid-render re-flow. ResizeObserver keeps viewportH live for section
+  // unfold, body resize, and font-size changes via zoom.
+  const setScrollRef = (el: HTMLDivElement) => {
+    scrollEl = el;
+  };
+  onMount(() => {
+    if (!scrollEl) return;
+    const cssRowH = getComputedStyle(scrollEl)
+      .getPropertyValue("--itrace-row-h")
+      .trim();
+    const parsed = Number.parseFloat(cssRowH);
+    if (Number.isFinite(parsed) && parsed > 0) setRowH(parsed);
+    setScrollTop(scrollEl.scrollTop);
+    setViewportH(scrollEl.clientHeight);
+    const ro = new ResizeObserver(() => {
+      if (!scrollEl) return;
+      setViewportH(scrollEl.clientHeight);
+    });
+    ro.observe(scrollEl);
+    onCleanup(() => ro.disconnect());
+  });
+
   // Scroll handling. On a live cursor we keep the scrollTop pinned to
   // the bottom of the executed log so new rows enter the viewport
   // naturally. User scroll-back detaches the cursor; the snap button
-  // returns to live + repins.
+  // returns to live + repins. Also feeds the virtualization window.
   const onScroll = () => {
     if (!scrollEl) return;
+    setScrollTop(scrollEl.scrollTop);
     const atBottom =
       scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight <
       SCROLL_PIN_EPSILON_PX;
@@ -489,7 +562,14 @@ const Body: Component = () => {
     queueMicrotask(() => {
       if (!scrollEl) return;
       if (mode !== "live") return;
-      scrollEl.scrollTop = scrollEl.scrollHeight;
+      // Update the reactive scrollTop FIRST so windowRange/Slice
+      // recompute and rows reposition synchronously, then commit the
+      // imperative scroll. Otherwise the browser may paint with the
+      // new spacer height + old row positions (a blank gap at the
+      // bottom) before the async `scroll` event reaches onScroll.
+      const newTop = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+      setScrollTop(newTop);
+      scrollEl.scrollTop = newTop;
     });
   });
 
@@ -498,15 +578,9 @@ const Body: Component = () => {
       <div class="itrace-section-label">
         {STR.instructionTrace.executedHeading}
       </div>
-      <div
-        class="itrace-executed"
-        ref={(el) => {
-          scrollEl = el;
-        }}
-        onScroll={onScroll}
-      >
+      <div class="itrace-executed" ref={setScrollRef} onScroll={onScroll}>
         <Show
-          when={store.traceRingMode() === "ring"}
+          when={store.capture()}
           fallback={
             <span class="muted">{STR.instructionTrace.executedDisabled}</span>
           }
@@ -517,9 +591,19 @@ const Body: Component = () => {
               <span class="muted">{STR.instructionTrace.emptyExecuted}</span>
             }
           >
-            <Index each={records()}>
-              {(rec) => <ExecutedRow rec={rec()} />}
-            </Index>
+            <div
+              class="itrace-virt-spacer"
+              style={{ height: `${spacerH()}px` }}
+            >
+              <Index each={windowSlice()}>
+                {(rec, i) => (
+                  <ExecutedRow
+                    rec={rec()}
+                    top={(windowRange().first + i) * rowH()}
+                  />
+                )}
+              </Index>
+            </div>
           </Show>
         </Show>
       </div>
@@ -541,15 +625,21 @@ const Body: Component = () => {
         <span class="itrace-section-label">
           {STR.instructionTrace.previewHeading}
         </span>
-        <span class="itrace-pc">
-          {formatHex(currentLine() === null ? 0 : currentLine().nextPc, 4)}
-        </span>
+        {/* `Show when={0}` is falsy — would hide the address at cold boot
+            (PC=0 is a valid origin). Explicit null check instead. */}
+        <Show when={previewOrigin() !== null}>
+          <span class="itrace-pc">{formatHex(previewOrigin() ?? 0, 4)}</span>
+        </Show>
       </div>
       <div class="itrace-preview">
         <Show
           when={previewLines().length > 0}
           fallback={
-            <span class="muted">{STR.instructionTrace.previewEmpty}</span>
+            <span class="muted">
+              {store.traceInstructions()
+                ? STR.instructionTrace.previewEmpty
+                : STR.instructionTrace.previewTrackingOff}
+            </span>
           }
         >
           <Index each={previewLines()}>

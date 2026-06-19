@@ -47,7 +47,7 @@ function unTri(v: Tri): 0 | 1 | undefined {
 /**
  * Record a `BusSample` the way production records the raw bus: splits the
  * sample's `nNMI` out (the CPU bus surface has none — it's injected
- * separately, DESIGN §2.1) and de-normalizes tristate strobes back to
+ * separately) and de-normalizes tristate strobes back to
  * `undefined` so `record` re-normalizes them identically.
  */
 export function recordSample(

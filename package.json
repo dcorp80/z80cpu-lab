@@ -21,8 +21,8 @@
     "bench": "npm test -w @dcorp80/z80cpu-bench"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.4.15",
-    "@types/node": "^25.9.1",
+    "@biomejs/biome": "^2.5.0",
+    "@types/node": "^25.9.3",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3"
   }

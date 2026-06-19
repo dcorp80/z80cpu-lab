@@ -1,31 +1,33 @@
-// HW-trace ring buffer — per-position-snapshot model (REQ §6.4, DESIGN §3.2).
+// HW-trace ring buffer — per-snapshot model.
 //
-// Each chunk holds an array of full bus snapshots in HC-ascending order;
-// each snapshot is the complete bus state at one HC. The recorder
-// (boot.tsx's postEdge wrapper) calls `record(cpu.bus, nNMI, hc)` once per
-// loop edge — reading the live bus directly, no intermediate copy; the
-// buffer:
+// One flat ring of `capacity` snapshots; no internal chunk segmentation.
+// `capacity` is required to be a power of two so the hot-path advance
+// wraps with `& mask` instead of a runtime modulo. The recorder
+// (boot.tsx's postEdge wrapper) calls `record(cpu.bus, nNMI, hc)` once
+// per loop edge — reading the live bus directly, no intermediate copy:
 //
-//   - First record into a fresh chunk → snapshot stored at position 0.
+//   - First record → snapshot stored at slot 0; head=tail=0, size=1.
 //   - No-change record → no advance, no write.
-//   - State-change record → advance pointer, store new snapshot.
-//   - Position past chunkSize → rotate to next chunk in the ring (head
-//     advances, oldest chunk evicted if size === ringChunks).
+//   - State-change record → head advances by one (mask-wrapped); when
+//     the ring is full the oldest snapshot is evicted by advancing tail.
 //
-// Chunks are entirely decoupled from rAF frames — chunk boundaries are
-// driven by record volume, not time. Step mode accumulates into one
-// chunk across many steps; full-speed run fills a chunk in milliseconds.
-//
-// Physical layout per chunk: one Float64Array for HCs, plus three
-// parallel TypedArrays indexed by position:
-//   - `state` (Uint32Array) — every 1-bit and tri-bit signal AND the
+// Physical layout: four parallel TypedArrays indexed by ring slot.
+//   - `_hcs` (Float64Array) — HC stamp (exact integers up to 2^53).
+//   - `_state` (Uint32Array) — every 1-bit and tri-bit signal AND the
 //     addr/data tristate flags packed into a single integer (layout
 //     inlined in `record()` below). One compare per record replaces
 //     fifteen TypedArray reads on the hot path.
-//   - `addr` (Uint16Array), `data` (Uint8Array) — bus values. During a
+//   - `_addr` (Uint16Array), `_data` (Uint8Array) — bus values. During a
 //     bus grant the value is `undefined`; the corresponding slot is left
-//     stale and the tristate flag in `state` selects between "use slot"
+//     stale and the tristate flag in `_state` selects between "use slot"
 //     and "report undefined" on read.
+//
+// Hot path is one `_state[head]` compare and (on change) four TypedArray
+// writes — no chunk-object dereference, no per-call modulo, no branch
+// for chunk rotation. Records are logically HC-ascending when walked
+// `[tail, tail+1, …, tail+size-1] & mask`; physical contiguity is broken
+// only by the single wrap point between `head` and `tail` once the ring
+// has filled at least once.
 //
 // HC=0 is never recorded — the very first `record(curr, hc)` call comes
 // from the loop AFTER its first clockEdge with hc ≥ 1.
@@ -46,7 +48,7 @@ export const OUTPUT_TRI_SIGNALS = ["nMREQ", "nIORQ", "nRD", "nWR"] as const;
 
 /** CPU input pins (always 0|1 on the sample side; the bus surface only
  *  exposes nINT/nRESET/nBUSRQ/nWAIT — nNMI is sampled from the bus's
- *  authoritative pin state per DESIGN §2.1). Aliased to `INPUT_PIN_NAMES`
+ *  authoritative pin state). Aliased to `INPUT_PIN_NAMES`
  *  so the trace's signal list and the bus's user-controllable pin set
  *  stay one definition; if a new input pin lands on the bus it auto-
  *  appears in the trace's canonical order without touching this file. */
@@ -77,7 +79,7 @@ export const ALL_SIGNALS: readonly SignalName[] = [
 /**
  * One bus snapshot: full state of every signal at a given HC. Produced
  * by `rangeView` for the renderer and (in M8c) the VCD writer. The hot
- * `record()` path never builds these — it reads/writes the chunk's
+ * `record()` path never builds these — it reads/writes the ring's
  * TypedArrays directly.
  */
 export interface BusSnapshotRecord {
@@ -114,7 +116,7 @@ export type BusSample = Omit<BusSnapshotRecord, "hc">;
  * zero intermediate copy. Strobes are `0 | 1 | undefined` here (the CPU's
  * native tristate encoding); `record` normalizes `undefined → Tri 2`.
  * `nNMI` is intentionally absent — it isn't on the CPU bus surface and is
- * injected as a separate `record` argument (DESIGN §2.1).
+ * injected as a separate `record` argument.
  */
 export interface BusReadout {
   nM1: 0 | 1;
@@ -131,46 +133,6 @@ export interface BusReadout {
   nWAIT: 0 | 1;
   addr: number | undefined;
   data: number | undefined;
-}
-
-// ── Storage ──────────────────────────────────────────────────────
-
-/**
- * One chunk = `chunkSize` positions, each holding a full bus snapshot.
- * Parallel arrays are indexed by position. `pointer` is the index of the
- * **last** written position; `-1` means the chunk is empty. Valid
- * positions are `[0..pointer]`.
- *
- * Recycling on rotation overwrites from position 0; we don't clear
- * trailing data because readers honor `pointer` as the bound.
- */
-class FrameChunk {
-  pointer = -1;
-  readonly hcs: Float64Array;
-  /** Every 1-bit / tri-bit signal plus the addr/data tristate flags
-   *  packed into one integer per position. Pack layout inlined in
-   *  `HwTraceBuffer.record`; `readSnapshot` inlines the inverse. */
-  readonly state: Uint32Array;
-  /** Bus values. Slots are only written when the bus is driven; during
-   *  a tristate the slot is left stale and `state`'s addrTri/dataTri
-   *  bit selects "report undefined" on read. */
-  readonly addr: Uint16Array;
-  readonly data: Uint8Array;
-
-  constructor(chunkSize: number) {
-    // hcs uses Float64 so we never wrap at 2^32 HCs (~3.5 min at 20MHz
-    // HC). Float64 holds exact integers up to 2^53 — effectively
-    // unlimited. The 8-byte cost is tiny at MVP chunk sizes.
-    this.hcs = new Float64Array(chunkSize);
-    this.state = new Uint32Array(chunkSize);
-    this.addr = new Uint16Array(chunkSize);
-    this.data = new Uint8Array(chunkSize);
-  }
-
-  reset(): void {
-    this.pointer = -1;
-    // Buffers stay — `pointer` is the validity bound.
-  }
 }
 
 // ── Packed bus state ─────────────────────────────────────────────
@@ -197,9 +159,15 @@ class FrameChunk {
 // boundaries on every edge. `readSnapshot` (cold path, used by
 // `rangeView` / `latestBefore`) keeps its own inline-inverse for clarity.
 
-function readSnapshot(chunk: FrameChunk, pos: number): BusSnapshotRecord {
-  // Unpack in reverse of packBusState — LSB first.
-  let st = chunk.state[pos];
+function readSnapshot(
+  hcs: Float64Array,
+  state: Uint32Array,
+  addrArr: Uint16Array,
+  dataArr: Uint8Array,
+  idx: number,
+): BusSnapshotRecord {
+  // Unpack in reverse of the packing in `record()` — LSB first.
+  let st = state[idx];
   const dataTri = (st & 1) as 0 | 1;
   st >>>= 1;
   const addrTri = (st & 1) as 0 | 1;
@@ -231,7 +199,7 @@ function readSnapshot(chunk: FrameChunk, pos: number): BusSnapshotRecord {
   const nM1 = st as 0 | 1;
 
   return {
-    hc: chunk.hcs[pos],
+    hc: hcs[idx],
     nM1,
     nRFSH,
     nHALT,
@@ -245,71 +213,77 @@ function readSnapshot(chunk: FrameChunk, pos: number): BusSnapshotRecord {
     nRESET,
     nBUSRQ,
     nWAIT,
-    addr: addrTri ? undefined : chunk.addr[pos],
-    data: dataTri ? undefined : chunk.data[pos],
+    addr: addrTri ? undefined : addrArr[idx],
+    data: dataTri ? undefined : dataArr[idx],
   };
 }
 
 // ── Buffer ───────────────────────────────────────────────────────
 
 export class HwTraceBuffer {
-  private mode: "disabled" | "ring";
-  private readonly chunkSize: number;
-  private readonly ringChunks: number;
-  private readonly chunks: FrameChunk[];
-  /** Current write chunk index. `-1` until the first record. */
+  private enabled: boolean;
+  /** Total ring slots. Power of two — `_mask = _capacity - 1`. */
+  private readonly _capacity: number;
+  /** Bitmask for `& _mask` wrap of the write index. */
+  private readonly _mask: number;
+  /** Parallel ring arrays — pulled into locals on the hot path. */
+  private readonly _hcs: Float64Array;
+  private readonly _state: Uint32Array;
+  private readonly _addr: Uint16Array;
+  private readonly _data: Uint8Array;
+  /** Index of the most recently written slot. `-1` until first record. */
   private head = -1;
-  /** Oldest written chunk index. */
+  /** Index of the oldest valid slot. Meaningful only when `_size > 0`. */
   private tail = 0;
-  /** Chunks containing valid data (`0..chunks.length`). */
+  /** Snapshots containing valid data (`0..capacity`). */
   private _size = 0;
   private _version = 0;
 
   constructor(cfg: HwTraceConfig) {
-    if (!Number.isInteger(cfg.ringChunks) || cfg.ringChunks <= 0) {
+    const cap = cfg.capacity;
+    if (!Number.isInteger(cap) || cap <= 0) {
       throw new RangeError(
-        `HwTraceConfig.ringChunks must be a positive integer: ${cfg.ringChunks}`,
+        `HwTraceConfig.capacity must be a positive integer: ${cap}`,
       );
     }
-    if (!Number.isInteger(cfg.chunkSize) || cfg.chunkSize <= 0) {
+    if ((cap & (cap - 1)) !== 0) {
       throw new RangeError(
-        `HwTraceConfig.chunkSize must be a positive integer: ${cfg.chunkSize}`,
+        `HwTraceConfig.capacity must be a power of two: ${cap}`,
       );
     }
-    this.mode = cfg.mode;
-    this.chunkSize = cfg.chunkSize;
-    this.ringChunks = cfg.ringChunks;
-    // Pre-allocate the full ring. No pool/free-list split — head/tail
-    // walk a fixed array and overwrite on recycle.
-    this.chunks = Array.from(
-      { length: cfg.ringChunks },
-      () => new FrameChunk(cfg.chunkSize),
-    );
+    this.enabled = cfg.enabled;
+    this._capacity = cap;
+    this._mask = cap - 1;
+    // hcs uses Float64 so we never wrap at 2^32 HCs (~3.5 min at 20 MHz).
+    // Float64 holds exact integers up to 2^53 — effectively unlimited.
+    this._hcs = new Float64Array(cap);
+    this._state = new Uint32Array(cap);
+    this._addr = new Uint16Array(cap);
+    this._data = new Uint8Array(cap);
   }
 
   /**
    * Capture the current bus state at the HC stored in `hcBox[0]`,
    * reading straight off the live `bus` readout (`cpu.bus` in
    * production) plus the separately-injected `nNMI` — no intermediate
-   * sample object. Compares against the snapshot at the current write
-   * position; if anything changed, advances and stores a fresh
-   * snapshot (rotating chunks on overflow). `mode === 'disabled'`
-   * makes this a no-op before touching the bus, so disabled capture
-   * costs one comparison per edge.
+   * sample object. Compares against the snapshot at the current head;
+   * if anything changed, advances head by one (mask-wrapped) and
+   * stores a fresh snapshot, evicting the oldest record when the ring
+   * is full. `enabled === false` makes this a no-op before touching
+   * the bus, so disabled capture costs one comparison per edge.
    *
    * `hcBox` is passed by reference so the HC stamp travels from the
-   * runloop to the `chunk.hcs[pos] = hcBox[0]` write as a pure
+   * runloop to the `_hcs[idx] = hcBox[0]` write as a pure
    * Float64Array→Float64Array copy. A plain `hc: number` argument
    * would materialize a HeapNumber on the call boundary once HC
    * exceeds V8's SMI range (~2.1B / ~52s at full speed). Tests can
    * wrap a one-shot box via `recordSample` in `busSampleTestUtil`.
    */
   record(bus: BusReadout, nNMI: 0 | 1, hcBox: ReadonlyHcBox): void {
-    if (this.mode === "disabled") return;
+    if (!this.enabled) return;
 
-    // Read addr/data once into locals — used by both the packing below
-    // and the equality / write paths. Avoids re-reading bus properties
-    // multiple times across what used to be three function boundaries.
+    // Read addr/data and the tristate strobes once into locals — used by
+    // both the packing below and the equality / write paths.
     const addr = bus.addr;
     const data = bus.data;
     const nMREQ = bus.nMREQ;
@@ -317,7 +291,7 @@ export class HwTraceBuffer {
     const nRD = bus.nRD;
     const nWR = bus.nWR;
 
-    // Inline pack (was packBusState). 19-bit result stays SMI.
+    // Inline pack. 19-bit result stays SMI.
     let packedState: number = bus.nM1;
     packedState = (packedState << 1) | bus.nRFSH;
     packedState = (packedState << 1) | bus.nHALT;
@@ -334,86 +308,78 @@ export class HwTraceBuffer {
     packedState = (packedState << 1) | (addr === undefined ? 1 : 0);
     packedState = (packedState << 1) | (data === undefined ? 1 : 0);
 
-    if (this.head < 0) {
-      // First-ever record — open chunk[0] and store at position 0.
+    // Hoist the TypedArrays into locals — one property dereference per
+    // record instead of per-write.
+    const stateArr = this._state;
+    const hcsArr = this._hcs;
+    const addrArr = this._addr;
+    const dataArr = this._data;
+
+    const head = this.head;
+    if (head < 0) {
+      // First-ever record — claim slot 0; tail is already 0.
       this.head = 0;
       this._size = 1;
-      const first = this.chunks[0];
-      first.pointer = 0;
-      first.hcs[0] = hcBox[0];
-      first.state[0] = packedState;
+      hcsArr[0] = hcBox[0];
+      stateArr[0] = packedState;
       // Tristate slots are left stale on purpose — `readSnapshot`
-      // consults the addrTri/dataTri bits in `state` and returns
+      // consults the addrTri/dataTri bits in `_state` and returns
       // `undefined` then.
-      if (addr !== undefined) first.addr[0] = addr;
-      if (data !== undefined) first.data[0] = data;
+      if (addr !== undefined) addrArr[0] = addr;
+      if (data !== undefined) dataArr[0] = data;
       this._version++;
       return;
     }
 
-    const chunk = this.chunks[this.head];
-    const pos = chunk.pointer;
-
-    // Inline equality check (was snapshotEquals). Nothing-changed →
+    // Inline equality check against the current head. Nothing-changed →
     // no record, no version bump.
     if (
-      chunk.state[pos] === packedState &&
-      (addr === undefined || chunk.addr[pos] === addr) &&
-      (data === undefined || chunk.data[pos] === data)
+      stateArr[head] === packedState &&
+      (addr === undefined || addrArr[head] === addr) &&
+      (data === undefined || dataArr[head] === data)
     ) {
       return;
     }
 
-    const newPos = pos + 1;
-    if (newPos >= this.chunkSize) {
-      // Overflow — rotate to next chunk in the ring.
-      this.head = (this.head + 1) % this.chunks.length;
-      if (this._size < this.chunks.length) {
-        this._size++;
-      } else {
-        // Ring full — evict oldest by advancing tail.
-        this.tail = (this.tail + 1) % this.chunks.length;
-      }
-      const newChunk = this.chunks[this.head];
-      newChunk.pointer = 0;
-      newChunk.hcs[0] = hcBox[0];
-      newChunk.state[0] = packedState;
-      if (addr !== undefined) newChunk.addr[0] = addr;
-      if (data !== undefined) newChunk.data[0] = data;
+    // Mask-wrap advance. `_mask = capacity - 1`, capacity power-of-two.
+    const mask = this._mask;
+    const newHead = (head + 1) & mask;
+    if (this._size < this._capacity) {
+      this._size++;
     } else {
-      chunk.pointer = newPos;
-      chunk.hcs[newPos] = hcBox[0];
-      chunk.state[newPos] = packedState;
-      if (addr !== undefined) chunk.addr[newPos] = addr;
-      if (data !== undefined) chunk.data[newPos] = data;
+      // Ring full — evict oldest by advancing tail.
+      this.tail = (this.tail + 1) & mask;
     }
+    this.head = newHead;
+    hcsArr[newHead] = hcBox[0];
+    stateArr[newHead] = packedState;
+    if (addr !== undefined) addrArr[newHead] = addr;
+    if (data !== undefined) dataArr[newHead] = data;
     this._version++;
   }
 
   /**
    * Yields snapshot records with `lo <= hc <= hi` in ascending HC order.
-   * Cold path — allocates one record per yield. Callers walking large
-   * ranges should be prepared for that.
+   * Cold path — allocates one record per yield. Records are
+   * HC-ascending along the logical `[tail, …, tail+size-1] & mask`
+   * walk; the physical array is broken by at most one wrap point.
    */
   *rangeView(lo: number, hi: number): Iterable<BusSnapshotRecord> {
     if (hi < lo) return;
-    if (this._size === 0) return;
-    for (let i = 0; i < this._size; i++) {
-      const idx = (this.tail + i) % this.chunks.length;
-      const chunk = this.chunks[idx];
-      if (chunk.pointer < 0) continue;
-      // Each chunk's positions are HC-ascending; positions are densely
-      // packed in `[0..pointer]`.
-      const firstHc = chunk.hcs[0];
-      const lastHc = chunk.hcs[chunk.pointer];
-      if (lastHc < lo) continue; // entirely before window
-      if (firstHc > hi) return; // entirely past window (and so are later chunks)
-      for (let p = 0; p <= chunk.pointer; p++) {
-        const hc = chunk.hcs[p];
-        if (hc < lo) continue;
-        if (hc > hi) return;
-        yield readSnapshot(chunk, p);
-      }
+    const size = this._size;
+    if (size === 0) return;
+    const mask = this._mask;
+    const tail = this.tail;
+    const hcsArr = this._hcs;
+    const stateArr = this._state;
+    const addrArr = this._addr;
+    const dataArr = this._data;
+    for (let i = 0; i < size; i++) {
+      const idx = (tail + i) & mask;
+      const hc = hcsArr[idx];
+      if (hc < lo) continue;
+      if (hc > hi) return;
+      yield readSnapshot(hcsArr, stateArr, addrArr, dataArr, idx);
     }
   }
 
@@ -423,51 +389,45 @@ export class HwTraceBuffer {
    * so this single record carries the carry-forward value for every
    * signal — the renderer seeds its pre-window levels from this instead
    * of walking (and allocating a record per) snapshot from the oldest.
-   * Cold path, but allocates exactly one record: the scan over earlier
-   * positions only reads TypedArrays.
+   * Cold path, but allocates exactly one record: the linear scan only
+   * reads TypedArrays.
    */
   latestBefore(hc: number): BusSnapshotRecord | undefined {
-    if (this._size === 0) return undefined;
-    let foundChunk = -1;
-    let foundPos = -1;
-    for (let i = 0; i < this._size; i++) {
-      const idx = (this.tail + i) % this.chunks.length;
-      const chunk = this.chunks[idx];
-      if (chunk.pointer < 0) continue;
-      // Chunks are globally HC-ascending: once a chunk starts at/after
-      // `hc`, it and every later chunk are out of range.
-      if (chunk.hcs[0] >= hc) break;
-      // Walk back to the last position with hcs[p] < hc. A later chunk
-      // that also straddles overwrites this, keeping the latest match.
-      let p = chunk.pointer;
-      while (p >= 0 && chunk.hcs[p] >= hc) p--;
-      if (p >= 0) {
-        foundChunk = idx;
-        foundPos = p;
-      }
+    const size = this._size;
+    if (size === 0) return undefined;
+    const mask = this._mask;
+    const tail = this.tail;
+    const hcsArr = this._hcs;
+    // Records are HC-ascending along the logical `[tail, tail+size)` walk
+    // (the one physical wrap point falls between tail and head). Binary-
+    // search for the first logical index whose HC is >= target; the
+    // predecessor (if any) is the answer.
+    let lo = 0;
+    let hi = size;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (hcsArr[(tail + mid) & mask] < hc) lo = mid + 1;
+      else hi = mid;
     }
-    if (foundChunk < 0) return undefined;
-    return readSnapshot(this.chunks[foundChunk], foundPos);
+    if (lo === 0) return undefined;
+    const foundIdx = (tail + lo - 1) & mask;
+    return readSnapshot(hcsArr, this._state, this._addr, this._data, foundIdx);
   }
 
   oldestHc(): number | undefined {
-    if (this._size === 0) return undefined;
-    const chunk = this.chunks[this.tail];
-    return chunk.pointer < 0 ? undefined : chunk.hcs[0];
+    return this._size === 0 ? undefined : this._hcs[this.tail];
   }
 
   newestHc(): number | undefined {
-    if (this.head < 0) return undefined;
-    const chunk = this.chunks[this.head];
-    return chunk.pointer < 0 ? undefined : chunk.hcs[chunk.pointer];
+    return this.head < 0 ? undefined : this._hcs[this.head];
   }
 
   /**
-   * True when the ring holds no records — the head/tail span is empty
-   * (nothing ever written, or `clear()`ed). The display uses this to
-   * render nothing rather than carrying a stale level across a window a
-   * later run advanced past ("dead lines"); the store uses it to decide
-   * whether disabling capture should offer to save before zeroing.
+   * True when the ring holds no records (nothing ever written, or
+   * `clear()`ed). The display uses this to render nothing rather than
+   * carrying a stale level across a window a later run advanced past
+   * ("dead lines"); the store uses it to decide whether disabling
+   * capture should offer to save before zeroing.
    */
   isEmpty(): boolean {
     return this._size === 0;
@@ -478,54 +438,39 @@ export class HwTraceBuffer {
   }
 
   /**
-   * Empty the buffer. All chunks return to the "fresh" state and the
-   * next `record()` reopens chunk[0]. Called by `zeroHC` (REQ §7.3 —
-   * time-stamped buffers clear on zero-HC).
+   * Empty the ring. Slot data is left in place — `head`/`tail`/`_size`
+   * are the validity bound and the next `record()` starts cleanly at
+   * slot 0. Called by `zeroHC` (time-stamped buffers clear
+   * on zero-HC).
    */
   clear(): void {
-    for (const c of this.chunks) c.reset();
     this.head = -1;
     this.tail = 0;
     this._size = 0;
     this._version++;
   }
 
-  setMode(mode: "disabled" | "ring"): void {
-    if (this.mode === mode) return;
-    this.mode = mode;
+  setEnabled(v: boolean): void {
+    if (this.enabled === v) return;
+    this.enabled = v;
     // History captured before the toggle stays in the ring — re-enabling
     // resumes appending past it.
     this._version++;
   }
 
-  getMode(): "disabled" | "ring" {
-    return this.mode;
+  getEnabled(): boolean {
+    return this.enabled;
   }
 
   // ── Diagnostics ──
 
-  ringCapacity(): number {
-    return this.ringChunks;
+  /** Total ring slots (the cap on retained snapshots). */
+  capacity(): number {
+    return this._capacity;
   }
 
-  chunkCapacity(): number {
-    return this.chunkSize;
-  }
-
-  /** Number of chunks containing valid data. */
+  /** Snapshots currently retained (0..capacity). */
   size(): number {
     return this._size;
-  }
-
-  /** Total number of recorded snapshots across all live chunks. */
-  recordedCount(): number {
-    if (this._size === 0) return 0;
-    let n = 0;
-    for (let i = 0; i < this._size; i++) {
-      const idx = (this.tail + i) % this.chunks.length;
-      const chunk = this.chunks[idx];
-      if (chunk.pointer >= 0) n += chunk.pointer + 1;
-    }
-    return n;
   }
 }

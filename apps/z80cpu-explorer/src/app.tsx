@@ -2,7 +2,7 @@ import { type Component, For } from "solid-js";
 import { SectionFrame } from "./sections/frame.tsx";
 import { useStore } from "./store/index.ts";
 
-// The App-shell section (REQ §11) carries the app name as its section
+// The App-shell section carries the app name as its section
 // heading, so we don't render a separate page <h1> — that would print
 // the same text twice (once as the page heading and once as the
 // section heading directly below it) and create a duplicate landmark

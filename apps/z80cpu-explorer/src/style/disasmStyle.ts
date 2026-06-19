@@ -1,8 +1,8 @@
 // Disasm output post-processor — strips the `h` suffix the upstream
 // `@dcorp80/z80cpu-disasm` STYLE object appends (e.g. `FFh`, `1234h`) so
-// the explorer renders bare hex per REQ §7.1 and [[feedback_hex_display]].
+// the explorer renders bare hex (see [[feedback_hex_display]]).
 //
-// This is a temporary boundary — DESIGN §7 / milestone 11 swap to a
+// This is a temporary boundary — milestone 11 swaps to a
 // proper STYLE override in the disasm package itself, at which point
 // this helper goes away and consumers call `disasm()` directly.
 

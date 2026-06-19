@@ -51,7 +51,7 @@ describe("createAppStore", () => {
   it("seeds the shipped default section order when storage is empty", async () => {
     const { store } = await freshStore();
     expect(store.sections.map((s) => s.id)).toEqual(defaultSectionIds());
-    // App-shell (REQ §11) opts in to defaultFolded; every other section
+    // App-shell opts in to defaultFolded; every other section
     // is unfolded out of the box.
     expect(
       store.sections.every((s) =>
@@ -77,7 +77,7 @@ describe("createAppStore", () => {
     // Stored ids keep their relative order; remaining registry ids are
     // injected at their DEFAULT_SECTION_ORDER position rather than
     // appended at the end. That way new sections like the App-shell
-    // (REQ §11) land at the top for upgrading users, not the bottom.
+    // land at the top for upgrading users, not the bottom.
     const ids = store.sections.map((s) => s.id);
     expect(store.sections.length).toBe(defaultSectionIds().length);
     // memory's persisted fold + config survive intact.
@@ -248,11 +248,11 @@ describe("createAppStore", () => {
       expect(store.traceRingVersion()).toBeGreaterThan(v0);
     });
 
-    it("trace ring — setTraceRingMode('disabled') skips push but keeps insnCount ticking", async () => {
+    it("trace ring — setCapture(false) skips push but keeps insnCount ticking", async () => {
       const { store, loop } = await freshStore();
-      expect(store.traceRingMode()).toBe("ring");
-      store.setTraceRingMode("disabled");
-      expect(store.traceRingMode()).toBe("disabled");
+      expect(store.capture()).toBe(true);
+      store.setCapture(false);
+      expect(store.capture()).toBe(false);
       const c0 = store.insnCount();
       const v0 = store.traceRingVersion();
       loop.emitInstruction(mkTrace({ startAddr: 0x200 }));
@@ -263,7 +263,7 @@ describe("createAppStore", () => {
       expect(store.traceRingVersion()).toBe(v0);
       expect(store.insnCount()).toBe(c0 + 2);
       // Re-enabling resumes capture for subsequent instructions.
-      store.setTraceRingMode("ring");
+      store.setCapture(true);
       loop.emitInstruction(mkTrace({ startAddr: 0x202 }));
       expect(store.traceRing.size()).toBe(1);
       expect(store.traceRingVersion()).toBeGreaterThan(v0);
@@ -278,47 +278,39 @@ describe("createAppStore", () => {
       expect(store.cursors.instructionTrace.mode).toBe("detached");
 
       const vBefore = store.traceRingVersion();
-      store.setTraceRingMode("disabled");
+      store.setCapture(false);
       expect(store.traceRing.size()).toBe(0);
       expect(store.traceRingVersion()).toBeGreaterThan(vBefore);
       // The detached anchor over an emptied ring is meaningless — snap back.
       expect(store.cursors.instructionTrace).toEqual({ mode: "live" });
     });
 
-    it("trace ring — setTraceRingMode rejects bogus literals at the boundary", async () => {
-      const { store } = await freshStore();
-      expect(() =>
-        store.setTraceRingMode("capture" as unknown as "ring"),
-      ).toThrow(RangeError);
-      expect(store.traceRingMode()).toBe("ring");
-    });
-
-    it("trace ring — setTraceRingMode persists captureMode under section config", async () => {
+    it("trace ring — setCapture persists capture under section config", async () => {
       const { backend, store } = await freshStore();
-      store.setTraceRingMode("disabled");
+      store.setCapture(false);
       await flush();
       const saved = await backend.loadUiState();
       expect(
         saved?.sections.find((s) => s.id === "instructionTrace")?.config,
-      ).toEqual({ captureMode: "disabled" });
-      // And a fresh store reading the same backend boots in "disabled".
+      ).toEqual({ capture: false });
+      // And a fresh store reading the same backend boots with capture off.
       const reloaded = await createAppStore({
         backend,
         loop: makeStubLoop(),
         bus: makeStubBus(),
         dbg: makeStubDbg(),
       });
-      expect(reloaded.traceRingMode()).toBe("disabled");
+      expect(reloaded.capture()).toBe(false);
     });
 
-    it("trace ring — malformed persisted captureMode falls back to 'ring'", async () => {
+    it("trace ring — malformed persisted capture falls back to true", async () => {
       const backend = new MemoryBackend();
       await backend.saveUiState({
         sections: [
           {
             id: "instructionTrace",
             folded: false,
-            config: { captureMode: "garbage" },
+            config: { capture: "garbage" },
           },
         ],
       });
@@ -328,24 +320,24 @@ describe("createAppStore", () => {
         bus: makeStubBus(),
         dbg: makeStubDbg(),
       });
-      expect(store.traceRingMode()).toBe("ring");
+      expect(store.capture()).toBe(true);
     });
 
-    it("trace ring — setTraceRingMode is paused-only; no-ops while running", async () => {
+    it("trace ring — setCapture is paused-only; no-ops while running", async () => {
       const { store, loop } = await freshStore();
       // Build up some history so we can prove the ring DIDN'T get cleared.
       loop.emitInstruction(mkTrace({ startAddr: 0x100 }));
       loop.emitInstruction(mkTrace({ startAddr: 0x101 }));
       expect(store.traceRing.size()).toBe(2);
       store.run();
-      store.setTraceRingMode("disabled");
+      store.setCapture(false);
       // Action no-oped: mode unchanged, ring untouched.
-      expect(store.traceRingMode()).toBe("ring");
+      expect(store.capture()).toBe(true);
       expect(store.traceRing.size()).toBe(2);
       // After pausing, the action takes effect again.
       loop.emitPause({ kind: "user" });
-      store.setTraceRingMode("disabled");
-      expect(store.traceRingMode()).toBe("disabled");
+      store.setCapture(false);
+      expect(store.capture()).toBe(false);
       expect(store.traceRing.size()).toBe(0);
     });
 
@@ -644,7 +636,7 @@ describe("createAppStore", () => {
     });
   });
 
-  describe("memory & IO write actions (M7 — REQ §6.6 / §6.7)", () => {
+  describe("memory & IO write actions (M7)", () => {
     it("setMemByte writes to mem and bumps memVersion when paused", async () => {
       const { store, bus } = await freshStore();
       // Stub loop starts paused — write should land.
@@ -739,7 +731,7 @@ describe("createAppStore", () => {
     });
   });
 
-  describe("IO view mode (REQ §6.7)", () => {
+  describe("IO view mode", () => {
     it("defaults to 16bit on a fresh store", async () => {
       const { store } = await freshStore();
       expect(store.ioViewMode()).toBe("16bit");
@@ -777,7 +769,7 @@ describe("createAppStore", () => {
     });
   });
 
-  describe("IO split RD/WR (REQ §11)", () => {
+  describe("IO split RD/WR", () => {
     it("defaults to false on a fresh store", async () => {
       const { store } = await freshStore();
       expect(store.splitIo()).toBe(false);
@@ -1039,7 +1031,48 @@ describe("createAppStore", () => {
     });
   });
 
-  describe("input pins (M8b, REQ §6.4)", () => {
+  describe("memory column toggles", () => {
+    it("defaults to both columns visible", async () => {
+      const { store } = await freshStore();
+      expect(store.memShowBytes()).toBe(true);
+      expect(store.memShowAscii()).toBe(true);
+    });
+
+    it("setMemShowBytes / setMemShowAscii round-trip through backend", async () => {
+      const { backend, store } = await freshStore();
+      store.setMemShowBytes(false);
+      store.setMemShowAscii(false);
+      expect(store.memShowBytes()).toBe(false);
+      expect(store.memShowAscii()).toBe(false);
+      await flush();
+      const saved = await backend.loadUiState();
+      const cfg = saved?.sections.find((s) => s.id === "memory")?.config;
+      expect(cfg?.showBytes).toBe(false);
+      expect(cfg?.showAscii).toBe(false);
+    });
+
+    it("restores stored toggles on boot; corrupt/missing values fall back to true", async () => {
+      const backend = new MemoryBackend();
+      await backend.saveUiState({
+        sections: [
+          // showBytes explicitly false → off; showAscii missing → on.
+          { id: "memory", folded: false, config: { showBytes: false } },
+          // Corrupt non-boolean must NOT silently disable the column.
+          { id: "io", folded: false, config: { showBytes: "nope" } },
+        ],
+      });
+      const store = await createAppStore({
+        backend,
+        loop: makeStubLoop(),
+        bus: makeStubBus(),
+        dbg: makeStubDbg(),
+      });
+      expect(store.memShowBytes()).toBe(false);
+      expect(store.memShowAscii()).toBe(true);
+    });
+  });
+
+  describe("input pins (M8b)", () => {
     it("seeds inputPins from the bus (all deasserted at construction)", async () => {
       const { store } = await freshStore();
       expect(store.inputPins.nINT).toBe(1);
@@ -1157,7 +1190,7 @@ describe("createAppStore", () => {
         bytes: new Uint8Array([0xaa, 0xbb]),
         loadAddr: 0,
       });
-      // addFile does not load — that's the section's call (REQ §6.1).
+      // addFile does not load — that's the section's call.
       expect(bus.mem[0]).toBe(0xff);
       expect(bus.mem[1]).toBe(0xff);
     });
@@ -1316,7 +1349,7 @@ describe("createAppStore", () => {
       expect(() => store.setFileLoadAddr(id, 1.5)).toThrow(RangeError);
     });
 
-    it("addFile rejects bytes exceeding the 128KB storage cap (REQ §6.1)", async () => {
+    it("addFile rejects bytes exceeding the 128KB storage cap", async () => {
       const { store } = await freshStore();
       const over = new Uint8Array(128 * 1024 + 1);
       expect(() =>
@@ -1371,7 +1404,7 @@ describe("createAppStore", () => {
     });
   });
 
-  describe("cpuState (REQ §6.5)", () => {
+  describe("cpuState", () => {
     it("samples dbg.state() at boot so the section has a value to render", async () => {
       const { store, dbg } = await freshStore();
       dbg.setNext({ pc: 0x1234 });
@@ -1494,7 +1527,7 @@ describe("createAppStore", () => {
     });
   });
 
-  describe("breakpoints (REQ §6.2)", () => {
+  describe("breakpoints", () => {
     it("starts with no breakpoints when storage is empty", async () => {
       const { store } = await freshStore();
       expect(store.breakpoints.length).toBe(0);
@@ -1671,24 +1704,24 @@ describe("createAppStore", () => {
         hwTrace,
       });
       expect(store.hwTrace).toBe(hwTrace);
-      expect(store.hwTraceMode()).toBe("ring");
+      expect(store.hwTraceCapture()).toBe(true);
     });
 
     it("HW trace — default-constructs a buffer when none is provided", async () => {
       const { store } = await freshStore();
       expect(store.hwTrace).toBeInstanceOf(HwTraceBuffer);
-      expect(store.hwTraceMode()).toBe(DEFAULT_HW_TRACE_CONFIG.mode);
+      expect(store.hwTraceCapture()).toBe(DEFAULT_HW_TRACE_CONFIG.enabled);
     });
 
-    it("HW trace — setHwTraceMode flips both buffer and reactive mirror", async () => {
+    it("HW trace — setHwTraceCapture flips both buffer and reactive mirror", async () => {
       const { store } = await freshStore();
-      expect(store.hwTraceMode()).toBe("ring");
-      store.setHwTraceMode("disabled");
-      expect(store.hwTraceMode()).toBe("disabled");
-      expect(store.hwTrace.getMode()).toBe("disabled");
-      store.setHwTraceMode("ring");
-      expect(store.hwTraceMode()).toBe("ring");
-      expect(store.hwTrace.getMode()).toBe("ring");
+      expect(store.hwTraceCapture()).toBe(true);
+      store.setHwTraceCapture(false);
+      expect(store.hwTraceCapture()).toBe(false);
+      expect(store.hwTrace.getEnabled()).toBe(false);
+      store.setHwTraceCapture(true);
+      expect(store.hwTraceCapture()).toBe(true);
+      expect(store.hwTrace.getEnabled()).toBe(true);
     });
 
     it("HW trace — disabling capture zeroes the ring and snaps the cursor to live", async () => {
@@ -1702,22 +1735,22 @@ describe("createAppStore", () => {
       store.detachHwTraceCursor(5);
       expect(store.cursors.hwTrace.mode).toBe("detached");
 
-      store.setHwTraceMode("disabled");
+      store.setHwTraceCapture(false);
       // Ring zeroed (after the save placeholder); the now-meaningless
       // detached anchor snaps back to live.
       expect(store.hwTrace.isEmpty()).toBe(true);
       expect(store.cursors.hwTrace).toEqual({ mode: "live" });
     });
 
-    it("HW trace — setHwTraceMode persists captureMode and is restored on reload (also propagated to the buffer)", async () => {
+    it("HW trace — setHwTraceCapture persists `capture` and is restored on reload (also propagated to the buffer)", async () => {
       const { backend, store } = await freshStore();
-      store.setHwTraceMode("disabled");
+      store.setHwTraceCapture(false);
       await flush();
       const saved = await backend.loadUiState();
       expect(saved?.sections.find((s) => s.id === "hwTrace")?.config).toEqual({
-        captureMode: "disabled",
+        capture: false,
       });
-      // Reload from the same backend: signal AND buffer come up in "disabled"
+      // Reload from the same backend: signal AND buffer come up disabled
       // so record() actually gates on the persisted choice.
       const reloaded = await createAppStore({
         backend,
@@ -1725,18 +1758,18 @@ describe("createAppStore", () => {
         bus: makeStubBus(),
         dbg: makeStubDbg(),
       });
-      expect(reloaded.hwTraceMode()).toBe("disabled");
-      expect(reloaded.hwTrace.getMode()).toBe("disabled");
+      expect(reloaded.hwTraceCapture()).toBe(false);
+      expect(reloaded.hwTrace.getEnabled()).toBe(false);
     });
 
-    it("HW trace — malformed persisted captureMode falls back to the buffer default", async () => {
+    it("HW trace — malformed persisted `capture` falls back to the buffer default", async () => {
       const backend = new MemoryBackend();
       await backend.saveUiState({
         sections: [
           {
             id: "hwTrace",
             folded: false,
-            config: { captureMode: 42 as unknown as string },
+            config: { capture: 42 as unknown as boolean },
           },
         ],
       });
@@ -1746,20 +1779,12 @@ describe("createAppStore", () => {
         bus: makeStubBus(),
         dbg: makeStubDbg(),
       });
-      // DEFAULT_HW_TRACE_CONFIG.mode is "ring".
-      expect(store.hwTraceMode()).toBe("ring");
-      expect(store.hwTrace.getMode()).toBe("ring");
+      // DEFAULT_HW_TRACE_CONFIG.enabled is true.
+      expect(store.hwTraceCapture()).toBe(true);
+      expect(store.hwTrace.getEnabled()).toBe(true);
     });
 
-    it("HW trace — setHwTraceMode rejects bogus literals at the boundary", async () => {
-      const { store } = await freshStore();
-      expect(() =>
-        store.setHwTraceMode("capture" as unknown as "ring"),
-      ).toThrow(RangeError);
-      expect(store.hwTraceMode()).toBe("ring");
-    });
-
-    it("HW trace — setHwTraceMode is paused-only; no-ops while running", async () => {
+    it("HW trace — setHwTraceCapture is paused-only; no-ops while running", async () => {
       const { store, loop } = await freshStore();
       const { makeBusSample, recordSample } = await import(
         "../runloop/busSampleTestUtil.ts"
@@ -1768,16 +1793,16 @@ describe("createAppStore", () => {
       recordSample(store.hwTrace, { ...makeBusSample(), nM1: 0 }, 5);
       expect(store.hwTrace.isEmpty()).toBe(false);
       store.run();
-      store.setHwTraceMode("disabled");
-      // Action no-oped: mode unchanged, buffer untouched.
-      expect(store.hwTraceMode()).toBe("ring");
-      expect(store.hwTrace.getMode()).toBe("ring");
+      store.setHwTraceCapture(false);
+      // Action no-oped: state unchanged, buffer untouched.
+      expect(store.hwTraceCapture()).toBe(true);
+      expect(store.hwTrace.getEnabled()).toBe(true);
       expect(store.hwTrace.isEmpty()).toBe(false);
       // After pausing, the action takes effect.
       loop.emitPause({ kind: "user" });
-      store.setHwTraceMode("disabled");
-      expect(store.hwTraceMode()).toBe("disabled");
-      expect(store.hwTrace.getMode()).toBe("disabled");
+      store.setHwTraceCapture(false);
+      expect(store.hwTraceCapture()).toBe(false);
+      expect(store.hwTrace.getEnabled()).toBe(false);
       expect(store.hwTrace.isEmpty()).toBe(true);
     });
 
@@ -1790,7 +1815,7 @@ describe("createAppStore", () => {
       );
       recordSample(store.hwTrace, makeBusSample(), 1);
       recordSample(store.hwTrace, { ...makeBusSample(), nM1: 0 }, 5);
-      expect(store.hwTrace.size()).toBe(1);
+      expect(store.hwTrace.size()).toBe(2);
       // zeroHC is paused-only — the stub starts paused.
       loop.setStatus("paused");
       const vBefore = store.hwTraceVersion();
@@ -1859,7 +1884,7 @@ describe("createAppStore", () => {
   });
 });
 
-describe("createAppStore — effective clock-speed indicator (REQ §11)", () => {
+describe("createAppStore — effective clock-speed indicator", () => {
   // Controllable wallclock so the measured rate is deterministic.
   async function clockStore() {
     let t = 0;

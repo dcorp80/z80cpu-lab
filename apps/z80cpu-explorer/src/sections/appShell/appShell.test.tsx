@@ -1,4 +1,4 @@
-// Happy-dom render tests for the App-shell section (REQ §11).
+// Happy-dom render tests for the App-shell section.
 // Covers: Cold boot button wiring, Split RD/WR pending/dirty/save/discard
 // flow, fold-lock behavior, default-folded on a fresh boot.
 
@@ -77,7 +77,7 @@ afterEach(() => {
 });
 
 describe("appShell — defaults", () => {
-  it("section is folded on a fresh boot (REQ §11 'collapsed by default')", async () => {
+  it("section is folded on a fresh boot", async () => {
     const backend = new MemoryBackend();
     const loop = makeStubLoop();
     const bus = makeStubBus();
@@ -218,6 +218,71 @@ describe("appShell — Split RD/WR dirty/save/discard (body)", () => {
   });
 });
 
+describe("appShell — Trace-instructions checkbox (body live-pane)", () => {
+  it("renders in the live-pane, checked by default, with the labeled text", async () => {
+    harness = await mount("body");
+    const cb = harness.container.querySelector<HTMLInputElement>(
+      ".appshell-trace-insn-checkbox",
+    );
+    expect(cb).not.toBeNull();
+    expect(cb?.checked).toBe(true);
+    expect(
+      harness.container.querySelector(".appshell-trace-insn-label")
+        ?.textContent,
+    ).toBe(STR.appShell.traceInstructionsLabel);
+    // Lives under the live-pane separator alongside the page-size selects.
+    const pane = harness.container.querySelector(".appshell-livepane");
+    expect(pane?.contains(cb as HTMLInputElement)).toBe(true);
+  });
+
+  it("clicking flips traceInstructions (and clears dbg.enabled via the store)", async () => {
+    harness = await mount("body");
+    const cb = harness.container.querySelector<HTMLInputElement>(
+      ".appshell-trace-insn-checkbox",
+    );
+    fireEvent.click(cb as HTMLInputElement);
+    expect(harness.store.traceInstructions()).toBe(false);
+    fireEvent.click(cb as HTMLInputElement);
+    expect(harness.store.traceInstructions()).toBe(true);
+  });
+
+  it("disables while running (paused-only gate)", async () => {
+    harness = await mount("body");
+    const cb = harness.container.querySelector<HTMLInputElement>(
+      ".appshell-trace-insn-checkbox",
+    );
+    expect(cb?.disabled).toBe(false);
+    harness.store.run();
+    await flush();
+    expect(cb?.disabled).toBe(true);
+  });
+
+  it("persists `traceInstructions` under the appShell section config", async () => {
+    const backend = new MemoryBackend();
+    const loop = makeStubLoop();
+    const bus = makeStubBus();
+    const dbg = makeStubDbg();
+    const store = await createAppStore({ backend, loop, bus, dbg });
+    store.setTraceInstructions(false);
+    await flush();
+    const saved = await backend.loadUiState();
+    expect(
+      saved?.sections.find((s) => s.id === "appShell")?.config,
+    ).toMatchObject({ traceInstructions: false });
+    // A fresh store reading the same backend boots with tracing off and
+    // dbg.enabled=false applied on cold boot.
+    const dbg2 = makeStubDbg();
+    const reloaded = await createAppStore({
+      backend,
+      loop: makeStubLoop(),
+      bus: makeStubBus(),
+      dbg: dbg2,
+    });
+    expect(reloaded.traceInstructions()).toBe(false);
+    expect(dbg2.enabled).toBe(false);
+  });
+});
+
 describe("appShell — reload-required fill bytes (body)", () => {
   it("Memory and IO fill inputs render with the current live bytes (default FF)", async () => {
     harness = await mount("body");
@@ -353,6 +418,31 @@ describe("appShell — fold-lock (frame)", () => {
     expect(
       harness.store.sections.find((s) => s.id === "appShell")?.folded,
     ).toBe(true);
+  });
+
+  it("page-size selectors live-commit (no pending, no dirty contribution)", async () => {
+    harness = await mount("body");
+    // Both rows are present.
+    const sels = harness.container.querySelectorAll<HTMLSelectElement>(
+      ".appshell-page-select",
+    );
+    expect(sels.length).toBe(2);
+    const [memSel, ioSel] = sels;
+    // Defaults reflect store accessors.
+    expect(memSel.value).toBe(String(harness.store.memPageSize()));
+    expect(ioSel.value).toBe(String(harness.store.ioPageSize()));
+    // Change Memory page size — live commit, no fold-lock contribution.
+    // Pick a value distinct from the default so the assertion proves the
+    // change actually landed (not just "default still default").
+    expect(harness.store.reloadSettingsDirty()).toBe(false);
+    fireEvent.change(memSel, { target: { value: "16384" } });
+    expect(harness.store.memPageSize()).toBe(16384);
+    // No pending state was introduced — section can still fold freely.
+    expect(harness.store.reloadSettingsDirty()).toBe(false);
+    // IO page size: same shape.
+    fireEvent.change(ioSel, { target: { value: "8192" } });
+    expect(harness.store.ioPageSize()).toBe(8192);
+    expect(harness.store.reloadSettingsDirty()).toBe(false);
   });
 
   it("after Save the section auto-folds back to collapsed (mirrors Discard)", async () => {

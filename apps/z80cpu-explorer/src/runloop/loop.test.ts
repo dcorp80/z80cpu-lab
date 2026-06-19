@@ -151,7 +151,7 @@ describe("RunLoop", () => {
     expect(pauses).toEqual([{ kind: "hc-target", target: 5 }]);
   });
 
-  it("BPs do not fire during stepHC — only the step target pauses (REQ §12)", () => {
+  it("BPs do not fire during stepHC — only the step target pauses", () => {
     const { loop, pauses } = buildLoop();
     // HC-count BP at 5; step over it to HC=10. The BP is silently
     // swept past and marked fired as a side effect of the per-edge
@@ -201,7 +201,7 @@ describe("RunLoop", () => {
     expect(loop.hc()).toBe(3);
   });
 
-  it("step-complete wins over a coincident BP that lands on the step target (REQ §12)", () => {
+  it("step-complete wins over a coincident BP that lands on the step target", () => {
     const { loop, pauses } = buildLoop();
     loop.setBreakpoints([
       { id: "hc1", kind: "hc-count", target: 5, enabled: true },
@@ -214,7 +214,7 @@ describe("RunLoop", () => {
     expect(pauses).toEqual([{ kind: "step-complete" }]);
   });
 
-  it("PC-range BP does not refire when stepping out of a BP pause (REQ §12)", () => {
+  it("PC-range BP does not refire when stepping out of a BP pause", () => {
     // Reproduces the §12 issue: pause at a single-PC BP, click Step,
     // expect Step to actually advance an instruction rather than
     // re-pausing at the same BP. memInit=0 → all NOPs, so PC advances

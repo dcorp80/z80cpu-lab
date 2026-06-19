@@ -29,6 +29,9 @@ npm-debug.log*
 
 # Test / coverage
 .nyc_output/
+# Vitest browser-mode failure-capture debris (no test code consumes
+# these — they're auto-saved on failure for developer debugging).
+__screenshots__/
 
 # Vite
 .vite/

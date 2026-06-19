@@ -1,4 +1,4 @@
-// MVP hotkey bindings (REQ §7.8). New bindings register here; the
+// MVP hotkey bindings. New bindings register here; the
 // cheat-sheet overlay derives itself from `registry.list()`, so adding
 // a row here makes it appear in the overlay automatically.
 
@@ -33,7 +33,7 @@ export function registerDefaultHotkeys(
   });
   // TODO(milestone 9): register a second `escape` binding with
   // `scope: 'modal'` that dismisses the active modal (save-or-skip,
-  // gear). REQ §7.8: "Esc always dismisses". The dispatcher already
+  // gear). The dispatcher already
   // routes by scope, so this is purely additive.
   registry.register({
     key: "s",
@@ -54,7 +54,7 @@ export function registerDefaultHotkeys(
     key: "z",
     shift: true,
     scope: "global",
-    // TODO(REQ §7.4): gate behind save-or-skip modal once snapshot /
+    // TODO: gate behind save-or-skip modal once snapshot /
     // HW-trace buffers exist (M8c / M9). Direct call for now matches
     // the Zero HC button.
     action: ifPaused(() => store.zeroHC()),
@@ -76,8 +76,7 @@ export function registerDefaultHotkeys(
   registry.register({
     key: "g",
     scope: "global",
-    // Snaps BOTH cursors in one call (DESIGN §3.6: "M8 extends the same
-    // handler to snap both"). Runnable regardless of pause state — a
+    // Snaps BOTH cursors in one call. Runnable regardless of pause state — a
     // detached cursor can pile up history during a long run; snap-to-
     // live must work without requiring the user to pause first.
     action: () => {

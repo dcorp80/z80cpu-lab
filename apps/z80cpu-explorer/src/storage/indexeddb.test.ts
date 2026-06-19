@@ -163,10 +163,8 @@ describe("IndexedDbBackend — files", () => {
     expect(files.map((f) => f.id).sort()).toEqual(["b"]);
   });
 
-  it("put+delete on the same id, fire-and-forget, settle in submission order (DESIGN §5)", async () => {
-    // The persist-order hazard called out in DESIGN §5. We mirror the
-    // store's fire-and-forget pattern: kick off both writes synchronously
-    // *without* awaiting, then await both promises. The IDB engine's
+  it("put+delete on the same id, fire-and-forget, settle in submission order", async () => {
+    // Persist-order hazard: submit put then delete without awaiting. The IDB engine's
     // per-store `readwrite` queue must serialize them in submission order
     // so the record ends up DELETED — not resurrected.
     const backend = await trackOpen();

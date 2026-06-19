@@ -2,8 +2,7 @@
 // the section component so the truncation + carry-forward semantics are
 // unit-testable without mounting any Solid tree.
 //
-// Strict invariant: **one monospace cell = one HC** (REQ §6.4 / DESIGN
-// §6.4). No expansion at transitions, no separators, no per-edge extra
+// Strict invariant: **one monospace cell = one HC**. No expansion at transitions, no separators, no per-edge extra
 // cells. A window of N HCs renders exactly N glyph cells per row. Bus
 // value widths (4 chars for addr, 2 for data) consume their native
 // width starting at the change HC; if the next transition arrives
@@ -11,8 +10,7 @@
 // overwrites the previous value's trailing cell — partial values are
 // accepted in exchange for the strict 1-cell-per-HC rule.
 //
-// All glyphs come from `STR.hwTrace.glyphs` (per REQ §7.1 — single
-// restyle surface). Callers pass them in so this module stays free of
+// All glyphs come from `STR.hwTrace.glyphs` (single restyle surface). Callers pass them in so this module stays free of
 // any string-table import; it just consumes constants.
 
 import type { Tri } from "../../runloop/hwTrace.ts";
@@ -57,14 +55,14 @@ export interface BusValueTransition {
 /**
  * Render a 1-bit signal row across `[windowLo, windowHi]` (inclusive on
  * both ends). Returns one glyph per HC, joined into a single string.
- * `transitions` must be sorted by `hc` ascending and trimmed to the
- * window OR the renderer's surrounding context (transitions outside
- * the window are tolerated but ignored).
+ * `transitions` must be sorted by `hc` ascending. Transitions whose
+ * `hc < windowLo` are silently walked into `cur` before emission begins
+ * (the natural support for horizontal virtualization — `windowLo` is the
+ * EMIT lower bound, not the transition-list lower bound). Transitions
+ * past `windowHi` are tolerated and ignored.
  *
- * `initialValue` is the level at `windowLo` BEFORE any in-window
- * transition fires. For now the section passes `1` (deasserted high) —
- * proper carry-forward from before the window is an M8a follow-up
- * tracked separately.
+ * `initialValue` is the level BEFORE any transition in the list — the
+ * starting point of the carry-forward walk, not the level at `windowLo`.
  */
 export function renderBitRow(
   transitions: ReadonlyArray<BitTransition>,
@@ -189,10 +187,24 @@ export function renderBusValueRow(
             ? ""
             : currentValue.toString(16).toUpperCase().padStart(width, "0");
       } else {
-        // Transition before windowLo — leave us in filler mode at the
-        // window boundary with the new currentValue carried in.
-        charPos = -1;
-        currentHex = "";
+        // Transition before windowLo. If its `width`-cell paint extends
+        // INTO the window (i.e. it sits within `width` HCs of the left
+        // edge), surface the surviving tail by starting at offset
+        // `skipped` of the hex chars; otherwise drop to filler mode with
+        // currentValue carried in. Required for the body's horizontal
+        // virtualization where in-rowData transitions can land before
+        // the EMIT window but within their own paint width.
+        const skipped = hc - transitions[txIdx].hc;
+        if (skipped < width && currentValue !== undefined) {
+          charPos = skipped;
+          currentHex = currentValue
+            .toString(16)
+            .toUpperCase()
+            .padStart(width, "0");
+        } else {
+          charPos = -1;
+          currentHex = "";
+        }
       }
       txIdx++;
     }

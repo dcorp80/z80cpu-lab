@@ -7,7 +7,7 @@ import type { PauseReason } from "./loop.ts";
  * every add/remove/toggle/edit; the loop calls `checkAfterEdge(cpu, hc)`
  * once per edge in its hot path and pauses on a non-null return.
  *
- * Cost profile (DESIGN §3.5):
+ * Cost profile:
  * - PC-range: gated on the three M1-entry step IDs, so the linear scan
  *   over enabled BPs only runs ~1M times/sec at full speed. Realistic
  *   N (<100) is fine without a smarter index.
@@ -19,7 +19,7 @@ import type { PauseReason } from "./loop.ts";
  * target across only the not-yet-fired entries.
  *
  * - Add a new HC BP with target ≤ current hc → it fires on the next
- *   edge (DESIGN §3.5 "no special-case path").
+ *   edge.
  * - Toggle a fired BP off then on → it re-arms (the off → on
  *   transition clears its fired flag).
  * - `resetHcCutoff()` (zeroHC) clears the entire fired set.
@@ -147,7 +147,7 @@ export function createBreakpointEvaluator(): BreakpointEvaluator {
       }
       // PC-range: gated on the three M1 entries — regular fetch, NMI
       // redirect, INT acknowledge. Same three IDs dbg uses for its own
-      // BP gate (DESIGN §2.6). At this edge `cpu.regs.pc` is the fetch
+      // BP gate. At this edge `cpu.regs.pc` is the fetch
       // address of the M1 about to start.
       // Indexed for + property access (no destructuring): the iterator-
       // protocol path under for..of can defeat V8's optimizer on the

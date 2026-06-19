@@ -13,17 +13,21 @@ import {
   DEFAULT_HW_TRACE_CONFIG,
   DEFAULT_INSTRUCTION_RING_CAP,
   DEFAULT_IO_BYTES_PER_ROW,
+  DEFAULT_IO_PAGE_SIZE,
   DEFAULT_MEMORY_BYTES_PER_ROW,
+  DEFAULT_MEMORY_PAGE_SIZE,
   DEFAULT_UI_CONFIG,
   IO_BYTES_PER_ROW_OPTIONS,
   isPersistedByte,
   MEMORY_BYTES_PER_ROW_OPTIONS,
+  PAGE_SIZE_OPTIONS,
   type UiConfig,
 } from "../config/defaults.ts";
 import type { Bus64k } from "../runloop/bus.ts";
 import { MEM_SIZE } from "../runloop/bus.ts";
 import { HwTraceBuffer } from "../runloop/hwTrace.ts";
 import type { PauseReason, RunLoop, RunStatus } from "../runloop/loop.ts";
+import { pageBase } from "../sections/paging.ts";
 import {
   defaultSectionFolded,
   defaultSectionIds,
@@ -64,7 +68,7 @@ function defaultSections(): SectionUiState[] {
 /** Merge a stored section list with the registry's known ids:
  *  - keep stored order for ids the registry still knows about
  *  - inject any new registry ids at their `DEFAULT_SECTION_ORDER` index
- *    rather than at the end — REQ §11 wants the App-shell to land at
+ *    rather than at the end — App-shell lands at
  *    the top for upgrading users, not at the bottom they'd never look at
  *  - drop any stored ids the registry no longer knows about
  */
@@ -163,7 +167,7 @@ function reconcileFiles(
   return ordered;
 }
 
-// Effective-clock indicator band (REQ §11). A frame's (Δhc, Δt) yields a
+// Effective-clock indicator band. A frame's (Δhc, Δt) yields a
 // meaningful T-state rate only when it did a measurable, non-idle chunk of
 // work: dt below the floor is at/under `performance.now()` resolution (and
 // risks divide-by-zero); dt above the ceiling means the frame was mostly
@@ -179,22 +183,22 @@ export interface CreateStoreDeps {
    * Bus is held privately for action implementations (mem/IO writes for
    * file load + hex grid edits, INT vector mirroring, last-touched
    * sampling on pause). NOT exposed on the public Store interface —
-   * sections see only signals and verbs (DESIGN §4 "Layering rule").
+   * sections see only signals and verbs.
    * Reinit lives in the UI as a `window.location.reload()` button; no
-   * targeted bus.reset is needed (DESIGN §7.3).
+   * targeted bus.reset is needed.
    */
   bus: Omit<Bus64k, "resolve">;
   /**
    * Source of CPU register/flag snapshots for the cpuState section
-   * (REQ §6.5) plus the in-flight-instruction read-out for the Current
+   * plus the in-flight-instruction read-out for the Current
    * row in the InstructionTrace section. `state()` is called on each
    * pause; `curr` (the live in-flight `InstructionTrace`) is copied by
    * the store on pause to populate `currentInstruction()`. Tests inject
    * a minimal stub.
    */
-  dbg: Pick<Z80DebugContext, "state" | "curr">;
+  dbg: Pick<Z80DebugContext, "state" | "curr" | "enabled">;
   /**
-   * HW-trace buffer (DESIGN §3.2). Optional — when absent the store
+   * HW-trace buffer. Optional — when absent the store
    * default-constructs a fresh `HwTraceBuffer` from
    * `DEFAULT_HW_TRACE_CONFIG`, which keeps tests that don't care about
    * HW-trace state from having to plumb a buffer through. Boot.tsx
@@ -202,7 +206,7 @@ export interface CreateStoreDeps {
    */
   hwTrace?: HwTraceBuffer;
   /**
-   * Wallclock source for the effective-clock indicator (REQ §11). Defaults
+   * Wallclock source for the effective-clock indicator. Defaults
    * to `performance.now`. Injected by tests so the measured rate is
    * deterministic.
    */
@@ -256,7 +260,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     // BPs are live before the user does anything but only after mem reflects
     // the autoloaded files.
 
-    // UI throttle cadence (REQ §7.5). Persisted via UiState; falls back to
+    // UI throttle cadence. Persisted via UiState; falls back to
     // the shipped default when the backend has no record or the stored
     // value is malformed (older backend, corrupt write).
     function sanitizeUiConfig(raw: unknown): UiConfig {
@@ -293,7 +297,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     // which still works against a plain closure variable.
     let insnCountRaw = 0;
     const insnCount: Accessor<number> = () => insnCountRaw;
-    // Effective clock-speed indicator (REQ §11). `null` until the first valid
+    // Effective clock-speed indicator. `null` until the first valid
     // frame measurement (and after zeroHC) → the view shows "—". The value is
     // held across a pause (the view greys it): it's the speed of the run that
     // just ended. Baseline locals track the previous tick's (hc, now) for the
@@ -305,7 +309,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     const [lastPauseReason, setLastPauseReason] =
       createSignal<PauseReason | null>(null);
 
-    // UI mirror of the bus-owned input pins (REQ §6.4). Bus is
+    // UI mirror of the bus-owned input pins. Bus is
     // authoritative (the resolver applies them to cpu.bus on every
     // preEdge); the SolidStore copy exists so sections re-render when the
     // user toggles a checkbox or edits the INT vector byte.
@@ -332,7 +336,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       });
     }
 
-    // Instruction-trace ring (DESIGN §3.1). Reactivity rides a version
+    // Instruction-trace ring. Reactivity rides a version
     // counter — sections createMemo on `traceRingVersion()` and pull
     // records via `ring.at(...)`, which is cheap and avoids per-record
     // signal allocation at push rate.
@@ -342,7 +346,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     //     consumer that genuinely needs every-push fidelity read this.
     //   - `traceRingVersionThrottled`: rAF-debounced during run, flushed
     //     immediately on pause-edge and whenever the loop is already
-    //     paused (REQ §7.5). Section consumers (folded summary, body
+    //     paused. Section consumers (folded summary, body
     //     memos) read this — at full speed the body would otherwise
     //     diff ~10k DOM rows on every push and starve rAF.
     //
@@ -361,65 +365,67 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     const [traceRingVersionThrottled, setTraceRingVersionThrottled] =
       createSignal(0);
     const [insnCountThrottled, setInsnCountThrottled] = createSignal(0);
-    // Persisted capture mode read from section config (REQ §11). Both
-    // capture checkboxes (HW-trace §6.4, instruction-trace §11) round-trip
-    // through `sections[i].config.captureMode`; on cold boot we seed each
-    // signal from the stored value and fall back to the supplied default
-    // when nothing's there or the field is malformed.
-    function readPersistedCaptureMode(
-      id: string,
-      fallback: "disabled" | "ring",
-    ): "disabled" | "ring" {
-      const s = initialSections.find((sec) => sec.id === id);
-      const v = (s?.config as { captureMode?: unknown } | undefined)
-        ?.captureMode;
-      return v === "disabled" || v === "ring" ? v : fallback;
+    // Persisted boolean toggles for the two trace UIs. Cold-boot reads
+    // each from its owning section config; `fallback` covers a fresh
+    // profile or a malformed stored value.
+    function readPersistedBool(
+      sectionId: string,
+      key: string,
+      fallback: boolean,
+    ): boolean {
+      const s = initialSections.find((sec) => sec.id === sectionId);
+      const v = (s?.config as Record<string, unknown> | undefined)?.[key];
+      return typeof v === "boolean" ? v : fallback;
     }
 
-    // Capture mode for the instruction trace (REQ §11). Mirrors the
-    // HW-trace toggle: `"ring"` (default) pushes each completed instruction;
-    // `"disabled"` skips the push and leaves the ring empty. dbg keeps
-    // capturing regardless — PC-range BPs and half-cycle stepping depend on
-    // it — so this only saves the per-callback record copy plus the ring's
-    // resident memory.
+    // Instruction-trace capture. When `true`, the per-instruction
+    // callback pushes into the ring; when `false`, the push is skipped and
+    // the ring stays empty. Mirrors hwTrace's mode toggle but typed as a
+    // boolean (the section UI has a single checkbox, never a third state).
+    //
     // Same split as `insnCountRaw` / `traceRingVersionRaw`: a raw closure
     // mirror for the per-instruction hot path (read in `loop.onInstruction`
     // below — ~10⁶/sec at full speed), plus a Solid signal for UI sections.
-    // Calling the Accessor `traceRingMode()` inside the hot callback would
-    // route through Solid's `readSignal` on every dispatch — measurable
-    // memory inflation in the profiler. The HW-trace recorder dodges this
-    // by parking its own mode on the buffer (`hwTrace.record` checks
-    // `this.mode`); the instruction ring's mode gate stays in the store
-    // (the gate also bumps `traceRingVersionRaw`), so we mirror the
-    // hwTrace pattern in spirit — read a plain value, not a signal.
-    let traceRingModeRaw: "disabled" | "ring" = readPersistedCaptureMode(
+    // Calling `capture()` inside the hot callback would route through
+    // Solid's `readSignal` on every dispatch — measurable in the profiler.
+    let captureRaw: boolean = readPersistedBool(
       "instructionTrace",
-      "ring",
+      "capture",
+      true,
     );
-    const [traceRingMode, setTraceRingModeSig] = createSignal<
-      "disabled" | "ring"
-    >(traceRingModeRaw);
+    const [capture, setCaptureSig] = createSignal<boolean>(captureRaw);
 
-    // HW-trace reactive mirrors (DESIGN §3.2). Persisted mode wins over the
-    // buffer's constructor default — propagate it back onto the buffer first
-    // so the gating in `record()` matches the UI, then seed the version
-    // signal from the post-propagation buffer state (otherwise a
-    // mode-flipping `setMode` would leave the signal one tick behind on cold
-    // boot). `hwTraceVersion` follows the buffer's own `version()` — only
-    // bumped when it advances, so `'disabled'` mode produces zero signal
-    // churn. `hwTraceMode` mirrors `buffer.getMode()` so section UI can
-    // render reactively; setHwTraceMode keeps both in sync.
-    const initialHwTraceMode = readPersistedCaptureMode(
-      "hwTrace",
-      hwTrace.getMode(),
+    // Trace-instructions toggle — drives `dbg.enabled`. Off skips all per-
+    // edge dbg bookkeeping, so onInstructionComplete never fires; step-by-
+    // instruction, Current row, and Preview are unavailable. PC/HC
+    // breakpoints are unaffected. Persisted under `appShell` (sits next
+    // to the page-size selectors in the live-pane).
+    const [traceInstructions, setTraceInstructionsSig] = createSignal<boolean>(
+      readPersistedBool("appShell", "traceInstructions", true),
     );
-    if (initialHwTraceMode !== hwTrace.getMode()) {
-      hwTrace.setMode(initialHwTraceMode);
+    // Apply on cold boot so the first edge reflects the persisted preference.
+    dbg.enabled = traceInstructions();
+
+    // HW-trace reactive mirrors. Persisted capture wins over
+    // the buffer's constructor default — propagate it back onto the buffer
+    // first so the gating in `record()` matches the UI, then seed the
+    // version signal from the post-propagation buffer state (otherwise a
+    // flipping `setEnabled` would leave the signal one tick behind on cold
+    // boot). `hwTraceVersion` follows the buffer's own `version()` — only
+    // bumped when it advances, so a disabled capture produces zero signal
+    // churn. `hwTraceCapture` mirrors `buffer.getEnabled()` so section UI
+    // can render reactively; setHwTraceCapture keeps both in sync.
+    const initialHwCapture = readPersistedBool(
+      "hwTrace",
+      "capture",
+      hwTrace.getEnabled(),
+    );
+    if (initialHwCapture !== hwTrace.getEnabled()) {
+      hwTrace.setEnabled(initialHwCapture);
     }
     const [hwTraceVersion, setHwTraceVersion] = createSignal(hwTrace.version());
-    const [hwTraceMode, setHwTraceModeSig] = createSignal<"disabled" | "ring">(
-      initialHwTraceMode,
-    );
+    const [hwTraceCapture, setHwTraceCaptureSig] =
+      createSignal<boolean>(initialHwCapture);
     let lastSeenHwTraceVersion = hwTrace.version();
     let runFlushScheduled = false;
     // Set on `dispose()`; the rAF callback checks it so a frame queued
@@ -490,7 +496,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       scheduleFrame(tick);
     }
 
-    // View cursors (DESIGN §3.6, REQ §7.2). Both cursors default to live;
+    // View cursors. Both cursors default to live;
     // detach/snap actions follow the same pattern. zeroHC snaps both back
     // since the rebased HC counter would invalidate any pinned anchor.
     const [cursors, setCursors] = createStore<CursorsState>({
@@ -502,7 +508,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     // their version signal so any consumer createMemo re-runs after
     // writes. Bumped from `writeAndWarn` (file load / autoload /
     // reload-all), `setMemByte`, `setIoByte`. `zeroHC` does NOT bump
-    // because zero-HC leaves memory and IO alone (REQ §7.3).
+    // because zero-HC leaves memory and IO alone.
     const [memVersion, setMemVersion] = createSignal(0);
     const bumpMemVersion = (): void => {
       setMemVersion((v) => v + 1);
@@ -511,7 +517,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     const bumpIoVersion = (): void => {
       setIoVersion((v) => v + 1);
     };
-    // WR-plane version signal (REQ §11 split mode). Only meaningful when
+    // WR-plane version signal (split-IO mode). Only meaningful when
     // `splitIo()` is true; in joined mode the WR plane isn't allocated and
     // the section's WR pane is hidden, so harmless bumps just trigger
     // no-op re-renders the consumer doesn't subscribe to. Bumped on every
@@ -564,6 +570,13 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
         MEMORY_BYTES_PER_ROW_OPTIONS,
         DEFAULT_MEMORY_BYTES_PER_ROW,
       );
+    // Default ON: anything other than an explicit persisted `false`
+    // (including undefined / wrong type from a corrupt backend) reads as
+    // true, so new flags ship checked without a migration.
+    const memShowBytes: Accessor<boolean> = () =>
+      sections.find((s) => s.id === "memory")?.config.showBytes !== false;
+    const memShowAscii: Accessor<boolean> = () =>
+      sections.find((s) => s.id === "memory")?.config.showAscii !== false;
     const ioBytesPerRow: Accessor<number> = () =>
       bytesPerRowFromConfig(
         "io",
@@ -571,7 +584,50 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
         DEFAULT_IO_BYTES_PER_ROW,
       );
 
-    // IO render mode (REQ §6.7). '16bit' renders the default 64K-port grid;
+    // Page size — same storage pattern as bytesPerRow. The Memory and IO
+    // section bodies render one full page at a time; this
+    // accessor drives the page-nav row and the body slice math.
+    // Invalid stored values fall back to the section's default.
+    const pageSizeFromConfig = (
+      sectionId: string,
+      fallback: number,
+    ): number => {
+      const s = sections.find((sec) => sec.id === sectionId);
+      const v = s?.config.pageSize;
+      return typeof v === "number" &&
+        (PAGE_SIZE_OPTIONS as readonly number[]).includes(v)
+        ? v
+        : fallback;
+    };
+    const memPageSize: Accessor<number> = () =>
+      pageSizeFromConfig("memory", DEFAULT_MEMORY_PAGE_SIZE);
+    const ioPageSize: Accessor<number> = () =>
+      pageSizeFromConfig("io", DEFAULT_IO_PAGE_SIZE);
+
+    // View-page-base + watch-on-view — view state, not config (not
+    // persisted across reloads). viewPageBase decides what the section
+    // body is showing; watchAddr stays the user's marker. Boot value
+    // is `pageBase(watchAddr, pageSize)` so a fresh load lines up
+    // exactly with where the persisted watch lives. Setters mask to
+    // 16-bit; the consumer is expected to feed an already-aligned page
+    // base, but we re-snap defensively.
+    const [memViewPageBase, setMemViewPageBaseSignal] = createSignal(
+      pageBase(memWatchAddr(), memPageSize()),
+    );
+    const [ioViewPageBase, setIoViewPageBaseSignal] = createSignal(
+      pageBase(ioWatchAddr(), ioPageSize()),
+    );
+    const [ioViewPageBaseWrite, setIoViewPageBaseWriteSignal] = createSignal(
+      pageBase(ioWatchAddrWrite(), ioPageSize()),
+    );
+    // Default ON: the header's recall button hides until HexGrid
+    // explicitly flags the watch as off-view. This keeps cold boot
+    // from flashing the button before the body mounts.
+    const [memWatchOnView, setMemWatchOnView] = createSignal(true);
+    const [ioWatchOnView, setIoWatchOnView] = createSignal(true);
+    const [ioWatchOnViewWrite, setIoWatchOnViewWrite] = createSignal(true);
+
+    // IO render mode. '16bit' renders the default 64K-port grid;
     // '8bit' renders 256 cells where each write broadcasts to all 256
     // high-byte aliases. Persisted via the IO section's config; falls
     // back to '16bit' for older backends or corrupt values.
@@ -581,7 +637,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       return v === "8bit" ? "8bit" : "16bit";
     };
 
-    // Reload-required settings (REQ §11). All three are baked into bus
+    // Reload-required settings. All three are baked into bus
     // construction, so the only way to apply a change is a page reload.
     // Each lives in the natural-owner section's config: `splitIo`/`ioInit`
     // on `io`, `memInit` on `memory`. Accessors fall back to the bus's
@@ -605,7 +661,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       return isPersistedByte(v) ? v : bus.ioInit;
     };
 
-    // App-shell pending values (REQ §11 staging). Inputs in the App-shell
+    // App-shell pending values. Inputs in the App-shell
     // body bind to these, NOT to the live accessors directly — editing
     // stages a value, Save flushes via `commitReloadSettings` (persist +
     // reload), Discard reverts to live. `reloadSettingsDirty` drives the
@@ -645,7 +701,15 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       }
     }
 
-    // Bus last-touched snapshots (REQ §6.6 / §6.7 folded summaries).
+    function assertPageSize(n: number, label: string): void {
+      if (!(PAGE_SIZE_OPTIONS as readonly number[]).includes(n)) {
+        throw new RangeError(
+          `${label}: must be one of ${PAGE_SIZE_OPTIONS.join(", ")}; got ${n}`,
+        );
+      }
+    }
+
+    // Bus last-touched snapshots for folded summaries.
     // Sampled from the bus on every pause-edge so consumers see a frozen
     // "what the CPU did up to the pause" reading. `null` initial value
     // matches the bus's sentinel-of-"no such cycle yet".
@@ -661,7 +725,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       null,
     );
 
-    // CPU state for the cpuState section (REQ §6.5). `cpuState` is the
+    // CPU state for the cpuState section. `cpuState` is the
     // last sampled snapshot — refreshed on every pause so the section
     // always shows what the CPU just did. `prevCpuStateAtBoundary` is the
     // snapshot taken at the previous instruction boundary (M1_T3_1 of the
@@ -754,13 +818,12 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       const next = dbg.state();
       setCpuState(next);
       setAtInstructionBoundary(fromBoundary);
-      // Sample the in-flight instruction. Hide at instruction boundary —
-      // there the freshly-promoted `curr` aliases the first preview row
-      // (its `startAddr` equals the just-completed trace's `nextPc`), so
-      // a Current row would just duplicate the next-to-execute row.
-      // if (fromBoundary || dbg.curr.length === 0) {
-      //   setCurrentInstruction(null);
-      // } else {
+      // Sample the in-flight instruction unconditionally. At an
+      // instruction boundary the freshly-promoted `curr` aliases the
+      // first preview row (its `startAddr` equals the just-completed
+      // trace's `nextPc`); at cold boot `length` is 0. The section
+      // decides what to render in each case — the store just exposes
+      // the snapshot.
       const c = dbg.curr;
       setCurrentInstruction({
         startAddr: c.startAddr,
@@ -769,7 +832,6 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
         m1Type: c.m1Type,
         nextPc: c.nextPc,
       });
-      // }
       if (fromBoundary) {
         // Old boundary snapshot becomes the diff baseline; new one takes
         // its place. A non-boundary pause in between leaves the baseline
@@ -781,7 +843,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       // line snap to the final state on the same tick the user paused,
       // not the next rAF.
       flushRunState();
-      // Sample bus last-touched (REQ §6.6 / §6.7). Snapshots — sections
+      // Sample bus last-touched. Snapshots — sections
       // read these on pause and don't see per-edge churn during run.
       setLastMemRead(bus.lastMemRead());
       setLastMemWrite(bus.lastMemWrite());
@@ -807,7 +869,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     });
     const offTick = loop.onTick((h) => {
       setHc(h);
-      // Effective clock (REQ §11): frame-to-frame T-state rate, measured
+      // Effective clock: frame-to-frame T-state rate, measured
       // only across genuine *run* frames. The indicator is "host throughput
       // at run speed" — stepping is not run speed, so we gate on
       // `loop.status() === "running"` and hold the last value through step
@@ -850,13 +912,13 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       // path. See `insnCountRaw` / `traceRingVersionRaw` declarations
       // above for rationale.
       insnCountRaw++;
-      // DESIGN §3.1: copy out of the dbg's double-buffered trace into the
+      // Copy out of the dbg's double-buffered trace into the
       // ring's stable record. The handler must not retain `trace` past the
       // callback — `ring.push` does the byte-by-byte copy.
-      // REQ §11 Capture toggle: skip the push (and version bump) when the
+      // Capture toggle: skip the push (and version bump) when the
       // user disabled ring capture. The insn counter and the throttled
       // mirror still tick so the folded summary keeps moving.
-      if (traceRingModeRaw === "ring") {
+      if (captureRaw) {
         traceRing.push(trace, hcBox[0]);
         traceRingVersionRaw++;
       }
@@ -870,34 +932,69 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       persistUi();
     }
 
+    // Reorders `arr` in-place to match `orderedIds`, with unlisted items
+    // appended in their original relative order. Works on any array whose
+    // elements have an `id` string — safe to call inside Solid `produce`.
+    function reorderById<T extends { id: string }>(
+      arr: T[],
+      orderedIds: string[],
+    ): void {
+      const byId = new Map(arr.map((item) => [item.id, item]));
+      const next: T[] = [];
+      for (const id of orderedIds) {
+        const item = byId.get(id);
+        if (item) {
+          next.push(item);
+          byId.delete(id);
+        }
+      }
+      for (const item of arr) if (byId.has(item.id)) next.push(item);
+      arr.splice(0, arr.length, ...next);
+    }
+
     function reorderSections(orderedIds: string[]): void {
-      setSections(
-        produce((arr) => {
-          const byId = new Map(arr.map((s) => [s.id, s]));
-          const next: SectionUiState[] = [];
-          for (const id of orderedIds) {
-            const s = byId.get(id);
-            if (s) {
-              next.push(s);
-              byId.delete(id);
-            }
-          }
-          // Anything not named in orderedIds keeps its original relative order.
-          for (const s of arr) if (byId.has(s.id)) next.push(s);
-          arr.splice(0, arr.length, ...next);
-        }),
-      );
+      setSections(produce((arr) => reorderById(arr, orderedIds)));
       persistUi();
     }
 
-    function updateSectionConfig(
+    function patchSectionConfig(
       id: string,
       patch: Record<string, unknown>,
     ): void {
       const idx = sections.findIndex((s) => s.id === id);
       if (idx < 0) return;
       setSections(idx, "config", (cfg) => ({ ...cfg, ...patch }));
+    }
+    // Common case: one section config write + one persist. Callers that
+    // touch multiple sections in one action use `patchSectionConfig` for
+    // each and a single trailing `persistUi()` instead.
+    function updateSectionConfig(
+      id: string,
+      patch: Record<string, unknown>,
+    ): void {
+      patchSectionConfig(id, patch);
       persistUi();
+    }
+
+    // Capture-off side-effects shared by `setCapture(false)` and the
+    // capture-forced-off branch of `setTraceInstructions(false)`. Mirrors
+    // setHwTraceCapture: disabling discards the live ring (a future save-or-skip modal will
+    // hook a save-or-skip modal in here before clearing) and snaps any
+    // detached cursor back to live, since the anchor HC over an emptied
+    // ring is meaningless. Bumps the throttled mirror immediately so the
+    // section's frozen body memos re-run on the same tick rather than
+    // waiting for the next bumpThrottled cycle.
+    // TODO: prompt to save/export the captured ring here, and
+    // only clear on the user's confirm/discard.
+    function captureOffImperative(): void {
+      traceRing.clear();
+      traceRingVersionRaw++;
+      setTraceRingVersionThrottled(traceRing.version());
+      setCursors(
+        produce((s) => {
+          s.instructionTrace = { mode: "live" };
+        }),
+      );
     }
 
     // ── file actions ──────────────────────────────────────────────────
@@ -955,7 +1052,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
 
     function addFile(input: NewProgramFile): void {
       assertAddr16(input.loadAddr, "addFile loadAddr");
-      // Storage cap per REQ §6.1. defaultPickFile already truncates the UI
+      // 128KB storage cap. defaultPickFile already truncates the UI
       // path; this guard catches programmatic callers (tests, future
       // scripting) that bypass the picker.
       if (input.bytes.length > MAX_FILE_BYTES) {
@@ -1005,21 +1102,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
     }
 
     function reorderFiles(orderedIds: string[]): void {
-      setFiles(
-        produce((arr) => {
-          const byId = new Map(arr.map((f) => [f.id, f]));
-          const next: ProgramFile[] = [];
-          for (const id of orderedIds) {
-            const f = byId.get(id);
-            if (f) {
-              next.push(f);
-              byId.delete(id);
-            }
-          }
-          for (const f of arr) if (byId.has(f.id)) next.push(f);
-          arr.splice(0, arr.length, ...next);
-        }),
-      );
+      setFiles(produce((arr) => reorderById(arr, orderedIds)));
       persistUi();
     }
 
@@ -1049,7 +1132,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
 
     function loadAutoloadFiles(): void {
       // Files written in display order — overlap is last-write-wins
-      // (REQ §6.1). loop over the SolidStore directly so order matches UI.
+      //. loop over the SolidStore directly so order matches UI.
       for (const f of files) if (f.autoload) writeAndWarn(f);
     }
 
@@ -1061,7 +1144,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
 
     /**
      * HC targets are unsigned, finite, and capped at `Number.MAX_SAFE_INTEGER`
-     * because the global HC counter is itself a JS number (REQ §7.3). A
+     * because the global HC counter is itself a JS number. A
      * target past safe-int could never match — better to reject at the
      * boundary than silently store a never-firing BP.
      */
@@ -1201,7 +1284,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
         // Clear stale pause reason so the next paused-state render shows
         // the reason for the upcoming pause, not the previous one.
         setLastPauseReason(null);
-        // Reseed the effective-clock baseline (REQ §11) so the first frame of
+        // Reseed the effective-clock baseline so the first frame of
         // this run measures against run-start, not the last tick before the
         // (possibly long) pause.
         clockBaseHc = loop.hc();
@@ -1229,11 +1312,11 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
         loop.zeroHC();
         setHc(0);
         insnCountRaw = 0;
-        // Effective-clock indicator resets (REQ §11): the HC rebase
+        // Effective-clock indicator resets: the HC rebase
         // invalidates any in-flight measurement; show "—" until the next run.
         setEffClockMHz(null);
         clockBaselined = false;
-        // Time-stamped buffers clear on zero-HC (REQ §7.3). HW-trace was
+        // Time-stamped buffers clear on zero-HC. HW-trace was
         // a placeholder in M6; from M8a onward it shares the same clear
         // path as the instruction-trace ring. Snapshot log lands in M9.
         traceRing.clear();
@@ -1257,28 +1340,23 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       },
       coldBoot() {
         // Paused-only — reloading mid-run would yank an active CPU out
-        // from under the user. TODO(REQ §7.4 / M8c): save-or-skip modal
+        // from under the user. TODO(M8c): save-or-skip modal
         // when snapshot / HW-trace buffers exist.
         if (!isPaused()) return;
         window.location.reload();
       },
       hwTrace,
       hwTraceVersion,
-      hwTraceMode,
-      setHwTraceMode(mode: "disabled" | "ring") {
-        if (mode !== "disabled" && mode !== "ring") {
-          throw new RangeError(
-            `setHwTraceMode: 'disabled' | 'ring' required, got ${mode}`,
-          );
-        }
+      hwTraceCapture,
+      setHwTraceCapture(v: boolean) {
         // Paused-only — flipping capture mid-run discards the live ring (see
         // below) and would leave the body's frozen records memo holding a
         // stale snapshot until the next pause. The UI checkbox is
         // `disabled={!isPaused()}`; this enforces the same contract for
         // programmatic callers (tests, future scripting, hotkeys).
         if (status() !== "paused") return;
-        hwTrace.setMode(mode);
-        if (mode === "disabled") {
+        hwTrace.setEnabled(v);
+        if (!v) {
           // Disabling capture discards the live ring. If it holds anything,
           // this is where a "save this trace first?" modal will hook in
           // before we zero it (M8c: VCD export). Placeholder until then —
@@ -1298,55 +1376,50 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
             }),
           );
         }
-        setHwTraceModeSig(mode);
-        // setMode/clear bump the buffer's version; bring the reactive mirror
-        // along immediately so consumers see the mode flip and the cleared
-        // buffer without waiting for the next tick.
+        setHwTraceCaptureSig(v);
+        // setEnabled/clear bump the buffer's version; bring the reactive
+        // mirror along immediately so consumers see the toggle flip and the
+        // cleared buffer without waiting for the next tick.
         lastSeenHwTraceVersion = hwTrace.version();
         setHwTraceVersion(lastSeenHwTraceVersion);
         // Persist alongside other section config (folded, watchAddr, etc.).
         // Fire-and-forget through updateSectionConfig → persistUi.
-        updateSectionConfig("hwTrace", { captureMode: mode });
+        updateSectionConfig("hwTrace", { capture: v });
       },
       traceRing,
       traceRingVersion,
       traceRingVersionThrottled,
-      traceRingMode,
-      setTraceRingMode(mode: "disabled" | "ring") {
-        if (mode !== "disabled" && mode !== "ring") {
-          throw new RangeError(
-            `setTraceRingMode: 'disabled' | 'ring' required, got ${mode}`,
-          );
-        }
-        // Paused-only — same rationale as setHwTraceMode. The UI checkbox is
+      capture,
+      setCapture(v: boolean) {
+        // Paused-only — same rationale as setHwTraceCapture. The UI checkbox is
         // `disabled={!isPaused()}`; this enforces the same contract for
         // programmatic callers.
         if (status() !== "paused") return;
-        if (mode === "disabled") {
-          // Mirror setHwTraceMode: disabling discards the live ring. This is
-          // where the save-or-skip modal (REQ §7.4) will hook in before we
-          // zero it — placeholder until then.
-          // TODO(REQ §7.4): prompt to save/export the captured ring here, and
-          // only clear on the user's confirm/discard.
-          traceRing.clear();
-          traceRingVersionRaw++;
-          // Bring the throttled mirror along so the section's frozen body
-          // memos (gated on the throttled signal) re-run immediately, rather
-          // than waiting for the next bumpThrottled cycle.
-          setTraceRingVersionThrottled(traceRing.version());
-          // A detached anchor HC over an emptied ring is meaningless — same
-          // policy as setHwTraceMode.
-          setCursors(
-            produce((s) => {
-              s.instructionTrace = { mode: "live" };
-            }),
-          );
+        if (!v) {
+          captureOffImperative();
         }
-        traceRingModeRaw = mode;
-        setTraceRingModeSig(mode);
+        captureRaw = v;
+        setCaptureSig(v);
         // Persist alongside other section config (folded, watchAddr, etc.).
         // Fire-and-forget through updateSectionConfig → persistUi.
-        updateSectionConfig("instructionTrace", { captureMode: mode });
+        updateSectionConfig("instructionTrace", { capture: v });
+      },
+      traceInstructions,
+      setTraceInstructions(v: boolean) {
+        if (status() !== "paused") return;
+        // Capture-off forced when tracking goes off — ring can't grow
+        // without bookkeeping. Both branches use the no-persist variant
+        // so the section-config writes coalesce into one `persistUi()`.
+        if (!v && captureRaw) {
+          captureOffImperative();
+          captureRaw = false;
+          setCaptureSig(false);
+          patchSectionConfig("instructionTrace", { capture: false });
+        }
+        dbg.enabled = v;
+        setTraceInstructionsSig(v);
+        patchSectionConfig("appShell", { traceInstructions: v });
+        persistUi();
       },
       cursors,
       detachInstructionTraceCursor(anchorHc: number) {
@@ -1393,7 +1466,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       },
       memVersion,
       setMemByte(addr: number, value: number) {
-        // Paused-only per REQ §6.6. Calls during run silently no-op —
+        // Paused-only. Calls during run silently no-op —
         // matches the input's `disabled` state in the UI.
         if (status() !== "paused") return;
         assertAddr16(addr, "setMemByte");
@@ -1404,12 +1477,12 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       ioByte(addr: number) {
         ioVersion();
         // Always the RD plane — that's the user-editable, IN-serviced
-        // plane in both joined and split modes (REQ §11).
+        // plane in both joined and split modes.
         return bus.ioRead[addr & 0xffff];
       },
       ioVersion,
       setIoByte(addr: number, value: number) {
-        // Paused-only per REQ §6.7. Same gate as setMemByte.
+        // Paused-only. Same gate as setMemByte.
         if (status() !== "paused") return;
         assertAddr16(addr, "setIoByte");
         assertByte(value, "setIoByte value");
@@ -1449,6 +1522,13 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       setMemWatchAddr(addr: number) {
         assertAddr16(addr, "setMemWatchAddr");
         updateSectionConfig("memory", { watchAddr: addr });
+        // Setting the marker is always also a "show me this byte"
+        // gesture — the only path that moves the view without the
+        // marker is the page-nav row, which calls setMemViewPageBase
+        // directly. Keeping the two in sync here means the watch
+        // input, cross-page advance, hotkeys, and tests can all use
+        // the single setter.
+        setMemViewPageBaseSignal(pageBase(addr, memPageSize()));
       },
       memWatchJumpVersion,
       requestMemWatchJump() {
@@ -1458,6 +1538,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       setIoWatchAddr(addr: number) {
         assertAddr16(addr, "setIoWatchAddr");
         updateSectionConfig("io", { watchAddr: addr });
+        setIoViewPageBaseSignal(pageBase(addr, ioPageSize()));
       },
       ioWatchJumpVersion,
       requestIoWatchJump() {
@@ -1467,20 +1548,69 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       setIoWatchAddrWrite(addr: number) {
         assertAddr16(addr, "setIoWatchAddrWrite");
         updateSectionConfig("io", { watchAddrWrite: addr });
+        setIoViewPageBaseWriteSignal(pageBase(addr, ioPageSize()));
       },
       ioWatchJumpVersionWrite,
       requestIoWatchJumpWrite() {
         setIoWatchJumpVersionWrite((v) => v + 1);
       },
+      memViewPageBase,
+      setMemViewPageBase(addr: number) {
+        assertAddr16(addr, "setMemViewPageBase");
+        setMemViewPageBaseSignal(pageBase(addr, memPageSize()));
+      },
+      ioViewPageBase,
+      setIoViewPageBase(addr: number) {
+        assertAddr16(addr, "setIoViewPageBase");
+        setIoViewPageBaseSignal(pageBase(addr, ioPageSize()));
+      },
+      ioViewPageBaseWrite,
+      setIoViewPageBaseWrite(addr: number) {
+        assertAddr16(addr, "setIoViewPageBaseWrite");
+        setIoViewPageBaseWriteSignal(pageBase(addr, ioPageSize()));
+      },
+      memWatchOnView,
+      setMemWatchOnView,
+      ioWatchOnView,
+      setIoWatchOnView,
+      ioWatchOnViewWrite,
+      setIoWatchOnViewWrite,
       memBytesPerRow,
       setMemBytesPerRow(n: number) {
         assertBytesPerRow(n, MEMORY_BYTES_PER_ROW_OPTIONS, "setMemBytesPerRow");
         updateSectionConfig("memory", { bytesPerRow: n });
       },
+      memShowBytes,
+      setMemShowBytes(v: boolean) {
+        updateSectionConfig("memory", { showBytes: v });
+      },
+      memShowAscii,
+      setMemShowAscii(v: boolean) {
+        updateSectionConfig("memory", { showAscii: v });
+      },
       ioBytesPerRow,
       setIoBytesPerRow(n: number) {
         assertBytesPerRow(n, IO_BYTES_PER_ROW_OPTIONS, "setIoBytesPerRow");
         updateSectionConfig("io", { bytesPerRow: n });
+      },
+      memPageSize,
+      setMemPageSize(n: number) {
+        assertPageSize(n, "setMemPageSize");
+        updateSectionConfig("memory", { pageSize: n });
+        // Re-snap viewPageBase to the new alignment so consumers reading
+        // the raw signal don't see a stale, unaligned value (e.g. 0x1000
+        // left over from 4K-page mode after switching to 16K). HexGrid's
+        // pageStart memo defensively re-snaps too, but PageNavRow and
+        // anything else reading the signal directly would otherwise drift
+        // until the next page-nav click.
+        setMemViewPageBaseSignal(pageBase(memViewPageBase(), n));
+      },
+      ioPageSize,
+      setIoPageSize(n: number) {
+        assertPageSize(n, "setIoPageSize");
+        updateSectionConfig("io", { pageSize: n });
+        setIoViewPageBaseSignal(pageBase(ioViewPageBase(), n));
+        setIoViewPageBaseWriteSignal(pageBase(ioViewPageBaseWrite(), n));
       },
       ioViewMode,
       setIoViewMode(mode: "16bit" | "8bit") {
@@ -1489,6 +1619,12 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
             `setIoViewMode: '16bit' | '8bit' required, got ${mode}`,
           );
         }
+        // Reset *WatchOnView on every mode flip. In 8-bit the HexGrid
+        // isn't mounted and can't drive the signal, so a stale `false`
+        // from a prior 16-bit visit would briefly flash the recall
+        // button on the next remount before the visibility effect runs.
+        setIoWatchOnView(true);
+        setIoWatchOnViewWrite(true);
         // Switching to 8-bit mode masks the persisted watch addresses to
         // the low byte — the 8-bit view's address space is 0..0xFF, so a
         // stale 16-bit value (4080) would be unreachable. Both RD and WR
@@ -1568,14 +1704,13 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
           () => {
             // Page reload is the allocation/fill event: on boot, the bus
             // reads these flags and rebuilds. Matches the Reinit semantics
-            // in sections/breakpoints/index.tsx (REQ §7.3).
+            // in sections/breakpoints/index.tsx.
             window.location.reload();
           },
           (err: unknown) => {
             // Roll back exactly the fields we wrote, plus every staging
             // signal — otherwise the App-shell would lock the user with a
-            // dirty staging form that can't be saved (REQ §11 staging
-            // dirty-lock).
+            // dirty staging form that can't be saved (dirty-lock).
             console.error(
               "commitReloadSettings: persistence failed; reverting",
               err,
@@ -1602,7 +1737,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       },
       inputPins,
       setInputPin(name, value) {
-        // Paused-only per REQ §7.5. Same gate as setMemByte/setIoByte —
+        // Paused-only. Same gate as setMemByte/setIoByte —
         // the UI's checkbox is `disabled={!isPaused()}`, this enforces
         // the same contract for programmatic callers.
         if (status() !== "paused") return;

@@ -1,7 +1,6 @@
 import type { Component } from "solid-js";
 import {
-  DEFAULT_MEMORY_ROWS_AFTER,
-  DEFAULT_MEMORY_ROWS_BEFORE,
+  DEFAULT_MEMORY_VIEWPORT_ROWS,
   MEMORY_BYTES_PER_ROW_OPTIONS,
 } from "../../config/defaults.ts";
 import { useStore } from "../../store/index.ts";
@@ -9,11 +8,20 @@ import { STR } from "../../style/strings.ts";
 import { formatHex } from "../../util/hex.ts";
 import { BytesPerRowSelect } from "../bytesPerRowSelect.tsx";
 import { HexGrid } from "../hexGrid.tsx";
+import { PageNavRow } from "../pageNavRow.tsx";
 import type { SectionModule } from "../types.ts";
 import { WatchAddrInput } from "../watchAddrInput.tsx";
 
 const Header: Component = () => {
   const store = useStore();
+  // setMemWatchAddr auto-syncs viewPageBase (see store/index.ts), so
+  // the watch input's commit goes straight through. The recall
+  // button reverses navigation: jump view back to where the marker
+  // lives, then bump jumpVersion so the body scroll-centers it.
+  const recallToWatch = (): void => {
+    store.setMemViewPageBase(store.memWatchAddr());
+    store.requestMemWatchJump();
+  };
   return (
     <>
       <WatchAddrInput
@@ -23,12 +31,36 @@ const Header: Component = () => {
         label={STR.memory.watchLabel}
         tooltip={STR.memory.watchTooltip}
         ariaLabel={STR.memory.watchAriaLabel}
+        recall={{
+          onView: store.memWatchOnView,
+          onClick: recallToWatch,
+          tooltip: STR.memory.recallTooltip,
+          ariaLabel: STR.memory.recallAriaLabel,
+        }}
       />
       <BytesPerRowSelect
         value={store.memBytesPerRow}
         setValue={(n) => store.setMemBytesPerRow(n)}
         options={MEMORY_BYTES_PER_ROW_OPTIONS}
       />
+      <label class="header-checkbox">
+        <input
+          type="checkbox"
+          checked={store.memShowBytes()}
+          aria-label={STR.memory.showBytesAriaLabel}
+          onChange={(e) => store.setMemShowBytes(e.currentTarget.checked)}
+        />
+        {STR.memory.showBytesLabel}
+      </label>
+      <label class="header-checkbox">
+        <input
+          type="checkbox"
+          checked={store.memShowAscii()}
+          aria-label={STR.memory.showAsciiAriaLabel}
+          onChange={(e) => store.setMemShowAscii(e.currentTarget.checked)}
+        />
+        {STR.memory.showAsciiLabel}
+      </label>
     </>
   );
 };
@@ -58,20 +90,38 @@ const FoldedSummary: Component = () => {
 const Body: Component = () => {
   const store = useStore();
   const paused = () => store.status() === "paused";
+  // Page-nav clicks only move the view. Watch addr stays put; if the
+  // user navigates away from the watch, the header's recall button
+  // appears.
+  const pageJump = (addr: number): void => {
+    store.setMemViewPageBase(addr);
+  };
   return (
-    <HexGrid
-      read={(a) => store.memByte(a)}
-      version={store.memVersion}
-      setByte={(a, v) => store.setMemByte(a, v)}
-      paused={paused}
-      showAscii={true}
-      watchAddr={store.memWatchAddr}
-      setWatchAddr={(a) => store.setMemWatchAddr(a)}
-      jumpVersion={store.memWatchJumpVersion}
-      rowsBefore={DEFAULT_MEMORY_ROWS_BEFORE}
-      rowsAfter={DEFAULT_MEMORY_ROWS_AFTER}
-      bytesPerRow={store.memBytesPerRow()}
-    />
+    <div
+      class="hex-section-body hex-section-body-mem"
+      style={{ "--hex-grid-visible-rows": DEFAULT_MEMORY_VIEWPORT_ROWS }}
+    >
+      <PageNavRow
+        addr={store.memViewPageBase}
+        pageSize={store.memPageSize}
+        setAddr={pageJump}
+      />
+      <HexGrid
+        read={(a) => store.memByte(a)}
+        version={store.memVersion}
+        setByte={(a, v) => store.setMemByte(a, v)}
+        paused={paused}
+        showBytes={store.memShowBytes}
+        showAscii={store.memShowAscii}
+        watchAddr={store.memWatchAddr}
+        setWatchAddr={(a) => store.setMemWatchAddr(a)}
+        jumpVersion={store.memWatchJumpVersion}
+        pageSize={store.memPageSize}
+        viewPageBase={store.memViewPageBase}
+        bytesPerRow={store.memBytesPerRow}
+        setWatchOnView={store.setMemWatchOnView}
+      />
+    </div>
   );
 };
 

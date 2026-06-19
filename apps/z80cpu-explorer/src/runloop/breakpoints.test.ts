@@ -210,7 +210,7 @@ describe("BreakpointEvaluator", () => {
       expect(ev.checkAfterEdge(fake(StepId.M1_T1_0, 0), 200)).toBeNull();
       // Re-enable: off → on transition clears the fired flag, so the
       // BP arms again. Since hc has already passed its target, the
-      // next edge fires it (DESIGN §3.5 "no special-case path").
+      // next edge fires it.
       ev.setBreakpoints([hc(100, true)]);
       expect(ev.checkAfterEdge(fake(StepId.M1_T1_0, 0), 200)).toMatchObject({
         target: 100,

@@ -18,6 +18,33 @@ Each release entry is sectioned by package. Versions follow
 
 _Nothing yet._
 
+## [explorer-0.3.0] — 2026-06-19
+
+Focus: virtualization across the heavy panes (instruction trace, HW
+trace, hex grids), address-page pagination for Memory/IO with view
+decoupled from the watch address, consolidated trace-capture toggles,
+and a tooling refresh (Vitest 4 / Vite 8 / Biome 2.5). One new example
+tour ships with the release.
+
+### `@dcorp80/z80cpu-explorer`
+
+#### Added
+- RAXOFT z80test guided tour under [`apps/z80cpu-explorer/examples/z80test/`](apps/z80cpu-explorer/examples/z80test/README.md) — load the RAXOFT instruction-correctness ROM and watch it walk the CPU through its suite.
+- **Memory/IO column toggles** and a watch-address **Recall** button: the view is now decoupled from the watch address, so you can pan around without losing your watch and snap back with one click.
+- HW-trace empty-state hint removed in favour of an always-visible scope; the empty pane reads as "no events yet" without extra chrome.
+
+#### Changed
+- **Virtualization across the heavy panes.** Instruction-trace Executed pane, the HW-trace body (ring flattened, horizontal virtualization driven off the rendered spacer width), and the HexGrid all now render only the visible window. HexGrid uses a typed-array page buffer with on-demand `windowSlice`, eliminating per-paint allocations.
+- **Memory/IO pagination.** Address-page pagination for the 64K mem view; the 8-bit IO broadcast view is scrollable. `viewPageBase` re-snaps on `pageSize` changes; `*WatchOnView` resets on IO mode flip.
+- **Trace toggles consolidated in App-shell.** Trace-instructions controls moved out of the section header into App-shell; capture modes simplified from enums to booleans, with the folded summary derived directly from the boolean.
+- Breakpoints: when you edit `lo` above the current `hi`, `hi` clamps up to follow — no more invalid ranges mid-edit.
+- Toolchain refresh: Vitest 4, Vite 8, Solid + Playwright bumps, migrated to Biome 2.5.0.
+- Cleanup: stripped REQ/DESIGN §-references from in-code comments now that the spec docs are stable.
+
+#### Fixed
+- InstructionTrace: corrected `CurrentInstructionSnapshot` type and assorted review nits in the in-flight Current row.
+- Dropped orphaned Vitest browser-mode screenshot debris from the repo.
+
 ## [explorer-0.2.0] — 2026-06-13
 
 First release since the initial GH Pages deploy. Focus: pre-deploy
@@ -64,6 +91,7 @@ First deployment of the visual explorer to GitHub Pages.
 - Header version chip showing `v<version> (<sha>)` baked in at build time.
 - GitHub Pages deployment via tag-triggered workflow (`explorer-v*` → `gh-pages`).
 
-[Unreleased]: https://github.com/dcorp80/z80cpu-lab/compare/explorer-v0.2.0...HEAD
+[Unreleased]: https://github.com/dcorp80/z80cpu-lab/compare/explorer-v0.3.0...HEAD
+[explorer-0.3.0]: https://github.com/dcorp80/z80cpu-lab/compare/explorer-v0.2.0...explorer-v0.3.0
 [explorer-0.2.0]: https://github.com/dcorp80/z80cpu-lab/compare/explorer-v0.1.0...explorer-v0.2.0
 [explorer-0.1.0]: https://github.com/dcorp80/z80cpu-lab/releases/tag/explorer-v0.1.0

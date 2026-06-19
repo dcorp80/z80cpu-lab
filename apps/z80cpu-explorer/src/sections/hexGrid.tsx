@@ -1,22 +1,28 @@
-// Shared hex grid (REQ §6.6 / §6.7). Renders a fixed window of rows
-// centered on a user-typed watch address — no 64K virtualization, no
-// PC tracking. Reused by the Memory and IO sections; ASCII column is
-// the only structural difference (mem: on, io: off).
+// Shared hex grid. Renders one full page of
+// rows under a virtualized viewport. The page is implied by
+// `pageBase(watchAddr, pageSize)`; only `windowSlice` rows stay
+// mounted at a time. Reused by Memory and IO; ASCII column is the
+// only structural difference (mem: on, io: off).
 //
-// Reactivity: a single createMemo at the grid level reads all visible
-// bytes via the `read` accessor, gated on the matching version signal.
-// Edits commit through `setByte` and bump that version; the memo
-// re-runs and the grid updates. Per-cell edits are local input state;
-// `paused()` gates the input — calls during run no-op anyway (store
-// enforces the gate too).
+// Reactivity is split for the same-page short-circuit (M5):
+//   - `pageStart`  — pageBase memo; dedups on value, so watchAddr
+//                    moves WITHIN the same page produce no notification.
+//   - `pageRows`   — bytes-only rows; only re-reads on a page change,
+//                    bytesPerRow change, pageSize change, or version
+//                    bump (writes). The hot allocator.
+//   - `watchRowAddr` / `watchOffset` — cheap overlay memos; JSX folds
+//                    them in per row / per cell.
+// Edits commit through `setByte` and bump the matching version.
+// Per-cell edits are local input state; `paused()` gates the input
+// (the store enforces the gate too).
 //
 // Rapid entry (Enter advances to the next cell): on a successful Enter
-// commit the cell calls `advance(addr, lane)` which (a) bumps watchAddr
-// by one row when the current cell is at the bottom edge of the window
-// and (b) DOM-clicks the next cell's button so it opens its editor.
-// Hex and ASCII columns are independent advance lanes. Invalid Enter
-// reverts the local text and KEEPS the cell focused so the user can
-// immediately retype (REQ §6.6 rapid-entry rules).
+// commit the cell calls `advance(addr, lane)` which (a) crosses to the
+// next page when the just-edited byte is the page's last and (b)
+// DOM-clicks the next cell's button so it opens its editor. Hex and
+// ASCII columns are independent advance lanes. Invalid Enter reverts
+// the local text and KEEPS the cell focused so the user can immediately
+// retype (rapid-entry rule: next cell auto-focuses on valid input).
 
 import {
   type Accessor,
@@ -25,11 +31,17 @@ import {
   createMemo,
   createSignal,
   Index,
+  onCleanup,
   Show,
 } from "solid-js";
 import { STR } from "../style/strings.ts";
 import { formatHex } from "../util/hex.ts";
 import { HexCell } from "./hexCell.tsx";
+import {
+  computeVirtualWindow,
+  VIRTUAL_DEFAULT_ROW_H_PX,
+} from "./instructionTrace/virtualWindow.ts";
+import { nextPageBase, pageBase, pageLastAddr } from "./paging.ts";
 
 export interface HexGridProps {
   /** Read a byte at the given 16-bit address. Implementations should
@@ -41,33 +53,54 @@ export interface HexGridProps {
   /** Paused-only write path; the store enforces the same gate. */
   setByte: (addr: number, value: number) => void;
   paused: Accessor<boolean>;
-  /** Memory wants ASCII; IO does not (no character semantics on ports). */
-  showAscii: boolean;
+  /** Memory wants both columns; IO only wants bytes (no char semantics on ports). */
+  showBytes: Accessor<boolean>;
+  showAscii: Accessor<boolean>;
   watchAddr: Accessor<number>;
-  /** Used by the rapid-entry advance to scroll the watch window forward
-   *  one row when Enter happens on the last cell of the bottom row. */
+  /** Used by the rapid-entry advance to land watchAddr on the next page's
+   *  base when Enter happens on the page's last byte. */
   setWatchAddr: (addr: number) => void;
   /** Event signal — bumps on Enter from the watch input. Scrolls the
    *  watch row into view as a side effect. */
   jumpVersion: Accessor<number>;
-  /** Caller picks the window size (no shared default — Memory and IO
-   *  size independently; see config/defaults.ts). */
-  rowsBefore: number;
-  rowsAfter: number;
-  /** Bytes per row — 16 / 32 / 64. Row base addresses align to this
-   *  size (mask = ~(bpr - 1)) and the cell grid uses the matching
+  /** Page size for the address-page pagination model. The
+   *  body renders one full page at a time; the page being displayed
+   *  is `viewPageBase`. One of `PAGE_SIZE_OPTIONS`. */
+  pageSize: Accessor<number>;
+  /** Page currently displayed — decoupled from `watchAddr` so page-nav
+   *  buttons can move the view without disturbing the marker. The grid
+   *  resets its scroll position whenever this changes. */
+  viewPageBase: Accessor<number>;
+  /** Bytes per row — 16 / 32 / 64 / 128. Row base addresses align to
+   *  this size (mask = ~(bpr - 1)) and the cell grid uses the matching
    *  `.cells-N` CSS class. */
-  bytesPerRow: number;
+  bytesPerRow: Accessor<number>;
+  /** Optional sink for "is the watch row currently visible". HexGrid
+   *  computes visibility from pageBase(watchAddr) === viewPageBase
+   *  AND the watch row pixel range overlapping the scroll viewport,
+   *  and emits true/false through this callback. The Memory and IO
+   *  section headers read the matching store signal to gate the
+   *  "recall watch" button. Optional so test mounts can omit it. */
+  setWatchOnView?: (visible: boolean) => void;
 }
 
-interface RowModel {
-  /** Row-aligned base address (mask = ~(bytesPerRow - 1)). */
+interface PageRow {
+  /** Row-aligned base address. */
   addr: number;
-  bytes: number[];
-  isWatch: boolean;
-  /** Column within the row whose address equals watchAddr; -1 on
-   *  non-watch rows. */
-  watchOffset: number;
+  /** Zero-copy view into the page-level Uint8Array buffer. Typed as
+   *  Uint8Array so the data model is honest; the `<Index each>` site
+   *  casts to `readonly number[]` for Solid's typing. Indexing into a
+   *  Uint8Array returns a number, which is what HexCell wants. */
+  bytes: Uint8Array;
+}
+
+interface PageData {
+  /** Address-space base of the page currently in `buf`. */
+  start: number;
+  /** Page contents — one byte per address from `start` to
+   *  `start + buf.length`. Owned by the HexGrid instance; reused
+   *  across recomputes (only re-allocated when pageSize changes). */
+  buf: Uint8Array;
 }
 
 type Lane = "hex" | "ascii";
@@ -194,87 +227,131 @@ const AsciiCell: Component<AsciiCellProps> = (props) => {
 };
 
 export const HexGrid: Component<HexGridProps> = (props) => {
-  // One memo drives the entire grid: subscribes to version + watchAddr
-  // + props.read identity and emits the visible row set. Walking memory
-  // top-to-bottom and recomputing on every version bump is fine —
-  // worst case (Memory's 12 rows × 16 cells) is 192 reads, dominated
-  // by the layout pass anyway.
-  const rows = createMemo<RowModel[]>(() => {
+  // Page base — comes from viewPageBase (page-nav / recall / watch
+  // input set it). Re-snap to the current pageSize alignment defensively
+  // in case pageSize changed since the addr was stored. Solid's
+  // default `===` equals check on memo output means watchAddr moves
+  // WITHIN the same page don't notify downstream consumers, so
+  // `pageData` doesn't re-run and we avoid re-reading the whole page.
+  const pageStart = createMemo(() =>
+    pageBase(props.viewPageBase(), props.pageSize()),
+  );
+
+  // Single page-level buffer, reused across version bumps. Re-allocated
+  // only when pageSize changes (rare — the App-shell select). At 4 KB
+  // default this is one 4 KB Uint8Array owned by the component for
+  // its lifetime.
+  let pageBuf: Uint8Array | null = null;
+
+  // Bytes-only page data. Subscribes to: version + pageStart + pageSize
+  // + props.read identity. Fills `pageBuf` in place; returns a fresh
+  // wrapper `{ start, buf }` each call so Solid's `===` dedup lets
+  // downstream consumers know the contents may have changed without
+  // re-allocating the buffer itself. Same-page watchAddr moves leave
+  // pageStart unchanged → memo doesn't re-run → no byte reads.
+  const pageData = createMemo<PageData>(() => {
     props.version();
-    const bpr = props.bytesPerRow;
-    const alignMask = 0xffff & ~(bpr - 1);
-    const wa = props.watchAddr() & 0xffff;
-    const watchRowAddr = wa & alignMask;
-    const start = (watchRowAddr - props.rowsBefore * bpr) & 0xffff;
-    const count = props.rowsBefore + 1 + props.rowsAfter;
-    const out: RowModel[] = new Array(count);
-    for (let r = 0; r < count; r++) {
-      const rowAddr = (start + r * bpr) & 0xffff;
-      const bytes: number[] = new Array(bpr);
-      for (let c = 0; c < bpr; c++) {
-        bytes[c] = props.read((rowAddr + c) & 0xffff);
-      }
-      const isWatch = rowAddr === watchRowAddr;
-      out[r] = {
-        addr: rowAddr,
-        bytes,
-        isWatch,
-        watchOffset: isWatch ? wa & (bpr - 1) : -1,
-      };
+    const ps = props.pageSize();
+    const start = pageStart();
+    if (!pageBuf || pageBuf.length !== ps) {
+      pageBuf = new Uint8Array(ps);
     }
-    return out;
+    for (let i = 0; i < ps; i++) {
+      pageBuf[i] = props.read((start + i) & 0xffff);
+    }
+    return { start, buf: pageBuf };
   });
 
-  // Captured on mount of the row at index `rowsBefore` — that's the
-  // watch row by construction. Re-mounts of `<Index>` keep the same
-  // DOM element when length is stable, so this ref stays valid as
-  // rows() re-runs.
-  let watchRowEl: HTMLDivElement | undefined;
+  // Row count of the current page — used by virtualization derivations
+  // that previously read `pageRows().length`.
+  const rowCount = createMemo(() => props.pageSize() / props.bytesPerRow());
+
+  // Watch-state overlay — cheap memos derived from watchAddr alone, no
+  // byte reads. JSX checks `row.addr === watchRowAddr()` per row /
+  // `colIdx === watchOffset()` per cell, and the row-level `&&`
+  // short-circuit means non-watch rows don't subscribe to watchOffset.
+  const watchRowAddr = createMemo(
+    () => props.watchAddr() & 0xffff & ~(props.bytesPerRow() - 1),
+  );
+  const watchOffset = createMemo(
+    () => props.watchAddr() & (props.bytesPerRow() - 1),
+  );
+
+  // The scroll container — same element used for the per-cell advance
+  // querySelector. Also drives virtualization: scrollTop +
+  // viewportH + rowH derive which slice of `pageRows()` is mounted.
   let gridEl: HTMLDivElement | undefined;
+  const [scrollTop, setScrollTop] = createSignal(0);
+  const [viewportH, setViewportH] = createSignal(0);
+  const [rowH, setRowH] = createSignal(VIRTUAL_DEFAULT_ROW_H_PX);
+
+  // Watch row index — math, not a walk. Used to position the jump
+  // scroll target; the row may be virtualized out at jump time so we
+  // can't rely on a DOM ref.
+  const watchRowIndex = createMemo(
+    () => ((watchRowAddr() - pageStart()) & 0xffff) / props.bytesPerRow(),
+  );
 
   // Subscribe to the jump event; queueMicrotask lets the row layout
-  // settle (relevant after a watchAddr change repositioned the row)
-  // before we attempt to scroll. Skip the initial run — createEffect
-  // fires once at subscription time, which on app boot (especially
-  // post-Cold-boot reload) would scroll the whole page down into the
-  // Memory section even though the user never requested a jump. The
-  // prev-undefined seed pattern matches HexAddrInput's resetSignal
-  // handling — first invocation only captures the baseline value.
+  // settle before we scroll. Skip the initial run — createEffect fires
+  // once at subscription time, which on app boot would scroll the
+  // whole page down into the Memory section even though the user
+  // never requested a jump. The prev-undefined seed pattern matches
+  // HexAddrInput's resetSignal handling.
   createEffect((prev: number | undefined) => {
     const v = props.jumpVersion();
     if (prev !== undefined) {
       queueMicrotask(() => {
-        watchRowEl?.scrollIntoView({ block: "center", behavior: "smooth" });
+        if (!gridEl) return;
+        const idx = watchRowIndex();
+        const rh = rowH();
+        const vh = viewportH() || gridEl.clientHeight;
+        // Center the watch row in the viewport (matches the previous
+        // `scrollIntoView({block: 'center'})` behavior). Smooth scroll
+        // preserved via scrollTo.
+        const targetTop = Math.max(0, idx * rh - vh / 2 + rh / 2);
+        gridEl.scrollTo({ top: targetTop, behavior: "smooth" });
       });
     }
     return v;
   }, undefined);
 
-  /** Last visible address in the current window. Used to detect when an
-   *  advance would fall off the bottom and the window needs to scroll. */
-  const windowLastAddr = (): number => {
-    const bpr = props.bytesPerRow;
-    const alignMask = 0xffff & ~(bpr - 1);
-    const wa = props.watchAddr() & 0xffff;
-    const watchRowAddr = wa & alignMask;
-    const start = (watchRowAddr - props.rowsBefore * bpr) & 0xffff;
-    const count = props.rowsBefore + 1 + props.rowsAfter;
-    return (start + count * bpr - 1) & 0xffff;
-  };
+  // Reset scroll to the page top whenever the view jumps to a new
+  // page. Catches page-nav clicks, recall, and the cross-page
+  // rapid-entry advance — all funnel through setViewPageBase. Skip
+  // the initial run with the prev-undefined seed pattern so a fresh
+  // boot doesn't scroll an already-zero scroll position (no harm,
+  // but the createEffect would fire spuriously on mount).
+  createEffect((prev: number | undefined) => {
+    const vb = pageStart();
+    if (prev !== undefined && prev !== vb) {
+      if (gridEl) {
+        gridEl.scrollTop = 0;
+        setScrollTop(0);
+      }
+    }
+    return vb;
+  }, undefined);
 
   /** Common advance handler — called by both HexCell and AsciiCell on
-   *  a successful Enter commit. Wrap-around at 0xFFFF is intentional:
-   *  next wraps to 0x0000 and the watchAddr bump also wraps, so the
-   *  user keeps editing into the bottom of address space without a
-   *  special-case stop. */
+   *  a successful Enter commit. Page-aware: when the just-edited byte
+   *  is the last cell of the current page, jumps both `watchAddr` and
+   *  `viewPageBase` to the next page's base (auto-cross). The
+   *  view-changed effect above handles the scroll-to-top reset.
+   *  Wrap-around at 0xFFFF is intentional — `nextPageBase` returns
+   *  null at the last page, in which case `next` wraps to 0x0000 and
+   *  we re-anchor at page 0. */
   const advance = (lane: Lane, currentAddr: number): void => {
     const next = (currentAddr + 1) & 0xffff;
-    if (currentAddr === windowLastAddr()) {
-      // Bump the watch addr by one row so the next cell is visible.
-      // Per REQ §6.6 the watch row highlight follows the entry point;
-      // a separate edit-cursor distinct from watchAddr is an option if
-      // this feels wrong in practice.
-      props.setWatchAddr((props.watchAddr() + props.bytesPerRow) & 0xffff);
+    const ps = props.pageSize();
+    const crossingPage = currentAddr === pageLastAddr(props.viewPageBase(), ps);
+    if (crossingPage) {
+      const np = nextPageBase(props.viewPageBase(), ps);
+      const dest = np ?? 0;
+      // The user is "editing as watch" across the boundary, so the
+      // marker tracks the edit position. setWatchAddr auto-syncs
+      // viewPageBase in the store, so one call covers both.
+      props.setWatchAddr(dest);
     }
     // Defer through two microtasks so Solid's row memo can re-run and
     // the cells re-render with new addrs before we go looking. The
@@ -292,59 +369,144 @@ export const HexGrid: Component<HexGridProps> = (props) => {
     });
   };
 
+  // Virtualization derivations. Only the visible window + overscan
+  // stays mounted; the spacer reserves the full page's pixel height
+  // so the scrollbar reflects the entire virtual range. windowSlice
+  // builds row objects on demand from pageData — allocates only the
+  // ~visible+overscan rows, not the full page (~256 at default).
+  const windowRange = createMemo(() =>
+    computeVirtualWindow(scrollTop(), viewportH(), rowH(), rowCount()),
+  );
+  const windowSlice = createMemo<PageRow[]>(() => {
+    const w = windowRange();
+    const pd = pageData();
+    const bpr = props.bytesPerRow();
+    const len = w.last - w.first;
+    const out: PageRow[] = new Array(len);
+    for (let i = 0; i < len; i++) {
+      const r = w.first + i;
+      const rowAddr = (pd.start + r * bpr) & 0xffff;
+      out[i] = {
+        addr: rowAddr,
+        // Zero-copy view into the page buffer.
+        bytes: pd.buf.subarray(r * bpr, r * bpr + bpr),
+      };
+    }
+    return out;
+  });
+  const spacerH = createMemo(() => rowCount() * rowH());
+
+  // Emit watch visibility to the parent (header's recall button).
+  // Visible iff (1) the watch's page is the one being shown AND
+  // (2) the watch row's pixel range overlaps the scroll viewport.
+  // Pre-mount (vh<=0 — happy-dom, or before layout settles) is
+  // treated as visible so the button doesn't flash during boot.
+  createEffect(() => {
+    if (!props.setWatchOnView) return;
+    const watchPage = pageBase(props.watchAddr(), props.pageSize());
+    if (watchPage !== pageStart()) {
+      props.setWatchOnView(false);
+      return;
+    }
+    const vh = viewportH();
+    if (vh <= 0) {
+      props.setWatchOnView(true);
+      return;
+    }
+    const rh = rowH();
+    const top = watchRowIndex() * rh;
+    const st = scrollTop();
+    props.setWatchOnView(top + rh > st && top < st + vh);
+  });
+
+  // Ref callback: capture the scroll element, read `--hex-row-h` from
+  // CSS, take initial viewport metrics, attach a ResizeObserver to
+  // refresh on container size changes (section unfold, body resize).
+  const setGridRef = (el: HTMLDivElement) => {
+    gridEl = el;
+    const cssRowH = getComputedStyle(el).getPropertyValue("--hex-row-h").trim();
+    const parsed = Number.parseFloat(cssRowH);
+    if (Number.isFinite(parsed) && parsed > 0) setRowH(parsed);
+    setScrollTop(el.scrollTop);
+    setViewportH(el.clientHeight);
+    const ro = new ResizeObserver(() => {
+      if (!gridEl) return;
+      setViewportH(gridEl.clientHeight);
+    });
+    ro.observe(el);
+    onCleanup(() => ro.disconnect());
+  };
+
+  // rAF-coalesce the scroll handler — the browser can fire `scroll` at
+  // 60+ Hz, each event invalidates windowRange/windowSlice and triggers
+  // JSX re-evaluation. Folding multiple events into one update per
+  // animation frame caps that to 60 Hz regardless of input rate.
+  let scrollRafId: number | null = null;
+  const onScroll = () => {
+    if (!gridEl) return;
+    if (scrollRafId !== null) return;
+    scrollRafId = requestAnimationFrame(() => {
+      scrollRafId = null;
+      if (gridEl) setScrollTop(gridEl.scrollTop);
+    });
+  };
+  onCleanup(() => {
+    if (scrollRafId !== null) cancelAnimationFrame(scrollRafId);
+  });
+
   return (
-    <div
-      class="hex-grid"
-      ref={(el) => {
-        gridEl = el;
-      }}
-    >
-      <Index each={rows()}>
-        {(row, idx) => {
-          const captureRef = (el: HTMLDivElement) => {
-            if (idx === props.rowsBefore) watchRowEl = el;
-          };
-          return (
-            <div
-              class="hex-row"
-              classList={{ "is-watch-row": row().isWatch }}
-              ref={captureRef}
-            >
-              <span class="hex-row-addr">{formatHex(row().addr, 4)}</span>
-              <div class={`hex-row-cells cells-${props.bytesPerRow}`}>
-                <Index each={row().bytes}>
-                  {(byte, colIdx) => (
-                    <HexCell
-                      addr={(row().addr + colIdx) & 0xffff}
-                      byte={byte()}
-                      isWatch={row().watchOffset === colIdx}
-                      paused={props.paused}
-                      setByte={props.setByte}
-                      advance={(a) => advance("hex", a)}
-                    />
-                  )}
-                </Index>
+    <div class="hex-grid" ref={setGridRef} onScroll={onScroll}>
+      <div class="hex-virt-spacer" style={{ height: `${spacerH()}px` }}>
+        <Index each={windowSlice()}>
+          {(row, i) => {
+            const top = () => (windowRange().first + i) * rowH();
+            // Per-row memo: dedups so non-flipping rows don't re-render
+            // their cells when watchRowAddr changes elsewhere.
+            const isRowWatch = createMemo(() => row().addr === watchRowAddr());
+            return (
+              <div
+                class="hex-row"
+                classList={{ "is-watch-row": isRowWatch() }}
+                style={{ transform: `translateY(${top()}px)` }}
+              >
+                <span class="hex-row-addr">{formatHex(row().addr, 4)}</span>
+                <Show when={props.showBytes()}>
+                  <div class={`hex-row-cells cells-${props.bytesPerRow()}`}>
+                    <Index each={row().bytes as unknown as readonly number[]}>
+                      {(byte, colIdx) => (
+                        <HexCell
+                          addr={(row().addr + colIdx) & 0xffff}
+                          byte={byte()}
+                          isWatch={isRowWatch() && colIdx === watchOffset()}
+                          paused={props.paused}
+                          setByte={props.setByte}
+                          advance={(a) => advance("hex", a)}
+                        />
+                      )}
+                    </Index>
+                  </div>
+                </Show>
+                <Show when={props.showAscii()}>
+                  <div class={`hex-row-ascii cells-${props.bytesPerRow()}`}>
+                    <Index each={row().bytes as unknown as readonly number[]}>
+                      {(byte, colIdx) => (
+                        <AsciiCell
+                          addr={(row().addr + colIdx) & 0xffff}
+                          byte={byte()}
+                          isWatch={isRowWatch() && colIdx === watchOffset()}
+                          paused={props.paused}
+                          setByte={props.setByte}
+                          advance={(a) => advance("ascii", a)}
+                        />
+                      )}
+                    </Index>
+                  </div>
+                </Show>
               </div>
-              <Show when={props.showAscii}>
-                <div class={`hex-row-ascii cells-${props.bytesPerRow}`}>
-                  <Index each={row().bytes}>
-                    {(byte, colIdx) => (
-                      <AsciiCell
-                        addr={(row().addr + colIdx) & 0xffff}
-                        byte={byte()}
-                        isWatch={row().watchOffset === colIdx}
-                        paused={props.paused}
-                        setByte={props.setByte}
-                        advance={(a) => advance("ascii", a)}
-                      />
-                    )}
-                  </Index>
-                </div>
-              </Show>
-            </div>
-          );
-        }}
-      </Index>
+            );
+          }}
+        </Index>
+      </div>
     </div>
   );
 };

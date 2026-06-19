@@ -250,7 +250,9 @@ export class Z80DebugContext {
     const fresh = this.curr === this._a ? this._b : this._a;
     fresh.reset();
     fresh.startAddr = this.cpu.bus.addr;
-    fresh.nextPc = this.cpu.bus.addr;
+    // In-flight invariant: nextPc starts equal to startAddr until the
+    // next M1's T1_0 overwrites it with the real next-instruction PC.
+    fresh.nextPc = fresh.startAddr;
     if (this.cpu.ctl.sres) fresh.m1Type = "special_reset";
     else if (m1Type) fresh.m1Type = m1Type;
     else if (this.cpu.ctl.haltLatch) fresh.m1Type = "halt";

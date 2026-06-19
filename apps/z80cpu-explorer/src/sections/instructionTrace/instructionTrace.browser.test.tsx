@@ -41,6 +41,51 @@ afterEach(() => {
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 describe("Instruction trace (browser smoke)", () => {
+  it("virtualizes the executed pane — row count bounded by viewport, not ring size", async () => {
+    // Run long enough to push records well past the window
+    // (~viewport rows + 2×overscan ≈ 52). 1 000 gives ~20× headroom
+    // so `rowCount < 120` is a meaningful upper bound. Deadline is
+    // generous so the test doesn't flake on loaded CI runners.
+    const runBtn = page.getByRole("button", { name: "Run" });
+    await runBtn.click();
+    const targetInsns = 1_000;
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline && booted.store.insnCount() < targetInsns) {
+      await sleep(16);
+    }
+    const pauseBtn = page.getByRole("button", { name: "Pause" });
+    await pauseBtn.click();
+    expect(booted.store.insnCount()).toBeGreaterThanOrEqual(targetInsns);
+    expect(booted.store.traceRing.size()).toBeGreaterThanOrEqual(targetInsns);
+
+    // Only the window's worth of rows are mounted, regardless of ring size.
+    const scrollEl = document.querySelector<HTMLDivElement>(".itrace-executed");
+    expect(scrollEl).not.toBeNull();
+    if (!scrollEl) return;
+    const rowCount = scrollEl.querySelectorAll(".itrace-row").length;
+    // Generous upper bound — viewport rows + 2 × overscan (20) + a few
+    // ticks of slack. Far below the ring size either way.
+    expect(rowCount).toBeLessThan(120);
+    expect(rowCount).toBeGreaterThan(0);
+
+    // The spacer reserves the full virtual scrollHeight so the scrollbar
+    // behaves as if every row were mounted.
+    const spacer = scrollEl.querySelector<HTMLDivElement>(
+      ".itrace-virt-spacer",
+    );
+    expect(spacer).not.toBeNull();
+    if (!spacer) return;
+    const ringSize = booted.store.traceRing.size();
+    const rowH = Number.parseFloat(
+      getComputedStyle(scrollEl).getPropertyValue("--itrace-row-h").trim(),
+    );
+    expect(rowH).toBeGreaterThan(0);
+    expect(spacer.getBoundingClientRect().height).toBeCloseTo(
+      ringSize * rowH,
+      0,
+    );
+  });
+
   it("scroll-up detaches the cursor; snap-to-live repins to bottom", async () => {
     // Fill the ring with enough rows to make the executed log
     // scrollable. Default mem = 0xFF → RST 38h spins forever; ~200
