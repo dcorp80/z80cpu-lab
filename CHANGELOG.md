@@ -18,6 +18,19 @@ Each release entry is sectioned by package. Versions follow
 
 _Nothing yet._
 
+## [explorer-0.3.1] — 2026-06-21
+
+Patch release: picks up an upstream CPU bugfix, plus an opt-in toggle
+to surface the internal WZ (MEMPTR) latch in the CPU state panel.
+
+### `@dcorp80/z80cpu-explorer`
+
+#### Added
+- `SHOW_WZ` flag in [`apps/z80cpu-explorer/src/config/defaults.ts`](apps/z80cpu-explorer/src/config/defaults.ts) (off by default). When enabled, the internal WZ (MEMPTR) latch renders in the IRQ row alongside `IFF1`/`IFF2`/`IM` — useful when chasing the `XF`/`YF` flag bits from `BIT n,(HL)` and block compares, or when writing Z80 test ROMs. No runtime UI toggle; edit + reload.
+
+#### Changed
+- Bumped `@dcorp80/z80cpu` from `0.1.2` to `0.1.3` across every package that depends on it (`-debug`, `-cli`, `-bench`, and the explorer) to pick up the upstream CPU bugfix.
+
 ## [explorer-0.3.0] — 2026-06-19
 
 Focus: virtualization across the heavy panes (instruction trace, HW
