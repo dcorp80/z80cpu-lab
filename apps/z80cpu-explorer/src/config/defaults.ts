@@ -49,6 +49,18 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   flushEveryNFrames: 2,
 };
 
+// ── CPU state panel ───────────────────────────────────────────────
+
+/**
+ * Show the internal `WZ` (MEMPTR) latch in the CPU state panel.
+ * Off by default — WZ isn't programmer-addressable and changes after
+ * almost every memory-touching instruction, so it reads as noise to
+ * most users. Flip to `true` if you care about `XF`/`YF` bits from
+ * `BIT n,(HL)` / block ops, or you're writing Z80 test ROMs / an
+ * emulator. No runtime UI toggle — edit here and reload.
+ */
+export const SHOW_WZ = false;
+
 // ── Bus ───────────────────────────────────────────────────────────
 
 /**

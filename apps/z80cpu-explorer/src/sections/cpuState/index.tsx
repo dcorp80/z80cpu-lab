@@ -1,5 +1,6 @@
 import type { CpuState, RegBank } from "@dcorp80/z80cpu";
 import { type Component, createMemo, For, Show } from "solid-js";
+import { SHOW_WZ } from "../../config/defaults.ts";
 import { useStore } from "../../store/index.ts";
 import { STR } from "../../style/strings.ts";
 import { formatHex } from "../../util/hex.ts";
@@ -40,6 +41,7 @@ function flagBits(f: number): boolean[] {
 function diffKeys(curr: CpuState, prev: CpuState): Set<string> {
   const s = new Set<string>();
   if (curr.pc !== prev.pc) s.add("pc");
+  if (SHOW_WZ && curr.wz !== prev.wz) s.add("wz");
   if (curr.sp !== prev.sp) s.add("sp");
   if (curr.ix !== prev.ix) s.add("ix");
   if (curr.iy !== prev.iy) s.add("iy");
@@ -274,6 +276,9 @@ const Body = () => {
       <FlagsRow f={s().main.f} changed={has("f")} />
 
       <div class="cpuState-irq">
+        {SHOW_WZ && (
+          <Cell label="WZ" value={s().wz} width={4} changed={has("wz")} />
+        )}
         <span
           class="cpuState-cell"
           classList={{ "is-changed": has("iff1") }}
