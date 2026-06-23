@@ -8,9 +8,9 @@
 // CSS layout: scroll up → detach + button appears, click snap → cursor
 // re-attaches + scroll repins to bottom.
 
-import { page } from "@vitest/browser/context";
 import { render } from "solid-js/web";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { page } from "vitest/browser";
 import { type BootedApp, bootApp } from "../../boot.tsx";
 import "../../styles.css";
 

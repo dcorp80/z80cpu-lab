@@ -7,6 +7,8 @@
 // Joined-mode tests get the default single-plane stub; split-mode tests
 // pass `makeStubBus({ splitIo: true })` to exercise the dual-plane path.
 
+import type { IntGenConfig } from "../config/defaults.ts";
+import { DEFAULT_INT_GEN_CONFIG } from "../config/defaults.ts";
 import type { BusAccessRecord, InputPinName } from "../runloop/bus.ts";
 
 export interface StubBus {
@@ -25,6 +27,8 @@ export interface StubBus {
   lastMemWrite(): BusAccessRecord | null;
   lastIoRead(): BusAccessRecord | null;
   lastIoWrite(): BusAccessRecord | null;
+  intGen(): IntGenConfig;
+  setIntGen(partial: Partial<IntGenConfig>): void;
   // Test-only stagers.
   setLastMemRead(r: BusAccessRecord | null): void;
   setLastMemWrite(r: BusAccessRecord | null): void;
@@ -38,6 +42,7 @@ export interface StubBusOptions {
 
 export function makeStubBus(opts: StubBusOptions = {}): StubBus {
   let v = 0xff;
+  let intGenCfg: IntGenConfig = { ...DEFAULT_INT_GEN_CONFIG };
   const splitIo = opts.splitIo === true;
   const mem = new Uint8Array(0x10000).fill(0xff);
   const ioRead = new Uint8Array(0x10000).fill(0xff);
@@ -79,6 +84,26 @@ export function makeStubBus(opts: StubBusOptions = {}): StubBus {
     lastMemWrite: () => lastMW,
     lastIoRead: () => lastIR,
     lastIoWrite: () => lastIW,
+    intGen: () => ({ ...intGenCfg }),
+    setIntGen: (partial) => {
+      // Mirror the real bus's clamp: pulseWidth >= 1, period floored to
+      // an integer >= pulseWidth + 1. Tests would otherwise see stub-only
+      // out-of-range state that the production bus would reject.
+      const newPulseWidth =
+        partial.pulseWidth !== undefined
+          ? Math.max(1, Math.floor(partial.pulseWidth))
+          : intGenCfg.pulseWidth;
+      let newPeriod =
+        partial.period !== undefined
+          ? Math.floor(partial.period)
+          : intGenCfg.period;
+      if (newPeriod < newPulseWidth + 1) newPeriod = newPulseWidth + 1;
+      intGenCfg = {
+        enabled: partial.enabled ?? intGenCfg.enabled,
+        period: newPeriod,
+        pulseWidth: newPulseWidth,
+      };
+    },
     setLastMemRead: (r) => {
       lastMR = r;
     },

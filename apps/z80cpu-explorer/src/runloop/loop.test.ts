@@ -5,6 +5,7 @@ import { DEFAULT_BUS_CONFIG } from "../config/defaults.ts";
 import { makeBus64k } from "./bus.ts";
 import {
   createRunLoop,
+  HC_BOX_LENGTH,
   type PauseReason,
   type ReadonlyHcBox,
   type RunLoop,
@@ -21,7 +22,11 @@ const noopPostEdge = (_hcBox: ReadonlyHcBox): void => {};
 function buildLoop() {
   const cpu = new Z80Cpu();
   const dbg = new Z80DebugContext(cpu);
-  const bus = makeBus64k(cpu, { ...DEFAULT_BUS_CONFIG, memInit: 0 });
+  const bus = makeBus64k(
+    cpu,
+    { ...DEFAULT_BUS_CONFIG, memInit: 0 },
+    new Float64Array(HC_BOX_LENGTH),
+  );
   const pauses: PauseReason[] = [];
   const insnHcs: number[] = [];
   const loop = createRunLoop({
@@ -241,7 +246,11 @@ describe("RunLoop", () => {
     it("calls preEdge before clockEdge and postEdge after, once per HC", () => {
       const cpu = new Z80Cpu();
       const dbg = new Z80DebugContext(cpu);
-      const bus = makeBus64k(cpu, { ...DEFAULT_BUS_CONFIG, memInit: 0 });
+      const bus = makeBus64k(
+        cpu,
+        { ...DEFAULT_BUS_CONFIG, memInit: 0 },
+        new Float64Array(HC_BOX_LENGTH),
+      );
       const calls: string[] = [];
       const preEdge = (): void => {
         calls.push("pre");
@@ -275,7 +284,11 @@ describe("RunLoop", () => {
   it("warns when a second RunLoop is built against the same dbg", () => {
     const cpu = new Z80Cpu();
     const dbg = new Z80DebugContext(cpu);
-    const bus = makeBus64k(cpu, { ...DEFAULT_BUS_CONFIG, memInit: 0 });
+    const bus = makeBus64k(
+      cpu,
+      { ...DEFAULT_BUS_CONFIG, memInit: 0 },
+      new Float64Array(HC_BOX_LENGTH),
+    );
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     createRunLoop({
       cpu,

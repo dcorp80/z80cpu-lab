@@ -1,5 +1,6 @@
-// Happy-dom render tests for the Interrupts section (nice-to-have post-MVP). Covers folded summary, INT vector input commit path, and that
-// the section is registered + appears in the default order.
+// Happy-dom render tests for the Interrupts section. Covers folded summary,
+// INT vector input commit path, INT generator controls, and that the section
+// is registered + appears in the default order.
 
 import { fireEvent } from "@solidjs/testing-library";
 import { render } from "solid-js/web";
@@ -117,5 +118,91 @@ describe("Interrupts section — body", () => {
     fireEvent.input(input, { target: { value: "FFF" } });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(harness.store.inputPins.intVector).toBe(0x42);
+  });
+});
+
+describe("Interrupts section — INT generator controls", () => {
+  it("renders the enable checkbox (unchecked by default)", async () => {
+    harness = await mount("body");
+    const cb = harness.container.querySelector(
+      "input.interrupts-gen-enabled-checkbox",
+    ) as HTMLInputElement;
+    expect(cb).not.toBeNull();
+    expect(cb.checked).toBe(false);
+  });
+
+  it("renders period and pulse-width inputs", async () => {
+    harness = await mount("body");
+    expect(
+      harness.container.querySelector("input#interrupts-gen-period"),
+    ).not.toBeNull();
+    expect(
+      harness.container.querySelector("input#interrupts-gen-pulsewidth"),
+    ).not.toBeNull();
+  });
+
+  it("checking the enabled checkbox calls store.setIntGen({ enabled: true })", async () => {
+    harness = await mount("body");
+    const cb = harness.container.querySelector(
+      "input.interrupts-gen-enabled-checkbox",
+    ) as HTMLInputElement;
+    fireEvent.change(cb, { target: { checked: true } });
+    await Promise.resolve();
+    expect(harness.store.intGen().enabled).toBe(true);
+  });
+
+  it("period input: Enter with valid integer commits via store.setIntGen", async () => {
+    harness = await mount("body");
+    const input = harness.container.querySelector(
+      "input#interrupts-gen-period",
+    ) as HTMLInputElement;
+    // Must be > pulseWidth (default 64) so not rejected.
+    fireEvent.keyDown(input, {
+      key: "Enter",
+      currentTarget: { value: "500" },
+      target: { value: "500" },
+    });
+    // Commit-on-keyDown uses e.currentTarget.value; simulate via direct
+    // input event + keyDown.
+    fireEvent.input(input, { target: { value: "500" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await Promise.resolve();
+    expect(harness.store.intGen().period).toBe(500);
+  });
+
+  it("pulse-width input: Enter with valid integer commits via store.setIntGen", async () => {
+    harness = await mount("body");
+    const input = harness.container.querySelector(
+      "input#interrupts-gen-pulsewidth",
+    ) as HTMLInputElement;
+    fireEvent.input(input, { target: { value: "32" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await Promise.resolve();
+    expect(harness.store.intGen().pulseWidth).toBe(32);
+  });
+
+  it("generator controls are disabled while running", async () => {
+    harness = await mount("body");
+    harness.store.run();
+    await Promise.resolve();
+    const cb = harness.container.querySelector(
+      "input.interrupts-gen-enabled-checkbox",
+    ) as HTMLInputElement;
+    expect(cb.disabled).toBe(true);
+  });
+});
+
+describe("Interrupts section — folded summary with generator", () => {
+  it("shows only the vector when generator is disabled", async () => {
+    harness = await mount("folded");
+    expect(harness.container.textContent).toContain("INT vector FF");
+    expect(harness.container.textContent).not.toContain("gen");
+  });
+
+  it("shows period/pulseWidth in the folded summary when generator is enabled", async () => {
+    harness = await mount("folded");
+    harness.store.setIntGen({ enabled: true, period: 200, pulseWidth: 10 });
+    await Promise.resolve();
+    expect(harness.container.textContent).toContain("gen 200/10 HC");
   });
 });

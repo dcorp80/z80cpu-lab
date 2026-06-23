@@ -2,18 +2,37 @@ import { Z80Cpu } from "@dcorp80/z80cpu";
 import { describe, expect, it } from "vitest";
 import { type BusConfig, DEFAULT_BUS_CONFIG } from "../config/defaults.ts";
 import { IO_SIZE, MEM_SIZE, makeBus64k } from "./bus.ts";
+import { HC_BOX_LENGTH } from "./loop.ts";
 
-function freshBus(overrides: Partial<BusConfig> = {}) {
+function freshBus(
+  overrides: Partial<BusConfig> = {},
+  hcBox: Float64Array = new Float64Array(HC_BOX_LENGTH),
+) {
   // Pin splitIo to false here so the bulk of the suite tests the joined
   // path even when the shipped `DEFAULT_BUS_CONFIG.splitIo` is flipped
   // on for in-app smoke-testing (split-IO is post-MVP). Split-mode tests opt in explicitly via overrides.
   const cpu = new Z80Cpu();
-  const bus = makeBus64k(cpu, {
-    ...DEFAULT_BUS_CONFIG,
-    splitIo: false,
-    ...overrides,
-  });
+  const bus = makeBus64k(
+    cpu,
+    { ...DEFAULT_BUS_CONFIG, splitIo: false, ...overrides },
+    hcBox,
+  );
   return { cpu, bus };
+}
+
+/** Drive resolve() N times advancing hcBox each call; collect inputPins.nINT. */
+function runEdges(
+  bus: ReturnType<typeof makeBus64k>,
+  hcBox: Float64Array,
+  count: number,
+): (0 | 1)[] {
+  const out: (0 | 1)[] = [];
+  for (let i = 0; i < count; i++) {
+    bus.resolve();
+    out.push(bus.getInputPin("nINT"));
+    hcBox[0]++;
+  }
+  return out;
 }
 
 // Drives a single bus cycle by setting only the relevant pins; everything
@@ -441,6 +460,164 @@ describe("makeBus64k", () => {
       bus.setInputPin("nNMI", 0);
       bus.resolve();
       expect(cpu.ctl.nmiFf).toBe(true);
+    });
+  });
+
+  describe("INT generator — disabled", () => {
+    it("disabled generator: resolve() is byte-for-byte identical to no-generator baseline — nINT stays deasserted", () => {
+      const hcBox = new Float64Array(HC_BOX_LENGTH);
+      const { bus } = freshBus({}, hcBox);
+      expect(bus.intGen().enabled).toBe(false);
+      // 20 edges — nINT must stay HIGH (1) throughout.
+      const levels = runEdges(bus, hcBox, 20);
+      expect(levels.every((l) => l === 1)).toBe(true);
+    });
+
+    it("disabled generator: intGen() snapshot reflects defaults", () => {
+      const { bus } = freshBus();
+      const g = bus.intGen();
+      expect(g.enabled).toBe(false);
+      expect(g.period).toBe(139_776);
+      expect(g.pulseWidth).toBe(64);
+    });
+  });
+
+  describe("INT generator — enabled pulse timing", () => {
+    it("period=10 pulseWidth=3: produces 3 low then 7 high per cycle", () => {
+      const hcBox = new Float64Array(HC_BOX_LENGTH);
+      const { bus } = freshBus({}, hcBox);
+      bus.setIntGen({ enabled: true, period: 10, pulseWidth: 3 });
+
+      // Run two full cycles (20 edges). Pattern: 0,0,0,1,1,1,1,1,1,1 × 2.
+      const levels = runEdges(bus, hcBox, 20);
+      const expected = [
+        0,
+        0,
+        0,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1, // first cycle
+        0,
+        0,
+        0,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1, // second cycle
+      ];
+      expect(levels).toEqual(expected);
+    });
+
+    it("first assert fires on the very first resolve() after enable", () => {
+      const hcBox = new Float64Array(HC_BOX_LENGTH);
+      const { bus } = freshBus({}, hcBox);
+      bus.setIntGen({ enabled: true, period: 10, pulseWidth: 3 });
+      bus.resolve(); // HC=0
+      expect(bus.getInputPin("nINT")).toBe(0); // immediately asserted
+    });
+  });
+
+  describe("INT generator — enable/disable mid-run", () => {
+    it("enable mid-run: very next resolve() asserts nINT", () => {
+      const hcBox = new Float64Array(HC_BOX_LENGTH);
+      const { bus } = freshBus({}, hcBox);
+      // Run 5 edges disabled.
+      runEdges(bus, hcBox, 5);
+      bus.setIntGen({ enabled: true, period: 10, pulseWidth: 3 });
+      bus.resolve();
+      expect(bus.getInputPin("nINT")).toBe(0);
+    });
+
+    it("enable mid-run: first pulse holds for full pulseWidth and schedule is HC-anchored", () => {
+      const hcBox = new Float64Array(HC_BOX_LENGTH);
+      const { bus } = freshBus({}, hcBox);
+      // Advance 5 edges disabled — HC ends at 5.
+      runEdges(bus, hcBox, 5);
+      bus.setIntGen({ enabled: true, period: 10, pulseWidth: 3 });
+      // Anchored at HC=5: assert 5..7, deassert 8..14, assert 15..17.
+      const levels = runEdges(bus, hcBox, 15);
+      expect(levels).toEqual([0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1]);
+    });
+
+    it("disable mid-pulse: deasserts nINT immediately and stops", () => {
+      const hcBox = new Float64Array(HC_BOX_LENGTH);
+      const { bus } = freshBus({}, hcBox);
+      bus.setIntGen({ enabled: true, period: 10, pulseWidth: 5 });
+      // Advance into the asserted phase (2 edges — still within pulseWidth=5).
+      runEdges(bus, hcBox, 2);
+      expect(bus.getInputPin("nINT")).toBe(0); // currently asserted
+
+      // Disable — should deassert synchronously.
+      bus.setIntGen({ enabled: false });
+      expect(bus.getInputPin("nINT")).toBe(1); // deasserted immediately
+
+      // No further edges even after resolve.
+      const more = runEdges(bus, hcBox, 10);
+      expect(more.every((l) => l === 1)).toBe(true);
+    });
+  });
+
+  describe("INT generator — invariant enforcement", () => {
+    it("period < pulseWidth + 1: period is bumped to pulseWidth + 1", () => {
+      const { bus } = freshBus();
+      bus.setIntGen({ period: 3, pulseWidth: 5 });
+      const g = bus.intGen();
+      expect(g.pulseWidth).toBe(5);
+      expect(g.period).toBe(6); // bumped to 5 + 1
+    });
+
+    it("pulseWidth < 1: clamped to 1", () => {
+      const { bus } = freshBus();
+      bus.setIntGen({ pulseWidth: 0 });
+      expect(bus.intGen().pulseWidth).toBe(1);
+    });
+
+    it("non-integer values are floored", () => {
+      const { bus } = freshBus();
+      bus.setIntGen({ period: 100.9, pulseWidth: 3.7 });
+      const g = bus.intGen();
+      expect(g.period).toBe(100);
+      expect(g.pulseWidth).toBe(3);
+    });
+  });
+
+  describe("INT generator — period/pulseWidth change mid-run (true→true)", () => {
+    it("changing pulseWidth while asserted honors new width from current phase", () => {
+      const hcBox = new Float64Array(HC_BOX_LENGTH);
+      const { bus } = freshBus({}, hcBox);
+      // Start with period=10 pulseWidth=5 → assert 5, deassert 5.
+      bus.setIntGen({ enabled: true, period: 10, pulseWidth: 5 });
+      // Advance 1 edge into asserted phase. nextEdgeHc was 0 → after first
+      // resolve it fires at HC=0 and schedules deassert at HC=0+5=5.
+      hcBox[0] = 0;
+      bus.resolve();
+      hcBox[0]++;
+      expect(bus.getInputPin("nINT")).toBe(0); // still asserted
+
+      // Change pulseWidth to 2 while asserted (assertedSince=0, new deassert at HC=0+2=2).
+      bus.setIntGen({ pulseWidth: 2 }); // period=10 pulseWidth=2
+      // Advance to HC=2 — deassert should fire.
+      hcBox[0] = 2;
+      bus.resolve();
+      expect(bus.getInputPin("nINT")).toBe(1); // deasserted at HC=2
+    });
+  });
+
+  describe("INT generator — false→false (disabled config update)", () => {
+    it("period and pulseWidth are stored for a later enable", () => {
+      const { bus } = freshBus();
+      bus.setIntGen({ period: 200, pulseWidth: 10 });
+      const g = bus.intGen();
+      expect(g.enabled).toBe(false);
+      expect(g.period).toBe(200);
+      expect(g.pulseWidth).toBe(10);
     });
   });
 });

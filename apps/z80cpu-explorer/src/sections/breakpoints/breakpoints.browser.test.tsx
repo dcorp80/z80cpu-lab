@@ -7,9 +7,9 @@
 // can't be faked — real `requestAnimationFrame`, real signal flush,
 // real DOM update path.
 
-import { page } from "@vitest/browser/context";
 import { render } from "solid-js/web";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { page } from "vitest/browser";
 import { type BootedApp, bootApp } from "../../boot.tsx";
 import { MemoryBackend } from "../../storage/memory.ts";
 import "../../styles.css";

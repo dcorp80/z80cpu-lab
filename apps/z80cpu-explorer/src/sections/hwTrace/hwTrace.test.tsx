@@ -468,3 +468,54 @@ describe("hwTrace section — body", () => {
     );
   });
 });
+
+describe("HW trace — nINT checkbox disabled by INT generator", () => {
+  it("nINT checkbox is enabled by default (no generator)", async () => {
+    const { container } = await open("body");
+    const labels = Array.from(
+      container.querySelectorAll<HTMLSpanElement>(".hwt-row-label"),
+    );
+    const intLabel = labels.find((el) => el.textContent?.includes("nINT"));
+    const cb = intLabel?.querySelector<HTMLInputElement>(".hwt-input-checkbox");
+    if (!cb) throw new Error("nINT checkbox not found");
+    expect(cb.disabled).toBe(false);
+  });
+
+  it("nINT checkbox is disabled when INT generator is enabled", async () => {
+    const { container, store } = await open("body");
+    store.setIntGen({ enabled: true });
+    await flush();
+    const labels = Array.from(
+      container.querySelectorAll<HTMLSpanElement>(".hwt-row-label"),
+    );
+    const intLabel = labels.find((el) => el.textContent?.includes("nINT"));
+    const cb = intLabel?.querySelector<HTMLInputElement>(".hwt-input-checkbox");
+    if (!cb) throw new Error("nINT checkbox not found");
+    expect(cb.disabled).toBe(true);
+  });
+
+  it("other input checkboxes remain enabled when INT generator is on", async () => {
+    const { container, store } = await open("body");
+    store.setIntGen({ enabled: true });
+    await flush();
+    const labels = Array.from(
+      container.querySelectorAll<HTMLSpanElement>(".hwt-row-label"),
+    );
+    const nNmiLabel = labels.find((el) => el.textContent?.includes("nNMI"));
+    const nNmiCb = nNmiLabel?.querySelector<HTMLInputElement>(
+      ".hwt-input-checkbox",
+    );
+    if (!nNmiCb) throw new Error("nNMI checkbox not found");
+    expect(nNmiCb.disabled).toBe(false);
+  });
+
+  it("setInputPin nINT is a no-op while the generator is enabled", async () => {
+    const { store } = await open("body");
+    store.setIntGen({ enabled: true });
+    // Generator deasserted nINT on enable→disable transition is not relevant
+    // here; we want to confirm manual writes are blocked.
+    const before = store.inputPins.nINT;
+    store.setInputPin("nINT", before === 0 ? 1 : 0);
+    expect(store.inputPins.nINT).toBe(before);
+  });
+});

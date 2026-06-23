@@ -218,14 +218,24 @@ const InputPinCheckbox: Component<{ signal: InputBitSignal }> = (props) => {
   // edits, INT vector). Disables during run AND step — a single-step
   // checkbox change wouldn't take effect until the next paused state
   // anyway, and the consistent `!isPaused()` gate keeps the UX uniform.
+  // nINT is disabled when the INT generator owns the pin so the user
+  // can't silently disturb the generator's schedule. The tooltip explains
+  // why the control is greyed (STR.interrupts.genNIntDisabledTooltip).
+  const genOwnsNInt = () => name === "nINT" && store.intGen().enabled;
+  const isDisabled = () => !store.isPaused() || genOwnsNInt();
+  const title = () =>
+    genOwnsNInt()
+      ? STR.interrupts.genNIntDisabledTooltip
+      : STR.hwTrace.inputPinTooltip(props.signal);
+
   return (
     <input
       type="checkbox"
       class="hwt-input-checkbox"
       aria-label={STR.hwTrace.inputPinAriaLabel(props.signal)}
-      title={STR.hwTrace.inputPinTooltip(props.signal)}
+      title={title()}
       checked={checked()}
-      disabled={!store.isPaused()}
+      disabled={isDisabled()}
       onChange={(e) => store.setInputPin(name, e.currentTarget.checked ? 0 : 1)}
     />
   );

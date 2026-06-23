@@ -6,7 +6,9 @@ import { useStore } from "./store/index.ts";
 // heading, so we don't render a separate page <h1> — that would print
 // the same text twice (once as the page heading and once as the
 // section heading directly below it) and create a duplicate landmark
-// for screen readers.
+// for screen readers. Theme selection lives inside App-shell's
+// live-applied pane (non-destructive, no staging / reload), not in a
+// separate page-wide strip.
 export const App: Component = () => {
   const store = useStore();
   return (

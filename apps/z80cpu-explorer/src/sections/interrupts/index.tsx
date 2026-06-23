@@ -1,10 +1,6 @@
-// Interrupts section (nice-to-have post-MVP). Currently hosts only the
-// INT vector byte input — the byte the bus places on `cpu.bus.data`
-// during INT-acknowledge cycles (`nM1` low + `nIORQ` low).
-//
-// Forward-looking: a future build adds configurable INT-at-HC / NMI-at-HC
-// generators here. The section is intentionally small for now so adding
-// those later is a body extension, not a new section.
+// Interrupts section. Hosts the INT vector byte input and the INT
+// generator — a periodic nINT pulse driver (ZX Spectrum vsync, CTC-
+// channel interrupts, etc.). See DESIGN §2.7 and REQ §6.8.
 
 import type { Component } from "solid-js";
 import { useStore } from "../../store/index.ts";
@@ -21,15 +17,47 @@ const FoldedSummary: Component = () => {
   const store = useStore();
   return (
     <span class="interrupts-folded-summary">
-      {STR.interrupts.foldedSummary(formatHex(store.inputPins.intVector, 2))}
+      {STR.interrupts.foldedSummary(
+        formatHex(store.inputPins.intVector, 2),
+        store.intGen().enabled,
+        store.intGen().period,
+        store.intGen().pulseWidth,
+      )}
     </span>
   );
 };
 
 const VECTOR_INPUT_ID = "interrupts-int-vector";
+const PERIOD_INPUT_ID = "interrupts-gen-period";
+const PULSE_WIDTH_INPUT_ID = "interrupts-gen-pulsewidth";
+
+/** Read a positive-integer decimal string; returns `undefined` on parse fail. */
+function parsePositiveInt(s: string): number | undefined {
+  const n = Math.floor(Number(s));
+  return Number.isFinite(n) && n >= 1 ? n : undefined;
+}
 
 const Body: Component = () => {
   const store = useStore();
+  const isPaused = () => store.isPaused();
+  const genEnabled = () => store.intGen().enabled;
+  const genPeriod = () => store.intGen().period;
+  const genPulseWidth = () => store.intGen().pulseWidth;
+
+  function commitPeriod(raw: string): boolean {
+    const n = parsePositiveInt(raw);
+    if (n === undefined || n < genPulseWidth() + 1) return false;
+    store.setIntGen({ period: n });
+    return true;
+  }
+
+  function commitPulseWidth(raw: string): boolean {
+    const n = parsePositiveInt(raw);
+    if (n === undefined || n < 1) return false;
+    store.setIntGen({ pulseWidth: n });
+    return true;
+  }
+
   return (
     <div class="interrupts-body">
       <div class="interrupts-row" title={STR.interrupts.vectorTooltip}>
@@ -50,6 +78,94 @@ const Body: Component = () => {
           size={4}
           maxLength={4}
         />
+      </div>
+
+      <div class="interrupts-gen-group">
+        <div class="interrupts-gen-header">
+          <span class="interrupts-gen-label">{STR.interrupts.genLabel}</span>
+          <label class="interrupts-gen-enabled-label">
+            <input
+              type="checkbox"
+              class="interrupts-gen-enabled-checkbox"
+              aria-label={STR.interrupts.genEnabledAriaLabel}
+              title={STR.interrupts.genEnabledTooltip}
+              checked={genEnabled()}
+              disabled={!isPaused()}
+              onChange={(e) =>
+                store.setIntGen({ enabled: e.currentTarget.checked })
+              }
+            />
+            {STR.interrupts.genEnabledLabel}
+          </label>
+        </div>
+
+        <div class="interrupts-gen-fields">
+          <div class="interrupts-row">
+            <label class="interrupts-row-label" for={PERIOD_INPUT_ID}>
+              {STR.interrupts.genPeriodLabel}
+            </label>
+            <input
+              id={PERIOD_INPUT_ID}
+              type="text"
+              inputMode="numeric"
+              class="interrupts-gen-decimal-input"
+              aria-label={STR.interrupts.genPeriodAriaLabel}
+              title={STR.interrupts.genPeriodTooltip}
+              value={genPeriod()}
+              disabled={!isPaused()}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter") return;
+                const ok = commitPeriod(
+                  (e.currentTarget as HTMLInputElement).value,
+                );
+                if (!ok) {
+                  (e.currentTarget as HTMLInputElement).value = String(
+                    genPeriod(),
+                  );
+                }
+                (e.currentTarget as HTMLInputElement).blur();
+              }}
+              onBlur={(e) => {
+                const ok = commitPeriod(e.currentTarget.value);
+                if (!ok) e.currentTarget.value = String(genPeriod());
+              }}
+            />
+            <span class="interrupts-gen-unit">{STR.interrupts.genHcUnit}</span>
+          </div>
+
+          <div class="interrupts-row">
+            <label class="interrupts-row-label" for={PULSE_WIDTH_INPUT_ID}>
+              {STR.interrupts.genPulseWidthLabel}
+            </label>
+            <input
+              id={PULSE_WIDTH_INPUT_ID}
+              type="text"
+              inputMode="numeric"
+              class="interrupts-gen-decimal-input"
+              aria-label={STR.interrupts.genPulseWidthAriaLabel}
+              title={STR.interrupts.genPulseWidthTooltip}
+              value={genPulseWidth()}
+              disabled={!isPaused()}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter") return;
+                const ok = commitPulseWidth(
+                  (e.currentTarget as HTMLInputElement).value,
+                );
+                if (!ok) {
+                  (e.currentTarget as HTMLInputElement).value = String(
+                    genPulseWidth(),
+                  );
+                }
+                (e.currentTarget as HTMLInputElement).blur();
+              }}
+              onBlur={(e) => {
+                const ok = commitPulseWidth(e.currentTarget.value);
+                if (!ok) e.currentTarget.value = String(genPulseWidth());
+              }}
+            />
+            <span class="interrupts-gen-unit">{STR.interrupts.genHcUnit}</span>
+          </div>
+        </div>
       </div>
     </div>
   );

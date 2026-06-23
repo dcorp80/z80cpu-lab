@@ -11,6 +11,15 @@ export const STR = {
   app: {
     title: "z80cpu-explorer",
   },
+  theme: {
+    label: "Theme",
+    optionLight: "Light",
+    optionDark: "Dark",
+    optionSystem: "System",
+    tooltipLight: "Force light theme",
+    tooltipDark: "Force dark theme",
+    tooltipSystem: "Follow OS appearance (live)",
+  },
   frame: {
     foldLabel: (folded: boolean) =>
       folded ? "Unfold section" : "Fold section",
@@ -130,16 +139,40 @@ export const STR = {
   },
   interrupts: {
     title: "Interrupts",
-    // Folded summary: shows the INT vector byte so the user can verify
-    // the active vector without unfolding. Forward-looking: when the
-    // section grows configurable INT-at-HC / NMI-at-HC generators (REQ
-    // §11), they'll fold in here too.
-    foldedSummary: (vector: string) => `INT vector ${vector}`,
+    // Folded summary: "INT vector FF" normally; adds "· gen PERIOD/PW HC" when
+    // the INT generator is enabled so the user can verify generator state
+    // without unfolding.
+    foldedSummary: (
+      vector: string,
+      genEnabled?: boolean,
+      period?: number,
+      pulseWidth?: number,
+    ) =>
+      genEnabled && period !== undefined && pulseWidth !== undefined
+        ? `INT vector ${vector} · gen ${period}/${pulseWidth} HC`
+        : `INT vector ${vector}`,
     vectorLabel: "INT vector:",
     vectorAriaLabel:
       "Interrupt vector byte (placed on cpu.bus.data during INT acknowledge)",
     vectorTooltip:
       "Hex byte placed on cpu.bus.data during INT-acknowledge cycles (nM1 low + nIORQ low). Default FF.",
+    // INT generator strings
+    genLabel: "INT generator",
+    genEnabledLabel: "enabled",
+    genEnabledAriaLabel: "Enable INT generator",
+    genEnabledTooltip:
+      "Drive nINT automatically on a periodic schedule. Period and pulse width are in half-cycles (HC). Enabled state persists across reloads.",
+    genPeriodLabel: "period",
+    genPeriodAriaLabel: "INT generator period in HC",
+    genPeriodTooltip:
+      "Full cycle length in HC (nINT low + nINT high). Minimum pulseWidth + 1. 50 Hz @ 3.5 MHz ≈ 139776 HC.",
+    genPulseWidthLabel: "pulse width",
+    genPulseWidthAriaLabel: "INT generator pulse width in HC",
+    genPulseWidthTooltip:
+      "How long nINT stays low (asserted) per cycle, in HC. Minimum 1. 32 T-states ≈ 64 HC.",
+    genNIntDisabledTooltip:
+      "Driven by INT generator — disable the generator to control nINT manually.",
+    genHcUnit: "HC",
   },
   cpuState: {
     title: "CPU state",

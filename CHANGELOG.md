@@ -18,6 +18,20 @@ Each release entry is sectioned by package. Versions follow
 
 _Nothing yet._
 
+## [explorer-0.4.0] — 2026-06-23
+
+Focus: interrupt-driven workflows. The bus gains a software-configurable
+INT generator (period + pulse width), the App-shell picks up a Light /
+Dark / System theme toggle, and a new Rule 30 guided tour walks through
+INT-paced cooperative scheduling and the IM 1 acknowledge cycle.
+
+### `@dcorp80/z80cpu-explorer`
+
+#### Added
+- **INT generator** wired into the bus and the Interrupts panel — configurable period and pulse width in half-cycles, persisted in the shared HC box slots so it survives cold-starts. Drives `nINT` on a regular cadence without any host-side code.
+- **Light / Dark / System theme toggle** in the App-shell. Explicit override or follow OS preference; the chosen mode persists.
+- **Rule 30 guided tour** under [`apps/z80cpu-explorer/examples/rule30/`](apps/z80cpu-explorer/examples/rule30/README.md) — pace a 1-D cellular automaton off the INT generator: two cooperative tasks (IM 1 ISR + main producer) on a single Z80 with a race-free row-boundary throttle, then break inside the INT-acknowledge cycle to see IFF1/IFF2 clear and the injected vector byte on the data bus.
+
 ## [explorer-0.3.1] — 2026-06-21
 
 Patch release: picks up an upstream CPU bugfix, plus an opt-in toggle
@@ -104,7 +118,9 @@ First deployment of the visual explorer to GitHub Pages.
 - Header version chip showing `v<version> (<sha>)` baked in at build time.
 - GitHub Pages deployment via tag-triggered workflow (`explorer-v*` → `gh-pages`).
 
-[Unreleased]: https://github.com/dcorp80/z80cpu-lab/compare/explorer-v0.3.0...HEAD
+[Unreleased]: https://github.com/dcorp80/z80cpu-lab/compare/explorer-v0.4.0...HEAD
+[explorer-0.4.0]: https://github.com/dcorp80/z80cpu-lab/compare/explorer-v0.3.1...explorer-v0.4.0
+[explorer-0.3.1]: https://github.com/dcorp80/z80cpu-lab/compare/explorer-v0.3.0...explorer-v0.3.1
 [explorer-0.3.0]: https://github.com/dcorp80/z80cpu-lab/compare/explorer-v0.2.0...explorer-v0.3.0
 [explorer-0.2.0]: https://github.com/dcorp80/z80cpu-lab/compare/explorer-v0.1.0...explorer-v0.2.0
 [explorer-0.1.0]: https://github.com/dcorp80/z80cpu-lab/releases/tag/explorer-v0.1.0

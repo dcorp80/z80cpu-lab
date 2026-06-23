@@ -1965,3 +1965,130 @@ describe("createAppStore — effective clock-speed indicator", () => {
     expect(store.effectiveClockMHz()).toBeCloseTo(1.0, 6);
   });
 });
+
+describe("createAppStore — theme (REQ §7.6)", () => {
+  // happy-dom shares document AND localStorage across tests in the
+  // file — clear both so a prior test's choice doesn't leak. The
+  // localStorage cache is what the inline pre-paint script reads;
+  // leaking it would let a later test's boot see a stale value.
+  function clearThemeAttr(): void {
+    document.documentElement.removeAttribute("data-theme");
+    try {
+      localStorage.removeItem("z80cpu-explorer:theme");
+    } catch {
+      // localStorage unavailable in the test runner; nothing to clean.
+    }
+  }
+
+  it("defaults to 'system' when no UiState is persisted, and writes data-theme=system on <html>", async () => {
+    clearThemeAttr();
+    const { store } = await freshStore();
+    expect(store.theme()).toBe("system");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("system");
+  });
+
+  it("restores a valid persisted theme", async () => {
+    clearThemeAttr();
+    const backend = new MemoryBackend();
+    await backend.saveUiState({ sections: [], theme: "dark" });
+    const store = await createAppStore({
+      backend,
+      loop: makeStubLoop(),
+      bus: makeStubBus(),
+      dbg: makeStubDbg(),
+    });
+    expect(store.theme()).toBe("dark");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+  });
+
+  it("collapses a malformed persisted theme back to 'system'", async () => {
+    clearThemeAttr();
+    const backend = new MemoryBackend();
+    // Cast through unknown — runtime can land here if a downgrade or
+    // hand-edited record stashes a garbage value.
+    await backend.saveUiState({
+      sections: [],
+      theme: "solarized" as unknown as "system",
+    });
+    const store = await createAppStore({
+      backend,
+      loop: makeStubLoop(),
+      bus: makeStubBus(),
+      dbg: makeStubDbg(),
+    });
+    expect(store.theme()).toBe("system");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("system");
+  });
+
+  it("self-heals a malformed persisted theme by re-persisting the sanitized value", async () => {
+    clearThemeAttr();
+    const backend = new MemoryBackend();
+    await backend.saveUiState({
+      sections: [],
+      theme: "solarized" as unknown as "system",
+    });
+    await createAppStore({
+      backend,
+      loop: makeStubLoop(),
+      bus: makeStubBus(),
+      dbg: makeStubDbg(),
+    });
+    await flush();
+    // Without self-heal the next boot would re-load the same garbage
+    // and re-sanitize it forever; the repair write closes that loop.
+    expect((await backend.loadUiState())?.theme).toBe("system");
+  });
+
+  it("setTheme updates the signal, writes data-theme, and persists", async () => {
+    clearThemeAttr();
+    const { backend, store } = await freshStore();
+    store.setTheme("light");
+    expect(store.theme()).toBe("light");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+    await flush();
+    expect((await backend.loadUiState())?.theme).toBe("light");
+    store.setTheme("dark");
+    expect(store.theme()).toBe("dark");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+    await flush();
+    expect((await backend.loadUiState())?.theme).toBe("dark");
+  });
+
+  it("setTheme sanitizes invalid runtime input back to 'system'", async () => {
+    clearThemeAttr();
+    const { store } = await freshStore();
+    store.setTheme("light");
+    // The public-verb boundary tolerates garbage from programmatic
+    // callers (tests, future scripting) the same way the persistence
+    // boundary does — collapses to 'system' rather than throwing.
+    store.setTheme("solarized" as unknown as "system");
+    expect(store.theme()).toBe("system");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("system");
+  });
+
+  it("setTheme is a no-op when the value didn't change (no extra persist)", async () => {
+    clearThemeAttr();
+    const backend = new MemoryBackend();
+    let saves = 0;
+    const wrapped: typeof backend = Object.assign(
+      Object.create(Object.getPrototypeOf(backend) as object) as typeof backend,
+      backend,
+      {
+        saveUiState: async (s: Parameters<typeof backend.saveUiState>[0]) => {
+          saves++;
+          return backend.saveUiState(s);
+        },
+      },
+    );
+    const store = await createAppStore({
+      backend: wrapped,
+      loop: makeStubLoop(),
+      bus: makeStubBus(),
+      dbg: makeStubDbg(),
+    });
+    const before = saves;
+    store.setTheme(store.theme()); // same value
+    await flush();
+    expect(saves).toBe(before);
+  });
+});

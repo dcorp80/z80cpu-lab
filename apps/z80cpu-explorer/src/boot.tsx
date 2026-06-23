@@ -12,7 +12,9 @@ import { App } from "./app.tsx";
 import {
   DEFAULT_BUS_CONFIG,
   DEFAULT_HW_TRACE_CONFIG,
+  DEFAULT_INT_GEN_CONFIG,
   DEFAULT_LOOP_CONFIG,
+  type IntGenConfig,
   isPersistedByte,
 } from "./config/defaults.ts";
 import { registerDefaultHotkeys } from "./hotkeys/defaults.ts";
@@ -20,10 +22,34 @@ import { installHotkeyDispatcher } from "./hotkeys/dispatch.ts";
 import { createHotkeyRegistry } from "./hotkeys/registry.ts";
 import { makeBus64k } from "./runloop/bus.ts";
 import { HwTraceBuffer } from "./runloop/hwTrace.ts";
-import { createRunLoop, type ReadonlyHcBox } from "./runloop/loop.ts";
+import {
+  createRunLoop,
+  HC_BOX_LENGTH,
+  type ReadonlyHcBox,
+} from "./runloop/loop.ts";
 import { openDefaultBackend } from "./storage/indexeddb.ts";
 import type { StorageBackend } from "./storage/types.ts";
 import { createAppStore, type Store, StoreProvider } from "./store/index.ts";
+
+/** Shape-check a persisted intGen config blob, replacing non-number /
+ *  non-boolean fields with the shipped default. Range/invariant clamping
+ *  ([[feedback_validation_boundary]]) belongs to the bus — `setIntGen`
+ *  clamps period/pulseWidth on construction. */
+function readPersistedIntGen(raw: unknown): IntGenConfig {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_INT_GEN_CONFIG };
+  const r = raw as Partial<IntGenConfig>;
+  return {
+    enabled: typeof r.enabled === "boolean" ? r.enabled : false,
+    period:
+      typeof r.period === "number" && Number.isFinite(r.period)
+        ? r.period
+        : DEFAULT_INT_GEN_CONFIG.period,
+    pulseWidth:
+      typeof r.pulseWidth === "number" && Number.isFinite(r.pulseWidth)
+        ? r.pulseWidth
+        : DEFAULT_INT_GEN_CONFIG.pulseWidth,
+  };
+}
 
 export interface BootOptions {
   /**
@@ -65,14 +91,27 @@ export async function bootApp(opts: BootOptions = {}): Promise<BootedApp> {
     ? ioCfg.ioInit
     : DEFAULT_BUS_CONFIG.ioInit;
 
+  // Load persisted INT generator config. Validates each field before
+  // using; malformed entries fall back to the shipped disabled default.
+  const intCfg = preloadedUi?.sections?.find(
+    (s) => s.id === "interrupts",
+  )?.config;
+  const intGenInit = readPersistedIntGen(
+    (intCfg as { intGen?: unknown } | undefined)?.intGen,
+  );
+
   const cpu = new Z80Cpu();
   const dbg = new Z80DebugContext(cpu);
-  const bus = makeBus64k(cpu, {
-    ...DEFAULT_BUS_CONFIG,
-    splitIo,
-    memInit,
-    ioInit,
-  });
+  // hcBox is shared between the bus and the loop so `bus.resolve()` can
+  // read the current HC inside the generator hot path without a per-call
+  // parameter ([[feedback_bus_owns_state]] / DESIGN §2.7 "hcBox plumbed
+  // into the bus"). The loop uses it instead of its internal allocation.
+  const hcBox = new Float64Array(HC_BOX_LENGTH);
+  const bus = makeBus64k(
+    cpu,
+    { ...DEFAULT_BUS_CONFIG, splitIo, memInit, ioInit, intGenInit },
+    hcBox,
+  );
   const hwTrace = new HwTraceBuffer(DEFAULT_HW_TRACE_CONFIG);
 
   const preEdge = (): void => {
@@ -101,6 +140,7 @@ export async function bootApp(opts: BootOptions = {}): Promise<BootedApp> {
     preEdge,
     postEdge,
     config: { ...DEFAULT_LOOP_CONFIG },
+    hcBox,
   });
 
   const store = await createAppStore({

@@ -15,21 +15,31 @@ export type PauseReason =
 export type Unsubscribe = () => void;
 
 /**
- * Read-only view over the loop's single-slot `Float64Array` HC counter.
- *
- * Subscribers can do `box[0]` reads (no HeapNumber materialization
- * inside V8's SMI range, then a typed-array → typed-array copy past it
- * — see `HwTraceBuffer.record`'s `_hcs[idx] = box[0]`), but cannot
- * write — TS rejects `box[0] = …` against the readonly index signature.
- * The runtime value is still the same `Float64Array`; this is a pure
- * compile-time guard with zero runtime cost (no Proxy, no copy, no
- * subarray view). It turns the existing "by convention, don't write to
- * this" comment into an enforceable contract for in-tree TS consumers.
+ * Read-only view over the loop's `Float64Array` HC box. Subscribers
+ * read `box[HC_BOX_HC]` without materializing a HeapNumber; the TS
+ * readonly index signature prevents accidental writes at compile time
+ * with zero runtime cost (no Proxy, no copy, no subarray).
  */
 export interface ReadonlyHcBox {
   readonly [n: number]: number;
   readonly length: number;
 }
+
+/**
+ * Slot layout for the shared HC box (`Float64Array(HC_BOX_LENGTH)`).
+ *
+ * The loop owns and writes only slot 0 (HC). The bus owns slots 1–3
+ * (INT generator state). Keeping all four in one array means both hot
+ * paths (loop's `hcBox[0]++` and bus's `box[HC_BOX_HC] >= box[HC_BOX_INT_NEXT_EDGE]`)
+ * stay in the same typed-array memory region and never materialize
+ * HeapNumbers — including when `box[HC_BOX_INT_NEXT_EDGE] = Infinity`
+ * (disabled generator), which would box in a plain JS `let` var.
+ */
+export const HC_BOX_HC = 0;
+export const HC_BOX_INT_NEXT_EDGE = 1;
+export const HC_BOX_INT_PERIOD = 2;
+export const HC_BOX_INT_PW = 3;
+export const HC_BOX_LENGTH = 4;
 
 export interface RunLoop {
   status(): RunStatus;
@@ -96,6 +106,15 @@ export interface RunLoopDeps {
    * no-op so frames only run when `_tickFrameSync()` is invoked.
    */
   schedule?: FrameScheduler;
+  /**
+   * External HC box. When provided the loop uses this instead of
+   * allocating its own, so the bus closure and the loop share the same
+   * counter and `resolve()` reads the current HC on every edge. Boot.tsx
+   * creates one box and passes it to both `makeBus64k` and `createRunLoop`.
+   * Tests of the loop in isolation (no bus) may omit this and let the
+   * loop allocate its own.
+   */
+  hcBox?: Float64Array;
 }
 
 const defaultSchedule: FrameScheduler =
@@ -138,7 +157,7 @@ export function createRunLoop(deps: RunLoopDeps): RunLoop {
   // each call materializes a HeapNumber for the argument. Acceptable
   // because checkAfterEdge is monomorphic-inlineable, and the subscriber
   // callbacks fire at most ~10⁶/sec (insn) or ~60/sec (tick), not 40M.
-  const hcBox = new Float64Array(1);
+  const hcBox = deps.hcBox ?? new Float64Array(HC_BOX_LENGTH);
   // Step state — when > 0, the loop is in 'stepping' mode and decrements
   // these as instructions complete / edges fire. When both fall to 0 the
   // loop pauses with `step-complete`.

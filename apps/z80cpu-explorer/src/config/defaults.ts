@@ -70,6 +70,33 @@ export const SHOW_WZ = false;
  *
  * Mem, IO, and INT vector all default to `FF`.
  */
+/**
+ * INT generator config. The bus drives `nINT` automatically on a
+ * periodic schedule — ZX Spectrum vsync (50 Hz @ 3.5 MHz ≈ 139 776 HC)
+ * or any other rate. When disabled the hot path costs one `+Infinity`
+ * compare per edge and nothing else.
+ *
+ * Invariants (enforced by `bus.setIntGen`):
+ *   - `period >= pulseWidth + 1`  — at least 1 HC of deasserted per cycle
+ *   - `pulseWidth >= 1`           — sub-HC pulses are meaningless
+ */
+export interface IntGenConfig {
+  enabled: boolean;
+  /** Total cycle length in HC. */
+  period: number;
+  /** How long nINT stays low (asserted) per cycle, in HC. */
+  pulseWidth: number;
+}
+
+export const DEFAULT_INT_GEN_CONFIG: IntGenConfig = {
+  enabled: false,
+  // ZX Spectrum 50 Hz vsync: one frame = 312 lines × 224 T-states =
+  // 69_888 T-states = 139_776 HC (T-states × 2). Frame rate is
+  // 3.5 MHz / 69_888 ≈ 50.08 Hz — "50 Hz" is the nominal target.
+  period: 139_776,
+  pulseWidth: 64,
+};
+
 export interface BusConfig {
   /** Byte every mem cell is filled with on construction / reinit. */
   memInit: number;
@@ -87,6 +114,8 @@ export interface BusConfig {
    * flag at boot.
    */
   splitIo: boolean;
+  /** Initial INT generator config. Defaults to disabled. */
+  intGenInit: IntGenConfig;
 }
 
 export const DEFAULT_BUS_CONFIG: BusConfig = {
@@ -94,6 +123,7 @@ export const DEFAULT_BUS_CONFIG: BusConfig = {
   ioInit: 0xff,
   intVectorInit: 0xff,
   splitIo: true,
+  intGenInit: DEFAULT_INT_GEN_CONFIG,
 };
 
 /** Type-guard for a persisted byte (0..0xFF integer). Used to validate

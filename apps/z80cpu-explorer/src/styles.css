@@ -1,8 +1,32 @@
-/* Minimal scaffold styles for milestone 1.
-   Real theming lands in milestone 11 via the token module. */
+/* Theme tokens. Selection model:
+     - `:root` carries the light defaults.
+     - `:root[data-theme="dark"]` swaps in the dark palette.
+     - `:root:not([data-theme="light"]):not([data-theme="dark"])` matches
+       both the "system" choice and the no-attribute boot window; combined
+       with `@media (prefers-color-scheme: dark)` it picks up the OS
+       preference live (REQ §7.6). The inline boot script in `index.html`
+       reads the localStorage theme cache (written by every
+       `applyThemeAttribute` call) and sets `data-theme` before first
+       paint, so flicker is bounded to the first-ever visit before any
+       cache exists.
+   The HW-trace scope palette (--scope-*) is theme-aware: the waveform
+   pane reads as an embedded oscilloscope panel in both themes — paper-
+   like dark-green-on-mint in light mode, phosphor-green-on-near-black
+   in dark mode. Each theme block redefines the three live tokens. */
 
 :root {
-  color-scheme: light dark;
+  /* Default = light only. `color-scheme` tells the browser which form
+     of native widget chrome to render (checkbox, select arrow,
+     scrollbar). Leaving it as `light dark` on every theme would let the
+     browser pick its own — so a forced-dark UI could still get
+     light-style checkboxes glaring against the dark surround. Each
+     theme below overrides this to the single matching mode. */
+  color-scheme: light;
+  /* Muted accent for native form controls (checkbox check fill, range
+     thumb, etc.). On dark theme the same var resolves to the soft
+     `#60a5fa`, which keeps checkboxes from punching out as bright
+     squares against the dark surface. */
+  accent-color: var(--accent);
   --bg: #ffffff;
   --fg: #1a1a1a;
   --muted: #6b7280;
@@ -10,18 +34,52 @@
   --accent: #2563eb;
   --dragging-bg: #f3f4f6;
   --drop-line: #2563eb;
-  /* Semantic accents — referenced by sections so the M11 theme token
-     module has a single surface to retheme. Never hex-literal in
-     section CSS. */
+  --hover-bg: rgba(0, 0, 0, 0.05);
+  /* Semantic accents — referenced by sections so the token swap has a
+     single surface to retheme. Never hex-literal in section CSS. */
   --warning: #b45309; /* dirty-input border, etc. */
   --warning-bg: rgba(180, 83, 9, 0.08);
   --danger: #b91c1c; /* delete-hover, invalid-input border */
   --highlight: #2563eb; /* diff highlight (cpuState changed cell) */
   --highlight-bg: rgba(37, 99, 235, 0.1);
+  /* Oscilloscope panel — light variant. Paper-mint background with
+     dark-green trace and pale-green M1 gridlines, so the HW trace still
+     reads as a scope screen but doesn't punch a black rectangle into a
+     light layout. Dark-theme blocks below override to the CRT palette. */
+  --scope-bg: #f3f9f3;
+  --scope-fg: #1f7a32;
+  --scope-grid: #cfe4cf;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0f1115;
+  --fg: #e5e7eb;
+  --muted: #9ca3af;
+  --border: #2a2f3a;
+  --accent: #60a5fa;
+  --dragging-bg: #1c2028;
+  --drop-line: #60a5fa;
+  --hover-bg: rgba(255, 255, 255, 0.06);
+  --warning: #fbbf24;
+  --warning-bg: rgba(251, 191, 36, 0.1);
+  --danger: #f87171;
+  --highlight: #60a5fa;
+  --highlight-bg: rgba(96, 165, 250, 0.15);
+  /* Oscilloscope panel — dark variant. CRT phosphor green on near-black. */
+  --scope-bg: #050a05;
+  --scope-fg: #39ff7a;
+  --scope-grid: #0e3a18;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  /* KEEP IN SYNC with `:root[data-theme="dark"]` above — identical
+     token set, different trigger (explicit override vs. system + OS).
+     CSS can't combine a selector and a media query in one rule, so the
+     palette has to be declared twice; drift between the two blocks
+     would silently re-skin system mode away from explicit dark mode. */
+  :root:not([data-theme="light"]):not([data-theme="dark"]) {
+    color-scheme: dark;
     --bg: #0f1115;
     --fg: #e5e7eb;
     --muted: #9ca3af;
@@ -29,11 +87,16 @@
     --accent: #60a5fa;
     --dragging-bg: #1c2028;
     --drop-line: #60a5fa;
+    --hover-bg: rgba(255, 255, 255, 0.06);
     --warning: #fbbf24;
     --warning-bg: rgba(251, 191, 36, 0.1);
     --danger: #f87171;
     --highlight: #60a5fa;
     --highlight-bg: rgba(96, 165, 250, 0.15);
+    /* Oscilloscope panel — dark variant. CRT phosphor green on near-black. */
+    --scope-bg: #050a05;
+    --scope-fg: #39ff7a;
+    --scope-grid: #0e3a18;
   }
 }
 
@@ -64,6 +127,42 @@ body {
   max-width: 1200px;
   margin: 0 auto;
   padding: 12px;
+}
+
+/* Three-way segmented control: Light | Dark | System. Lives in
+   App-shell's live-applied pane (non-destructive, no staging). Buttons
+   share the `.btn` look with the `.is-selected` variant filling in to
+   mark the active choice. */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.theme-toggle-label {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.theme-toggle-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.theme-toggle-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.theme-toggle-btn.is-selected {
+  background: var(--highlight-bg);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 /* Narrow viewports (split panes, devtools open, tablets). MVP is not
@@ -971,7 +1070,7 @@ body {
   cursor: text;
 }
 .hex-cell.is-editable:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--hover-bg);
 }
 .hex-cell.is-watch-cell {
   /* Background-only emphasis — bumping font-weight here shifts the row
@@ -1115,7 +1214,7 @@ body {
   cursor: text;
 }
 .hex-ascii-cell.is-editable:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--hover-bg);
 }
 .hex-ascii-cell.is-watch-cell {
   /* See .hex-cell.is-watch-cell — keep weight uniform to lock baseline. */
@@ -1258,16 +1357,25 @@ body {
   max-height: 60vh;
   /* Anchor the scroll viewport so sticky labels position against it. */
   position: relative;
+  /* Oscilloscope panel — the whole scroll viewport reads as a CRT
+     screen. Sticky label cells re-cover with var(--bg) so signal names
+     stay legible against the theme; the gridlines + waveform glyphs
+     paint in scope-grid / scope-fg respectively. */
+  background: var(--scope-bg);
 }
 /* Empty-ring status line. Sits above the always-rendered row column so
    the user sees both the "why nothing's drawn" message AND the input-
    pin checkboxes pre-step. Sticky-left mirrors the row label column so
-   the message stays readable when the body is wide enough to scroll. */
+   the message stays readable when the body is wide enough to scroll.
+   Explicit background covers the scope-bg of the parent so the dim
+   green panel doesn't bleed through the status text. */
 .hwt-body-status {
   position: sticky;
   left: 0;
   padding: 4px 8px;
   font-size: 11px;
+  background: var(--bg);
+  color: var(--muted);
 }
 .hwt-row {
   display: flex;
@@ -1299,6 +1407,15 @@ body {
   position: sticky;
   left: 0;
   background: var(--bg);
+  /* `.hwt-body` lays rows out with a 1px gap for the scanline effect,
+     which exposes --scope-bg across the full body width — including
+     the sticky label column, where it reads as a stray hairline above
+     and below every name. Two flat box-shadows extend the label's bg
+     1px into each gap; adjacent labels' shadows overlap in the same
+     colour so the label column appears continuous. */
+  box-shadow:
+    0 -1px 0 var(--bg),
+    0 1px 0 var(--bg);
   z-index: 1;
   /* M8b: input rows carry a checkbox next to the label; flexbox keeps
      them aligned with the text and right-justified together. */
@@ -1333,7 +1450,10 @@ body {
      non-integral, which the M1 grid relies on staying exactly
      1ch. See STR.hwTrace.glyphs width-invariant note. */
   letter-spacing: 0;
-  color: var(--fg);
+  /* Scope-fg: dark-green in light mode, phosphor-green in dark mode.
+     The token swap keeps the trace legible against whichever scope-bg
+     the active theme provides. */
+  color: var(--scope-fg);
   /* `pre` preserves intra-glyph spacing AND prevents wrapping past the
      spacer width. */
   white-space: pre;
@@ -1373,8 +1493,10 @@ body {
   top: 0;
   bottom: 0;
   width: 1px;
-  background: var(--border);
-  opacity: 0.6;
+  /* Scope-grid: faint scope ruling between waveform glyphs. Pale-green
+     in light mode, dim-phosphor-green in dark mode (token-swapped). */
+  background: var(--scope-grid);
+  opacity: 0.8;
 }
 /* DRAM-refresh addresses (addr while nRFSH is low): dimmed so they read
    as non-operational without changing glyph advance (opacity only — no
@@ -1418,7 +1540,25 @@ body {
   font-size: 0.9em;
 }
 .appshell-byte-input {
-  font-family: var(--mono, monospace);
+  /* Same look as other themed text inputs (`.bp-hex-input`,
+     `.watch-input-field`, `.step-n-input`) so the Memory/IO fill fields
+     pick up dark-theme bg/fg instead of falling back to the browser's
+     white default. */
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-family: var(--mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+.appshell-byte-input:focus {
+  outline: 1px solid var(--accent);
+  border-color: var(--accent);
+}
+.appshell-byte-input.is-invalid {
+  border-color: var(--danger);
 }
 .appshell-split {
   display: inline-flex;
@@ -1468,9 +1608,26 @@ body {
   outline: 1px solid var(--accent);
   border-color: var(--accent);
 }
+/* Trace-instructions checkbox row — labels in this pane render at the
+   same small/muted scale as `.appshell-row-label` so the row reads in
+   line with the Memory/IO page-size selectors. Without an explicit
+   rule it inherits the 14px sans body default and stands out. */
+.appshell-trace-insn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  color: var(--muted);
+  font-size: 0.9em;
+}
+.appshell-trace-insn.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 
-/* Interrupts section (REQ §11). Minimal — just a labeled INT vector input
-   today; forward-looking generators will land here as additional rows. */
+/* Interrupts section (REQ §11). INT vector input + INT generator
+   sub-group; everything reads at the same small/muted scale as the
+   row labels so the section is visually flat. */
 .interrupts-body {
   display: flex;
   flex-direction: column;
@@ -1488,7 +1645,72 @@ body {
   font-size: 0.9em;
 }
 .interrupts-vector-input {
-  font-family: var(--mono, monospace);
+  /* Themed text input, matched to `.appshell-byte-input` so all
+     byte/hex value fields in the app render at the same scale and
+     palette. */
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-family: var(--mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+.interrupts-vector-input:focus {
+  outline: 1px solid var(--accent);
+  border-color: var(--accent);
+}
+/* INT-generator sub-group. The group label, the enabled-checkbox row,
+   and the period/pulse-width fields all align with the row-label and
+   themed-input convention used by the rest of the section. */
+.interrupts-gen-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.interrupts-gen-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+.interrupts-gen-label {
+  color: var(--muted);
+  font-size: 0.9em;
+}
+.interrupts-gen-enabled-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.9em;
+}
+.interrupts-gen-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.interrupts-gen-decimal-input {
+  /* Same theming as `.interrupts-vector-input` / `.appshell-byte-input`
+     so the numeric value reads consistently with the other text
+     inputs. `width: 8ch` fits the 6-digit max period without forcing
+     the input to scrollbar on focus. */
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-family: var(--mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 12px;
+  width: 8ch;
+}
+.interrupts-gen-decimal-input:focus {
+  outline: 1px solid var(--accent);
+  border-color: var(--accent);
+}
+.interrupts-gen-unit {
+  color: var(--muted);
+  font-size: 0.9em;
 }
 .interrupts-folded-summary {
   color: var(--muted);

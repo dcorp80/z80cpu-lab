@@ -18,6 +18,7 @@ all live. Foldable, reorderable, persists across reloads.
 → Guided tours:
    - [Mandelbrot example](apps/z80cpu-explorer/examples/mandelbrot/README.md) — load a binary, single-step, set HC and PC breakpoints, watch the picture fill in, and service an NMI against the halted CPU.
    - [RAXOFT z80test example](apps/z80cpu-explorer/examples/z80test/README.md) — load the upstream Z80 conformance suite against a minimal ZX ROM shim, configure split-direction IO with a seeded read, then let ~2.24B half-cycles sweep by and watch the effective clock climb as you switch off capture and tracing.
+   - [Rule 30 example](apps/z80cpu-explorer/examples/rule30/README.md) — pace a 1-D cellular automaton off the explorer's INT generator: two cooperative tasks (IM 1 ISR + main producer) on a single Z80 with a race-free row-boundary throttle, then break inside the INT-acknowledge cycle to see IFF1/IFF2 clear and the injected vector byte on the data bus.
 → Release notes: [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Packages

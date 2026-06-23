@@ -23,7 +23,13 @@
 // correctness requirement — the bus is intrinsically safe on its own.
 
 import type { Z80Cpu } from "@dcorp80/z80cpu";
-import type { BusConfig } from "../config/defaults.ts";
+import type { BusConfig, IntGenConfig } from "../config/defaults.ts";
+import {
+  HC_BOX_HC,
+  HC_BOX_INT_NEXT_EDGE,
+  HC_BOX_INT_PERIOD,
+  HC_BOX_INT_PW,
+} from "./loop.ts";
 
 /** Input-pin signal names this bus exposes. Lives alongside the
  *  `getInputPin`/`setInputPin` API so callers stay in lockstep with the
@@ -112,9 +118,31 @@ export interface Bus64k {
   intVector(): number;
   /** Updates the INT vector. Value is masked to 8 bits at the boundary. */
   setIntVector(byte: number): void;
+  /** Snapshot of the current INT generator config. */
+  intGen(): IntGenConfig;
+  /**
+   * Update the INT generator config. Invariants are enforced at the
+   * boundary: `pulseWidth` floored to ≥ 1; `period` floored and clamped
+   * to ≥ `pulseWidth + 1`. When `enabled` is omitted the current state
+   * is retained. Paused-only contract is enforced by the store action,
+   * not here — the bus itself has no pause concept.
+   */
+  setIntGen(partial: Partial<IntGenConfig>): void;
 }
 
-export function makeBus64k(cpu: Z80Cpu, config: BusConfig): Bus64k {
+export function makeBus64k(
+  cpu: Z80Cpu,
+  config: BusConfig,
+  hcBox: Float64Array,
+): Bus64k {
+  // Shared box: loop writes HC at [HC_BOX_HC]; bus owns INT gen slots
+  // [HC_BOX_INT_NEXT_EDGE/PERIOD/PW]. Storing Infinity and large HC values
+  // in a Float64Array avoids HeapNumber boxing in V8 (plain `let` vars
+  // past SMI range or holding Infinity allocate a fresh HeapNumber per read).
+  // Required: the bus reads box[HC_BOX_HC] in its generator hot path, so a
+  // private fallback would silently desync from the loop's HC counter and
+  // freeze the generator after the first assert.
+  const box = hcBox;
   // Init bytes masked at the bus boundary (per validation-boundary rule —
   // a config value from a user-facing surface mustn't trust upstream masking).
   const memInit = config.memInit & 0xff;
@@ -157,7 +185,30 @@ export function makeBus64k(cpu: Z80Cpu, config: BusConfig): Bus64k {
   // an external pulse-clear (boot.tsx postEdge) is wired up.
   let prevNmiLevel: 0 | 1 = 1;
 
+  // INT generator state. Period, pulseWidth, and nextEdgeHc live in the
+  // shared box (indices HC_BOX_INT_*) so all three are unboxed float64 —
+  // Infinity never materializes a HeapNumber, and accumulated HC values
+  // past 2^31 don't either. The UI mirror re-syncs on loop.onTick.
+  const initGen = config.intGenInit;
+  let intGenEnabled = false; // starts disabled; setIntGen enables below
+  box[HC_BOX_INT_PERIOD] = Math.max(2, Math.floor(initGen.period));
+  box[HC_BOX_INT_PW] = Math.max(1, Math.floor(initGen.pulseWidth));
+  if (box[HC_BOX_INT_PERIOD] < box[HC_BOX_INT_PW] + 1)
+    box[HC_BOX_INT_PERIOD] = box[HC_BOX_INT_PW] + 1;
+  box[HC_BOX_INT_NEXT_EDGE] = Number.POSITIVE_INFINITY;
+  let intGenPinLevel: 0 | 1 = 1; // tracks the generator's current output level
+
   const resolve = () => {
+    // INT generator — one unboxed compare per edge; false when disabled
+    // (Infinity stored in typed array, no HeapNumber materialization).
+    if (box[HC_BOX_HC] >= box[HC_BOX_INT_NEXT_EDGE]) {
+      intGenPinLevel = intGenPinLevel === 0 ? 1 : 0;
+      inputPins.nINT = intGenPinLevel;
+      box[HC_BOX_INT_NEXT_EDGE] +=
+        intGenPinLevel === 0
+          ? box[HC_BOX_INT_PW] // just asserted → schedule deassert
+          : box[HC_BOX_INT_PERIOD] - box[HC_BOX_INT_PW]; // just deasserted → schedule next assert
+    }
     const { nM1, nMREQ, nIORQ, nRD, nWR, addr, data } = cpu.bus;
     if (nMREQ === 0) {
       if (nRD === 0) {
@@ -213,7 +264,7 @@ export function makeBus64k(cpu: Z80Cpu, config: BusConfig): Bus64k {
     if (inputPins.nNMI === 0 && prevNmiLevel === 1) cpu.nmi();
     prevNmiLevel = inputPins.nNMI;
   };
-  return {
+  const result: Bus64k = {
     mem,
     ioRead,
     ioWrite,
@@ -254,5 +305,74 @@ export function makeBus64k(cpu: Z80Cpu, config: BusConfig): Bus64k {
       // user-supplied values [[feedback_validation_boundary]].
       inputPins[name] = (value & 1) as 0 | 1;
     },
+    intGen(): IntGenConfig {
+      return {
+        enabled: intGenEnabled,
+        period: box[HC_BOX_INT_PERIOD],
+        pulseWidth: box[HC_BOX_INT_PW],
+      };
+    },
+    setIntGen(partial: Partial<IntGenConfig>): void {
+      // Clamp incoming values; enforce invariant period >= pulseWidth + 1.
+      const newPulseWidth =
+        partial.pulseWidth !== undefined
+          ? Math.max(1, Math.floor(partial.pulseWidth))
+          : box[HC_BOX_INT_PW];
+      let newPeriod =
+        partial.period !== undefined
+          ? Math.floor(partial.period)
+          : box[HC_BOX_INT_PERIOD];
+      if (newPeriod < newPulseWidth + 1) newPeriod = newPulseWidth + 1;
+      const newEnabled = partial.enabled ?? intGenEnabled;
+      const wasEnabled = intGenEnabled;
+
+      if (!wasEnabled && newEnabled) {
+        // false → true: arm so the first assert fires on next resolve().
+        // Anchor to the current HC (not absolute 0) — otherwise enabling
+        // mid-run with HC > 0 makes the first assert schedule deassert at
+        // `0 + pulseWidth`, which is already in the past, truncating the
+        // first pulse cycle until nextEdgeHc catches up to the live HC.
+        intGenPinLevel = 1;
+        box[HC_BOX_INT_NEXT_EDGE] = box[HC_BOX_HC];
+      } else if (wasEnabled && !newEnabled) {
+        // true → false: deassert immediately, stop the train.
+        inputPins.nINT = 1;
+        intGenPinLevel = 1;
+        box[HC_BOX_INT_NEXT_EDGE] = Number.POSITIVE_INFINITY;
+      } else if (wasEnabled && newEnabled) {
+        // true → true: period/pulseWidth changed. Keep the current phase
+        // and recompute nextEdgeHc against the new widths. Clamp to the
+        // current HC so a shrink that puts the edge "in the past" fires
+        // on the very next resolve rather than rolling backwards.
+        if (intGenPinLevel === 0) {
+          // Currently asserted: assertedSince = nextEdgeHc − oldPulseWidth
+          const assertedSince = box[HC_BOX_INT_NEXT_EDGE] - box[HC_BOX_INT_PW];
+          box[HC_BOX_INT_NEXT_EDGE] = Math.max(
+            box[HC_BOX_HC],
+            assertedSince + newPulseWidth,
+          );
+        } else {
+          // Currently deasserted: deassertedSince = nextEdgeHc − (oldPeriod − oldPulseWidth)
+          const deassertedSince =
+            box[HC_BOX_INT_NEXT_EDGE] -
+            (box[HC_BOX_INT_PERIOD] - box[HC_BOX_INT_PW]);
+          box[HC_BOX_INT_NEXT_EDGE] = Math.max(
+            box[HC_BOX_HC],
+            deassertedSince + (newPeriod - newPulseWidth),
+          );
+        }
+      }
+      // false → false: just update stored values; no effect on hot path.
+      intGenEnabled = newEnabled;
+      box[HC_BOX_INT_PERIOD] = newPeriod;
+      box[HC_BOX_INT_PW] = newPulseWidth;
+    },
   };
+
+  // Apply the initial intGen config (if enabled at boot).
+  if (initGen.enabled) {
+    result.setIntGen({ enabled: true });
+  }
+
+  return result;
 }

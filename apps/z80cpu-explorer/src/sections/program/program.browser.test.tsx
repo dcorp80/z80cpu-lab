@@ -8,9 +8,9 @@
 // All other Program-section behaviors are covered in
 // `program.test.tsx` under happy-dom.
 
-import { page } from "@vitest/browser/context";
 import { render } from "solid-js/web";
 import { afterEach, describe, expect, it } from "vitest";
+import { page } from "vitest/browser";
 // The mixer program from the bench workspace — a real assembled Z80
 // binary we can use as a non-trivial autoload payload. Vite resolves
 // the `?url` asset import; we fetch the bytes from the dev server.

@@ -12,6 +12,7 @@ import { type Component, For, Show } from "solid-js";
 import { PAGE_SIZE_OPTIONS } from "../../config/defaults.ts";
 import { useStore } from "../../store/index.ts";
 import { STR } from "../../style/strings.ts";
+import { ThemeToggle } from "../../style/themeToggle.tsx";
 import { HexAddrInput } from "../hexAddrInput.tsx";
 import type { SectionModule } from "../types.ts";
 
@@ -165,6 +166,7 @@ const Body: Component = () => {
           separator so the user doesn't conflate live and destructive
           settings. */}
       <div class="appshell-livepane">
+        <ThemeToggle />
         <label
           class="appshell-trace-insn"
           classList={{ "is-disabled": !store.isPaused() }}

@@ -4,6 +4,28 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>z80cpu-explorer</title>
+    <script>
+      // Pre-paint theme apply (REQ §7.6). The authoritative theme lives
+      // in the async storage backend, but reading IndexedDB takes at
+      // least one tick — by the time `applyThemeAttribute` runs in the
+      // store, the page has already painted in the system default. This
+      // synchronous localStorage cache (written by every applyThemeAttribute
+      // call) lets us set `data-theme` before paint, bounding the flash
+      // to the first-ever visit when no cache exists yet.
+      //
+      // Storage key duplicated from THEME_STORAGE_KEY in src/style/theme.ts —
+      // this script runs before any module loads, so it can't import.
+      (() => {
+        try {
+          const t = localStorage.getItem("z80cpu-explorer:theme");
+          if (t === "light" || t === "dark" || t === "system") {
+            document.documentElement.setAttribute("data-theme", t);
+          }
+        } catch {
+          // localStorage unavailable; fall through to system default.
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

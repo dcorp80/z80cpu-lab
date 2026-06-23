@@ -17,6 +17,7 @@ import {
   DEFAULT_MEMORY_BYTES_PER_ROW,
   DEFAULT_MEMORY_PAGE_SIZE,
   DEFAULT_UI_CONFIG,
+  type IntGenConfig,
   IO_BYTES_PER_ROW_OPTIONS,
   isPersistedByte,
   MEMORY_BYTES_PER_ROW_OPTIONS,
@@ -41,6 +42,12 @@ import {
   type StorageBackend,
   type UiState,
 } from "../storage/types.ts";
+import {
+  applyThemeAttribute,
+  isTheme,
+  sanitizeTheme,
+  type Theme,
+} from "../style/theme.ts";
 import { formatHex } from "../util/hex.ts";
 import { shortId } from "../util/id.ts";
 import { TraceRing } from "./traceRing.ts";
@@ -277,6 +284,17 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       sanitizeUiConfig(loaded?.uiConfig),
     );
 
+    // Theme — persisted under the top-level UiState alongside section
+    // layout. The CSS selectors do all the visual work; this signal just
+    // mirrors the persisted choice for the segmented control in the app
+    // header. `applyThemeAttribute` writes `data-theme` on `<html>` so
+    // the right selector branch fires. System mode needs no JS listener
+    // because the `@media (prefers-color-scheme: dark)` rule
+    // re-evaluates on its own.
+    const initialTheme: Theme = sanitizeTheme(loaded?.theme);
+    const [theme, setThemeSignal] = createSignal<Theme>(initialTheme);
+    applyThemeAttribute(initialTheme);
+
     // Sessions start fresh each boot — autoload writes set them below.
     const initialSessions: Record<string, ProgramFileSession> = {};
     for (const f of initialFiles)
@@ -335,6 +353,19 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
         nWAIT: bus.getInputPin("nWAIT"),
       });
     }
+
+    // INT generator reactive mirror. Bus is authoritative; this signal
+    // exists only so the Interrupts section UI re-renders when the config
+    // changes. Re-synced from bus on every loop.onTick (same pattern as
+    // inputPins) so mid-run pulse state is visible without per-edge writes.
+    // `bus.intGen()` returns a fresh object each call, so an `equals`
+    // comparator on the field values avoids a no-op re-render every tick.
+    const [intGen, setIntGenSig] = createSignal<IntGenConfig>(bus.intGen(), {
+      equals: (a, b) =>
+        a.enabled === b.enabled &&
+        a.period === b.period &&
+        a.pulseWidth === b.pulseWidth,
+    });
 
     // Instruction-trace ring. Reactivity rides a version
     // counter — sections createMemo on `traceRingVersion()` and pull
@@ -758,9 +789,32 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
         sections: unwrap(sections),
         fileOrder: files.map((f) => f.id),
         uiConfig: uiConfig(),
+        theme: theme(),
       };
       // Fire-and-forget; commit-on-end means at most one call per user action.
       void backend.saveUiState(state);
+    }
+
+    function setTheme(next: Theme): void {
+      const t = sanitizeTheme(next);
+      if (t === theme()) return;
+      setThemeSignal(t);
+      applyThemeAttribute(t);
+      persistUi();
+    }
+
+    // Self-heal: if the loaded record carried an unrecognizable theme
+    // value (downgrade, hand-edit, schema drift), `sanitizeTheme` above
+    // already collapsed it to DEFAULT_THEME in memory — write that back
+    // so we don't re-sanitize the same garbage on every boot. `loaded ===
+    // null` means a fresh backend with no record yet; nothing to repair.
+    if (
+      loaded != null &&
+      loaded.theme !== undefined &&
+      loaded.theme !== null &&
+      !isTheme(loaded.theme)
+    ) {
+      persistUi();
     }
 
     function setUiConfig(patch: Partial<UiConfig>): void {
@@ -866,6 +920,9 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       // checkbox UI returns to unchecked. Also catches any other pin
       // touched by future bus-internal logic.
       syncInputPinsFromBus();
+      // Resync intGen mirror so the UI reflects the live generator state
+      // (e.g. the nINT pulse level that the generator may have updated).
+      setIntGenSig(bus.intGen());
     });
     const offTick = loop.onTick((h) => {
       setHc(h);
@@ -905,6 +962,9 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       // an NMI mid-frame unchecks the checkbox by the next tick (without
       // waiting for the user to pause).
       syncInputPinsFromBus();
+      // Resync intGen mirror — picks up the live nINT pulse state during
+      // run without per-edge Solid signal writes ([[feedback_no_solid_writes_hot_path]]).
+      setIntGenSig(bus.intGen());
     });
     const offInstruction = loop.onInstruction((trace, hcBox) => {
       instructionFiredSinceLastPause = true;
@@ -1337,6 +1397,17 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
             s.hwTrace = { mode: "live" };
           }),
         );
+        // Reset INT generator epoch: disable + re-enable (false→true
+        // path) so nextEdgeHc anchors to the now-zeroed HC and the first
+        // pulse aligns to HC=0. The disable transition deasserts nINT in
+        // the bus's inputPins, so resync the store mirror — onTick won't
+        // fire while paused.
+        if (bus.intGen().enabled) {
+          bus.setIntGen({ enabled: false });
+          bus.setIntGen({ enabled: true });
+          setIntGenSig(bus.intGen());
+          setInputPins("nINT", bus.getInputPin("nINT"));
+        }
       },
       coldBoot() {
         // Paused-only — reloading mid-run would yank an active CPU out
@@ -1699,6 +1770,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
           sections: unwrap(sections),
           fileOrder: files.map((f) => f.id),
           uiConfig: uiConfig(),
+          theme: theme(),
         };
         backend.saveUiState(state).then(
           () => {
@@ -1741,6 +1813,10 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
         // the UI's checkbox is `disabled={!isPaused()}`, this enforces
         // the same contract for programmatic callers.
         if (status() !== "paused") return;
+        // When the INT generator is enabled it owns nINT — manual writes
+        // are a no-op so the generator's schedule is not silently disturbed.
+        // The UI disables the nINT checkbox when intGen.enabled is true.
+        if (name === "nINT" && bus.intGen().enabled) return;
         // Bus is authoritative; mirror into the UI store so the
         // HW-trace checkbox + folded summary re-render. Bus masks at
         // its boundary; we re-read after the write so the mirror
@@ -1753,6 +1829,19 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
         // sections re-render. Bus masks again at its boundary.
         bus.setIntVector(byte);
         setInputPins("intVector", bus.intVector());
+      },
+      intGen,
+      setIntGen(partial: Partial<IntGenConfig>) {
+        // Paused-only — same gate as every other bus write.
+        if (status() !== "paused") return;
+        bus.setIntGen(partial);
+        // Read bus back so any clamping is visible to the UI on this tick.
+        const cfg = bus.intGen();
+        setIntGenSig(cfg);
+        // Resync the inputPins mirror so the nINT checkbox reflects the
+        // generator's current level immediately (e.g. disable deasserts nINT).
+        setInputPins("nINT", bus.getInputPin("nINT"));
+        updateSectionConfig("interrupts", { intGen: cfg });
       },
       files,
       fileSessions,
@@ -1771,6 +1860,8 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       editBreakpoint,
       uiConfig,
       setUiConfig,
+      theme,
+      setTheme,
       dispose() {
         // Order matters: flip the flag first so any rAF callback that
         // wakes after `rootDispose` is already short-circuited before it

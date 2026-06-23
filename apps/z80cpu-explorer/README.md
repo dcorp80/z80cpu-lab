@@ -10,6 +10,7 @@ IO grids, and a hardware-pin waveform — side by side and live.
 **Guided tours:**
 - [Mandelbrot example](examples/mandelbrot/README.md) — a 7-step walkthrough that loads a binary, single-steps through fetch/execute, sets HC and PC breakpoints, watches a Mandelbrot fill in, and services an NMI against the halted CPU.
 - [RAXOFT z80test example](examples/z80test/README.md) — run Patrik Rak's Z80 conformance suite against a minimal ZX ROM shim, configure split-direction IO with a seeded read, then sweep ~2.24B half-cycles and watch the effective clock climb as you switch off capture and tracing.
+- [Rule 30 example](examples/rule30/README.md) — pace a 1-D cellular automaton off the explorer's INT generator: two cooperative tasks (IM 1 ISR + main producer) on a single Z80 with a race-free row-boundary throttle, then break inside the INT-acknowledge cycle to see IFF1/IFF2 clear and the injected vector byte on the data bus.
 
 ## What's in it
 

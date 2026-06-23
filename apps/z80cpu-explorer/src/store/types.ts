@@ -2,7 +2,7 @@ import type { CpuState } from "@dcorp80/z80cpu";
 import type { M1Type } from "@dcorp80/z80cpu-debug";
 import type { Accessor } from "solid-js";
 import type { Store as SolidStore } from "solid-js/store";
-import type { UiConfig } from "../config/defaults.ts";
+import type { IntGenConfig, UiConfig } from "../config/defaults.ts";
 import type { BusAccessRecord, InputPinName } from "../runloop/bus.ts";
 import type { HwTraceBuffer } from "../runloop/hwTrace.ts";
 import type { PauseReason, RunStatus } from "../runloop/loop.ts";
@@ -12,14 +12,15 @@ import type {
   ProgramFileSession,
   SectionUiState,
 } from "../storage/types.ts";
+import type { Theme } from "../style/theme.ts";
 import type { TraceRing } from "./traceRing.ts";
 
-export type { UiConfig } from "../config/defaults.ts";
-
+export type { IntGenConfig, UiConfig } from "../config/defaults.ts";
 export type { BusAccessRecord } from "../runloop/bus.ts";
 // Re-export so loop / sections can import BP-related types from a single
 // hub (the store) without reaching into storage internals.
 export type { Breakpoint } from "../storage/types.ts";
+export type { Theme } from "../style/theme.ts";
 export type { TraceRecord, TraceRing } from "./traceRing.ts";
 
 /**
@@ -443,6 +444,22 @@ export interface Store {
    */
   setInputPin(name: InputPinName, value: 0 | 1): void;
   setIntVector(byte: number): void;
+  /**
+   * Reactive mirror of the bus's INT generator config. Re-syncs from
+   * the bus on every `loop.onTick` so the UI sees the live generator
+   * state without per-edge Solid signal writes. Paused-only writes
+   * go through `setIntGen`.
+   */
+  readonly intGen: Accessor<IntGenConfig>;
+  /**
+   * Update the INT generator config. Paused-only — no-ops while running.
+   * Writes through `bus.setIntGen` (which enforces invariants and applies
+   * state transitions) then reads the bus back for the reactive mirror.
+   * Persists via `updateSectionConfig('interrupts', ...)`.
+   * While the generator is enabled, `setInputPin('nINT', ...)` is a no-op
+   * (the generator owns the pin).
+   */
+  setIntGen(partial: Partial<IntGenConfig>): void;
 
   // ── program files
   readonly files: SolidStore<ProgramFile[]>;
@@ -467,6 +484,16 @@ export interface Store {
   removeBreakpoint(id: string): void;
   toggleBreakpoint(id: string): void;
   editBreakpoint(id: string, patch: BreakpointPatch): void;
+
+  /**
+   * Active theme — "light" | "dark" | "system" (REQ §7.6). System
+   * mode follows `prefers-color-scheme` live; the segmented control in
+   * the app header writes this via `setTheme`. Persisted via the
+   * storage backend (UiState.theme); invalid persisted values collapse
+   * to "system" at boot.
+   */
+  readonly theme: Accessor<Theme>;
+  setTheme(t: Theme): void;
 
   /**
    * UI throttle cadence. Defaults to `DEFAULT_UI_CONFIG`
