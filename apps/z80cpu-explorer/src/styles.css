@@ -863,11 +863,19 @@ body {
   height: var(--itrace-row-h);
   box-sizing: border-box;
   display: grid;
-  grid-template-columns: 1ch 5ch 13ch 19ch minmax(8ch, auto) 1fr;
+  grid-template-columns: 1ch 5ch 13ch 19ch minmax(8ch, auto) 6ch 1fr;
   column-gap: 8px;
 }
 .itrace-executed > .itrace-virt-spacer > .itrace-row > .itrace-tag {
   justify-self: end;
+}
+.itrace-repeat-badge {
+  color: var(--accent);
+  font-size: 0.85em;
+  text-align: right;
+}
+.itrace-repeat-badge:empty {
+  visibility: hidden;
 }
 .itrace-row.is-preview,
 .itrace-row.is-current {

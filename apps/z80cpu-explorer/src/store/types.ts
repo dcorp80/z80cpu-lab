@@ -261,6 +261,15 @@ export interface Store {
    */
   readonly traceInstructions: Accessor<boolean>;
   setTraceInstructions(v: boolean): void;
+  /**
+   * Whether consecutive identical-PC instructions (LDIR, HALT, JR $) are
+   * folded into one ring record with a `count` field rather than filling
+   * the ring with duplicate entries. Default `true`. Paused-only. Flipping
+   * in either direction clears the ring (mixed folded/unfolded records in
+   * the same ring would be ambiguous). Persisted under `appShell`.
+   */
+  readonly collapseRepeats: Accessor<boolean>;
+  setCollapseRepeats(v: boolean): void;
 
   // ── view cursors. Default `live`; detached
   // by scroll-back; snap-to-live button (and `g` hotkey, which snaps

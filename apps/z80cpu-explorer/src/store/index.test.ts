@@ -341,6 +341,93 @@ describe("createAppStore", () => {
       expect(store.traceRing.size()).toBe(0);
     });
 
+    it("setCollapseRepeats — default is true (COLLAPSE_ENABLED)", async () => {
+      const { store } = await freshStore();
+      expect(store.collapseRepeats()).toBe(true);
+    });
+
+    it("setCollapseRepeats — paused-only; no-ops while running", async () => {
+      const { store, loop } = await freshStore();
+      loop.emitInstruction(mkTrace({ startAddr: 0x100 }));
+      loop.emitInstruction(mkTrace({ startAddr: 0x101 }));
+      expect(store.traceRing.size()).toBe(2);
+      store.run();
+      store.setCollapseRepeats(false);
+      expect(store.collapseRepeats()).toBe(true);
+      expect(store.traceRing.size()).toBe(2);
+      loop.emitPause({ kind: "user" });
+      store.setCollapseRepeats(false);
+      expect(store.collapseRepeats()).toBe(false);
+    });
+
+    it("setCollapseRepeats — flip clears the ring and snaps the cursor to live", async () => {
+      const { store, loop } = await freshStore();
+      loop.emitInstruction(mkTrace({ startAddr: 0x100 }));
+      loop.emitInstruction(mkTrace({ startAddr: 0x101 }));
+      expect(store.traceRing.size()).toBe(2);
+      store.detachInstructionTraceCursor(42);
+      expect(store.cursors.instructionTrace.mode).toBe("detached");
+
+      const vBefore = store.traceRingVersion();
+      store.setCollapseRepeats(false);
+      expect(store.traceRing.size()).toBe(0);
+      expect(store.traceRingVersion()).toBeGreaterThan(vBefore);
+      expect(store.cursors.instructionTrace).toEqual({ mode: "live" });
+
+      // Flipping back to true also clears the ring (no mixed records).
+      loop.emitInstruction(mkTrace({ startAddr: 0x200 }));
+      expect(store.traceRing.size()).toBe(1);
+      store.setCollapseRepeats(true);
+      expect(store.traceRing.size()).toBe(0);
+      expect(store.collapseRepeats()).toBe(true);
+    });
+
+    it("setCollapseRepeats — persists under appShell.config.collapseRepeats", async () => {
+      const { backend, store } = await freshStore();
+      store.setCollapseRepeats(false);
+      await flush();
+      const saved = await backend.loadUiState();
+      expect(
+        saved?.sections.find((s) => s.id === "appShell")?.config,
+      ).toMatchObject({ collapseRepeats: false });
+    });
+
+    it("setCollapseRepeats — reloads from persisted value on boot", async () => {
+      const backend = new MemoryBackend();
+      await backend.saveUiState({
+        sections: [
+          { id: "appShell", folded: false, config: { collapseRepeats: false } },
+        ],
+      });
+      const store = await createAppStore({
+        backend,
+        loop: makeStubLoop(),
+        bus: makeStubBus(),
+        dbg: makeStubDbg(),
+      });
+      expect(store.collapseRepeats()).toBe(false);
+    });
+
+    it("setCollapseRepeats — malformed persisted value falls back to true", async () => {
+      const backend = new MemoryBackend();
+      await backend.saveUiState({
+        sections: [
+          {
+            id: "appShell",
+            folded: false,
+            config: { collapseRepeats: "garbage" },
+          },
+        ],
+      });
+      const store = await createAppStore({
+        backend,
+        loop: makeStubLoop(),
+        bus: makeStubBus(),
+        dbg: makeStubDbg(),
+      });
+      expect(store.collapseRepeats()).toBe(true);
+    });
+
     it("zeroHC clears the trace ring and bumps its version", async () => {
       const { store, loop } = await freshStore();
       loop.emitInstruction(mkTrace({ startAddr: 0x100 }));

@@ -186,6 +186,23 @@ const Body: Component = () => {
             {STR.appShell.traceInstructionsLabel}
           </span>
         </label>
+        <label
+          class="appshell-trace-insn"
+          classList={{ "is-disabled": !store.isPaused() }}
+          title={STR.appShell.collapseRepeatsTooltip}
+        >
+          <input
+            type="checkbox"
+            class="appshell-trace-insn-checkbox"
+            aria-label={STR.appShell.collapseRepeatsAriaLabel}
+            checked={store.collapseRepeats()}
+            disabled={!store.isPaused()}
+            onChange={(e) => store.setCollapseRepeats(e.currentTarget.checked)}
+          />
+          <span class="appshell-trace-insn-label">
+            {STR.appShell.collapseRepeatsLabel}
+          </span>
+        </label>
         <div class="appshell-row" title={STR.appShell.memPageTooltip}>
           <label class="appshell-row-label" for={MEM_PAGE_INPUT_ID}>
             {STR.appShell.memPageLabel}

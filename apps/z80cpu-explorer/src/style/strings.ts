@@ -73,6 +73,11 @@ export const STR = {
     traceInstructionsAriaLabel: "Trace each instruction (drives dbg observer)",
     traceInstructionsTooltip:
       "Observe the CPU at every instruction boundary. Required for step-by-instruction, the Current row, the Preview, and instruction capture. Turn off for maximum run throughput when you only need PC/HC breakpoints and free-running execution.",
+    collapseRepeatsLabel: "Collapse repeats",
+    collapseRepeatsAriaLabel:
+      "Collapse consecutive identical-PC instructions into one row",
+    collapseRepeatsTooltip:
+      "Fold consecutive identical-PC instructions (LDIR, HALT, JR $) into one row with an ×N badge. Disabling drops the captured ring.",
   },
   breakpoints: {
     title: "Breakpoints",
@@ -287,6 +292,8 @@ export const STR = {
       // (wasted prefix M1s surface as their own short traces).
       prefix: "PREFIX",
     },
+    // ×N badge shown on a folded record when count > 1.
+    repeatBadge: (n: number) => `×${n}`,
   },
   io: {
     title: "IO",

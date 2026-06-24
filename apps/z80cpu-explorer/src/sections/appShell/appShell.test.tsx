@@ -283,6 +283,50 @@ describe("appShell — Trace-instructions checkbox (body live-pane)", () => {
   });
 });
 
+describe("appShell — Collapse-repeats checkbox (body live-pane)", () => {
+  it("renders in the live-pane, checked by default, with the labeled text", async () => {
+    harness = await mount("body");
+    const checkboxes = harness.container.querySelectorAll<HTMLInputElement>(
+      ".appshell-trace-insn-checkbox",
+    );
+    // Second checkbox in the live-pane is Collapse repeats.
+    const cb = checkboxes[1];
+    expect(cb).toBeDefined();
+    expect(cb.checked).toBe(true);
+    const labels = harness.container.querySelectorAll(
+      ".appshell-trace-insn-label",
+    );
+    expect(labels[1]?.textContent).toBe(STR.appShell.collapseRepeatsLabel);
+    const pane = harness.container.querySelector(".appshell-livepane");
+    expect(pane?.contains(cb)).toBe(true);
+  });
+
+  it("clicking flips collapseRepeats via the store", async () => {
+    harness = await mount("body");
+    const checkboxes = harness.container.querySelectorAll<HTMLInputElement>(
+      ".appshell-trace-insn-checkbox",
+    );
+    const cb = checkboxes[1];
+    expect(harness.store.collapseRepeats()).toBe(true);
+    fireEvent.click(cb);
+    expect(harness.store.collapseRepeats()).toBe(false);
+    fireEvent.click(cb);
+    expect(harness.store.collapseRepeats()).toBe(true);
+  });
+
+  it("disables while running (paused-only gate)", async () => {
+    harness = await mount("body");
+    const checkboxes = harness.container.querySelectorAll<HTMLInputElement>(
+      ".appshell-trace-insn-checkbox",
+    );
+    const cb = checkboxes[1];
+    expect(cb.disabled).toBe(false);
+    harness.store.run();
+    await flush();
+    expect(cb.disabled).toBe(true);
+  });
+});
+
 describe("appShell — reload-required fill bytes (body)", () => {
   it("Memory and IO fill inputs render with the current live bytes (default FF)", async () => {
     harness = await mount("body");

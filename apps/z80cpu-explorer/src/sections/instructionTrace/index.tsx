@@ -21,6 +21,17 @@ import {
   VIRTUAL_SPACER_MAX_PX,
 } from "./virtualWindow.ts";
 
+// Thin wrapper around a TraceRecord that snapshots the mutable `count` and
+// `lastHc` fields at memo evaluation time. A new wrapper is allocated each
+// time `records()` runs (on every traceRingVersion bump), so Solid's
+// `<Index>` sees a changed item even when the underlying TraceRecord object
+// was mutated in-place by a fold. The wrapper is stable enough for the
+// render window; `getDisasm` caches onto `entry.rec` as before.
+interface RecordEntry {
+  rec: TraceRecord;
+  count: number;
+}
+
 // How many instructions to forward-disassemble after current PC: 12 is a comfortable middle.
 const PREVIEW_INSN_COUNT = 12;
 // Max bytes a single Z80 instruction can consume (DDCB d op, DD 21 nn nn,
@@ -203,14 +214,17 @@ const FoldedSummary: Component = () => {
 };
 
 interface ExecutedRowProps {
-  rec: TraceRecord;
+  entry: RecordEntry;
   /** Px offset within the virtualization spacer. Applied as inline
    *  `top`; CSS pins the row absolutely with the canonical row height. */
   top: number;
 }
 
 const ExecutedRow: Component<ExecutedRowProps> = (props) => {
-  const tag = createMemo(() => m1Tag(props.rec));
+  const tag = createMemo(() => m1Tag(props.entry.rec));
+  // Single read of `count` shared by aria-hidden and the badge text —
+  // both depend on the same threshold.
+  const folded = () => props.entry.count > 1;
   // Layout mirrors Preview / Current: an empty 1ch gutter slot keeps
   // addr / bytes / disasm column-aligned across all three panes. HC
   // sits after disasm (was leftmost — growing digit counts shifted
@@ -218,10 +232,13 @@ const ExecutedRow: Component<ExecutedRowProps> = (props) => {
   return (
     <div class="itrace-row" style={{ top: `${props.top}px` }}>
       <span class="itrace-gutter" aria-hidden="true" />
-      <span class="itrace-addr">{formatHex(props.rec.startAddr, 4)}</span>
-      <span class="itrace-bytes">{formatBytes(props.rec)}</span>
-      <span class="itrace-disasm">{getDisasm(props.rec)}</span>
-      <span class="itrace-hc">{fmt(props.rec.hc)}</span>
+      <span class="itrace-addr">{formatHex(props.entry.rec.startAddr, 4)}</span>
+      <span class="itrace-bytes">{formatBytes(props.entry.rec)}</span>
+      <span class="itrace-disasm">{getDisasm(props.entry.rec)}</span>
+      <span class="itrace-hc">{fmt(props.entry.rec.hc)}</span>
+      <span class="itrace-repeat-badge" aria-hidden={!folded()}>
+        {folded() ? STR.instructionTrace.repeatBadge(props.entry.count) : ""}
+      </span>
       <span class="itrace-tag">{tag() ?? ""}</span>
     </div>
   );
@@ -379,14 +396,18 @@ const Body: Component = () => {
   // On pause-edge: throttle flushes (store writes the current ring
   // version), status flips to paused, the memo re-runs, and the body
   // refreshes against the final state.
-  const records = createMemo<TraceRecord[]>((prev) => {
+  // Each memo run produces NEW wrapper objects so Solid's `<Index>` detects
+  // in-place-folded records as "changed" even though the underlying
+  // TraceRecord reference stays the same. The `count` snapshot is what
+  // drives the ×N badge; `rec` is passed through for disasm / bytes / addr.
+  const records = createMemo<RecordEntry[]>((prev) => {
     store.traceRingVersionThrottled();
     if (store.status() !== "paused") return prev;
     const n = store.traceRing.size();
-    const out: TraceRecord[] = new Array(n);
+    const out: RecordEntry[] = new Array(n);
     for (let i = 0; i < n; i++) {
-      // Non-null assert: i is in [0, size).
-      out[i] = store.traceRing.at(i) as TraceRecord;
+      const r = store.traceRing.at(i) as TraceRecord;
+      out[i] = { rec: r, count: r.count };
     }
     return out;
   }, []);
@@ -537,10 +558,12 @@ const Body: Component = () => {
     if (cursor.mode === "live") {
       // Pin the cursor at the newest visible record's HC. Approximation
       // is fine — anchor only affects which historical HC the section
-      // would render if we add hwTrace cross-linking later.
+      // would render if we add hwTrace cross-linking later. Use `lastHc`
+      // so a folded run (LDIR/HALT/JR $) anchors at the latest iteration,
+      // not the first one tens of thousands of HC earlier.
       const n = store.traceRing.size();
       const last = n > 0 ? store.traceRing.at(n - 1) : undefined;
-      store.detachInstructionTraceCursor(last?.hc ?? store.hc());
+      store.detachInstructionTraceCursor(last?.lastHc ?? store.hc());
     }
   };
 
@@ -596,9 +619,9 @@ const Body: Component = () => {
               style={{ height: `${spacerH()}px` }}
             >
               <Index each={windowSlice()}>
-                {(rec, i) => (
+                {(entry, i) => (
                   <ExecutedRow
-                    rec={rec()}
+                    entry={entry()}
                     top={(windowRange().first + i) * rowH()}
                   />
                 )}

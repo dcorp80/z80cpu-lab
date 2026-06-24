@@ -50,7 +50,7 @@ import {
 } from "../style/theme.ts";
 import { formatHex } from "../util/hex.ts";
 import { shortId } from "../util/id.ts";
-import { TraceRing } from "./traceRing.ts";
+import { COLLAPSE_ENABLED, TraceRing } from "./traceRing.ts";
 import type {
   BreakpointPatch,
   BusAccessRecord,
@@ -425,6 +425,17 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       true,
     );
     const [capture, setCaptureSig] = createSignal<boolean>(captureRaw);
+
+    // Collapse-repeats toggle. Raw closure var for the hot path; Solid signal
+    // for the UI. When true, consecutive identical-PC instructions (LDIR,
+    // HALT, JR $) are folded into one ring record with a `count` field.
+    let collapseRepeatsRaw: boolean = readPersistedBool(
+      "appShell",
+      "collapseRepeats",
+      COLLAPSE_ENABLED,
+    );
+    const [collapseRepeats, setCollapseRepeatsSig] =
+      createSignal<boolean>(collapseRepeatsRaw);
 
     // Trace-instructions toggle — drives `dbg.enabled`. Off skips all per-
     // edge dbg bookkeeping, so onInstructionComplete never fires; step-by-
@@ -979,7 +990,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       // user disabled ring capture. The insn counter and the throttled
       // mirror still tick so the folded summary keeps moving.
       if (captureRaw) {
-        traceRing.push(trace, hcBox[0]);
+        traceRing.push(trace, hcBox[0], collapseRepeatsRaw);
         traceRingVersionRaw++;
       }
       bumpThrottled();
@@ -1036,17 +1047,21 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
       persistUi();
     }
 
-    // Capture-off side-effects shared by `setCapture(false)` and the
-    // capture-forced-off branch of `setTraceInstructions(false)`. Mirrors
-    // setHwTraceCapture: disabling discards the live ring (a future save-or-skip modal will
-    // hook a save-or-skip modal in here before clearing) and snaps any
-    // detached cursor back to live, since the anchor HC over an emptied
-    // ring is meaningless. Bumps the throttled mirror immediately so the
-    // section's frozen body memos re-run on the same tick rather than
-    // waiting for the next bumpThrottled cycle.
+    // Ring-clearing side-effects shared by three paused-only callers:
+    // `setCapture(false)`, the capture-forced-off branch of
+    // `setTraceInstructions(false)`, and `setCollapseRepeats` (which
+    // discards the ring on either direction so folded/unfolded records
+    // don't mix). Mirrors setHwTraceCapture: discards the live ring (a
+    // future save-or-skip modal will hook in here before clearing) and
+    // snaps any detached cursor back to live, since the anchor HC over
+    // an emptied ring is meaningless. Bumps the throttled mirror
+    // immediately so the section's frozen body memos re-run on the same
+    // tick rather than waiting for the next bumpThrottled cycle.
+    // Does NOT itself flip `captureRaw` — callers that genuinely want
+    // to disable capture must set it after calling.
     // TODO: prompt to save/export the captured ring here, and
     // only clear on the user's confirm/discard.
-    function captureOffImperative(): void {
+    function clearTraceRingImperative(): void {
       traceRing.clear();
       traceRingVersionRaw++;
       setTraceRingVersionThrottled(traceRing.version());
@@ -1467,13 +1482,25 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
         // programmatic callers.
         if (status() !== "paused") return;
         if (!v) {
-          captureOffImperative();
+          clearTraceRingImperative();
         }
         captureRaw = v;
         setCaptureSig(v);
         // Persist alongside other section config (folded, watchAddr, etc.).
         // Fire-and-forget through updateSectionConfig → persistUi.
         updateSectionConfig("instructionTrace", { capture: v });
+      },
+      collapseRepeats,
+      setCollapseRepeats(v: boolean) {
+        // Paused-only — flipping mid-run races the body's frozen records
+        // memo (REQ §7.5 freeze-during-run).
+        if (status() !== "paused") return;
+        // Clear in both directions: a single ring cannot hold a mix of
+        // folded and unfolded records without visual discontinuity.
+        clearTraceRingImperative();
+        collapseRepeatsRaw = v;
+        setCollapseRepeatsSig(v);
+        updateSectionConfig("appShell", { collapseRepeats: v });
       },
       traceInstructions,
       setTraceInstructions(v: boolean) {
@@ -1482,7 +1509,7 @@ export async function createAppStore(deps: CreateStoreDeps): Promise<Store> {
         // without bookkeeping. Both branches use the no-persist variant
         // so the section-config writes coalesce into one `persistUi()`.
         if (!v && captureRaw) {
-          captureOffImperative();
+          clearTraceRingImperative();
           captureRaw = false;
           setCaptureSig(false);
           patchSectionConfig("instructionTrace", { capture: false });

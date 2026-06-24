@@ -10,6 +10,11 @@
 
 import type { InstructionTrace, M1Type } from "@dcorp80/z80cpu-debug";
 
+// Cold-boot default for fresh profiles. A persisted `collapseRepeats`
+// value (under `appShell.config`) overrides this at boot — flipping this
+// constant is NOT a runtime kill-switch for users who already toggled it on.
+export const COLLAPSE_ENABLED = true;
+
 /**
  * One stored instruction. Field set matches `InstructionTrace` plus
  * `hc` (when the trace was committed) and a lazy `disasmText` slot the
@@ -17,7 +22,9 @@ import type { InstructionTrace, M1Type } from "@dcorp80/z80cpu-debug";
  * read recomputes against the (possibly recycled) bytes.
  */
 export class TraceRecord {
-  /** Half-cycle at which `onInstructionComplete` fired (loop.hc). */
+  /** Half-cycle at which `onInstructionComplete` fired for the FIRST
+   *  iteration (loop.hc). Stays fixed as the run extends — `hc` is the
+   *  "earliest this PC appeared" anchor used by findByHc. */
   hc = 0;
   /** Fetch address of this instruction's first M1 byte. */
   startAddr = 0;
@@ -30,10 +37,17 @@ export class TraceRecord {
   /** Where execution went next — captured at the next M1's T1_0
    *  (see CLAUDE.md "trace timing model"). */
   nextPc = 0;
-  /** HC consumed by this instruction (the trace's own `hc` field). */
+  /** HC consumed by ONE iteration of this instruction (the trace's own
+   *  `hc` field). Stays per-iteration when the record is folded
+   *  (`count > 1`); total HC of the run is approximately
+   *  `lastHc - hc + instHc`. */
   instHc = 0;
   /** Lazy disasm text — cleared on push, filled on first read. */
   disasmText: string | null = null;
+  /** Iterations folded into this record (1 = no fold). */
+  count = 1;
+  /** HC of the most recent iteration (equals `hc` when `count === 1`). */
+  lastHc = 0;
 }
 
 export class TraceRing {
@@ -51,7 +65,34 @@ export class TraceRing {
     this.buf = Array.from({ length: cap }, () => new TraceRecord());
   }
 
-  push(src: InstructionTrace, hcAtComplete: number): void {
+  push(src: InstructionTrace, hcAtComplete: number, collapse: boolean): void {
+    // Collapse predicate: when `collapse` is true and the new trace matches
+    // the current head record (same startAddr, length, bytes, m1Type), fold
+    // in place — bump lastHc and count rather than advancing the head.
+    // This prevents LDIR/HALT/JR $ spin-loops from evicting everything
+    // useful before them.
+    if (collapse && this.size() > 0) {
+      const prev = this.buf[(this.head - 1 + this.cap) % this.cap];
+      if (
+        src.startAddr === prev.startAddr &&
+        src.length === prev.length &&
+        src.m1Type === prev.m1Type &&
+        // Compare only bytes[0..length) — the dbg double-buffers its
+        // InstructionTrace (_a/_b alternating) and does NOT clear slots
+        // beyond `length` between instructions. Comparing stale bytes
+        // would cause the first fold to fail whenever the two buffers
+        // carried different garbage from previous (longer) instructions.
+        src.bytes[0] === prev.bytes[0] &&
+        (src.length <= 1 || src.bytes[1] === prev.bytes[1]) &&
+        (src.length <= 2 || src.bytes[2] === prev.bytes[2]) &&
+        (src.length <= 3 || src.bytes[3] === prev.bytes[3])
+      ) {
+        prev.lastHc = hcAtComplete;
+        prev.count++;
+        this._version++;
+        return;
+      }
+    }
     const r = this.buf[this.head];
     r.hc = hcAtComplete;
     r.startAddr = src.startAddr;
@@ -68,6 +109,8 @@ export class TraceRing {
     r.nextPc = src.nextPc;
     r.instHc = src.hc;
     r.disasmText = null;
+    r.count = 1;
+    r.lastHc = hcAtComplete;
     this.head = (this.head + 1) % this.cap;
     if (this.head === 0) this.filled = true;
     this._version++;

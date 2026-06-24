@@ -251,6 +251,62 @@ describe("instructionTrace section — executed log", () => {
     expect(text).toContain("LD A,FF");
     expect(text).not.toMatch(/LD A,FFh/);
   });
+
+  it("×N badge appears on a folded record (collapseRepeats=true)", async () => {
+    harness = await mount();
+    // collapseRepeats defaults to true in freshStore — same HALT trace three times.
+    const halt = mkTrace({
+      startAddr: 0x4000,
+      bytes: [0x76],
+      length: 1,
+      m1Type: "halt",
+    });
+    harness.loop.emitInstruction(halt);
+    harness.loop.emitInstruction(halt);
+    harness.loop.emitInstruction(halt);
+    harness.loop.emitPause({ kind: "step-complete" });
+    // One ring record, badge showing ×3.
+    expect(harness.store.traceRing.size()).toBe(1);
+    const badge = harness.container.querySelector(".itrace-repeat-badge");
+    expect(badge).not.toBeNull();
+    expect(badge?.textContent).toBe(STR.instructionTrace.repeatBadge(3));
+  });
+
+  it("no ×N badge text when count === 1 (span always rendered but empty)", async () => {
+    harness = await mount();
+    harness.loop.emitInstruction(
+      mkTrace({ startAddr: 0x100, bytes: [0x78], length: 1 }),
+    );
+    harness.loop.emitPause({ kind: "step-complete" });
+    const badge = harness.container.querySelector(".itrace-repeat-badge");
+    // Span is always present (holds the grid column); content is empty for count=1.
+    expect(badge).not.toBeNull();
+    expect(badge?.textContent).toBe("");
+  });
+
+  it("N separate rows with no badge when collapseRepeats is off", async () => {
+    harness = await mount();
+    // Turn off collapseRepeats (already paused at construction).
+    harness.store.setCollapseRepeats(false);
+    const halt = mkTrace({
+      startAddr: 0x4000,
+      bytes: [0x76],
+      length: 1,
+      m1Type: "halt",
+    });
+    harness.loop.emitInstruction(halt);
+    harness.loop.emitInstruction(halt);
+    harness.loop.emitInstruction(halt);
+    harness.loop.emitPause({ kind: "step-complete" });
+    const rows = harness.container.querySelectorAll(
+      ".itrace-row:not(.is-preview):not(.is-current)",
+    );
+    expect(rows.length).toBe(3);
+    // Badge spans are present (grid column holder) but all empty — no fold.
+    for (const row of rows) {
+      expect(row.querySelector(".itrace-repeat-badge")?.textContent).toBe("");
+    }
+  });
 });
 
 describe("instructionTrace section — PC preview", () => {
