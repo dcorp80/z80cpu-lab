@@ -18,6 +18,17 @@ Each release entry is sectioned by package. Versions follow
 
 _Nothing yet._
 
+## [explorer-0.4.1] — 2026-06-24
+
+Patch release: reduces instruction-trace noise by collapsing consecutive
+entries that execute at the same PC.
+
+### `@dcorp80/z80cpu-explorer`
+
+#### Changed
+- Instruction trace now collapses consecutive executions at the same PC
+  into a single entry with a repeat counter.
+
 ## [explorer-0.4.0] — 2026-06-23
 
 Focus: interrupt-driven workflows. The bus gains a software-configurable
@@ -118,7 +129,8 @@ First deployment of the visual explorer to GitHub Pages.
 - Header version chip showing `v<version> (<sha>)` baked in at build time.
 - GitHub Pages deployment via tag-triggered workflow (`explorer-v*` → `gh-pages`).
 
-[Unreleased]: https://github.com/dcorp80/z80cpu-lab/compare/explorer-v0.4.0...HEAD
+[Unreleased]: https://github.com/dcorp80/z80cpu-lab/compare/explorer-v0.4.1...HEAD
+[explorer-0.4.1]: https://github.com/dcorp80/z80cpu-lab/compare/explorer-v0.4.0...explorer-v0.4.1
 [explorer-0.4.0]: https://github.com/dcorp80/z80cpu-lab/compare/explorer-v0.3.1...explorer-v0.4.0
 [explorer-0.3.1]: https://github.com/dcorp80/z80cpu-lab/compare/explorer-v0.3.0...explorer-v0.3.1
 [explorer-0.3.0]: https://github.com/dcorp80/z80cpu-lab/compare/explorer-v0.2.0...explorer-v0.3.0

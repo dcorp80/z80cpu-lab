@@ -90,6 +90,12 @@ The ISR also uses the **shadow register set** (`ex af, af'` and `exx`) for conte
    - Press "Step" a few more times to advance into the ISR.
    - Go to the "Hardware trace" section.
    - Before the **INT acknowledge** M1 cycle the `nHALT` signal goes high. `nM1` and `nIORQ` are both LOW at the same time (a normal M1 has `nMREQ` LOW, not `nIORQ`). The byte sampled by the CPU on the data bus is the vector injected by the INT generator. In IM 1 the vector byte is ignored — the CPU always jumps to `0038h` — but the acknowledge cycle still runs on the bus.
+     > **Note:**
+     The interrupt does not always arrive during `HALT`. If execution pauses at
+     `0038h` but the hardware trace does not show a HALT exit, press **Run** again.
+     After a few attempts
+     the interrupt will usually land while the CPU is halted, making the wake-up
+     sequence visible.
    - Two `nWR` LOW pulses follow — the CPU pushing the return address onto the stack (PC high byte, then PC low byte) before jumping to the service vector.
    - The next M1 cycle starts at address `0038`.
    - <details>
