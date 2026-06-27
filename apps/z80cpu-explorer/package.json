@@ -1,6 +1,6 @@
 {
   "name": "@dcorp80/z80cpu-explorer",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Visual debugger / tracer for @dcorp80/z80cpu",
   "license": "MIT",
   "author": "dcorp80",
@@ -15,7 +15,7 @@
     "clean": "rm -rf dist node_modules/.vite"
   },
   "dependencies": {
-    "@dcorp80/z80cpu": "^0.1.3",
+    "@dcorp80/z80cpu": "^0.2.0",
     "@dcorp80/z80cpu-debug": "*",
     "@dcorp80/z80cpu-disasm": "*",
     "solid-js": "^1.9.13"

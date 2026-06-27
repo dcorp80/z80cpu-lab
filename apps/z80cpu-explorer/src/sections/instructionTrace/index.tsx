@@ -423,7 +423,6 @@ const Body: Component = () => {
   // jump/call/ret target during the 2-HC window between the next M1's
   // T1_0 and T3_0.
   const currentLine = createMemo<CurrentLine | null>(() => {
-    if (store.status() !== "paused") return null;
     // When tracing is off dbg.enabled is false → `dbg.curr` never refreshes,
     // so the snapshot the store grabbed on the last pause is stale. Suppress
     // the row rather than render a zero/garbage address. Capture (the ring
