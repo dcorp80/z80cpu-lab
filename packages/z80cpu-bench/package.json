@@ -10,7 +10,7 @@
     "test": "node --test src/*.test.ts"
   },
   "dependencies": {
-    "@dcorp80/z80cpu": "^0.2.0",
+    "@dcorp80/z80cpu": "^0.2.1",
     "@dcorp80/z80cpu-debug": "*"
   }
 }

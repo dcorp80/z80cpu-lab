@@ -18,6 +18,15 @@ Each release entry is sectioned by package. Versions follow
 
 _Nothing yet._
 
+## [explorer-0.4.3] — 2026-07-02
+
+Patch release: picks up the latest CPU core fixes.
+
+### `@dcorp80/z80cpu-explorer`
+
+#### Changed
+- Bumped `@dcorp80/z80cpu` from `0.2.0` to `0.2.1` across every package that depends on it (`-debug`, `-cli`, `-bench`, and the explorer).
+
 ## [explorer-0.4.2] — 2026-06-27
 
 Patch release: picks up the latest CPU core fixes and eliminates layout shifts in the Current opcode display.
@@ -130,7 +139,8 @@ First deployment of the visual explorer to GitHub Pages.
 - Header version chip showing `v<version> (<sha>)` baked in at build time.
 - GitHub Pages deployment via tag-triggered workflow (`explorer-v*` → `gh-pages`).
 
-[Unreleased]: https://github.com/dcorp80/z80cpu-lab/compare/explorer-v0.4.2...HEAD
+[Unreleased]: https://github.com/dcorp80/z80cpu-lab/compare/explorer-v0.4.3...HEAD
+[explorer-0.4.3]: https://github.com/dcorp80/z80cpu-lab/compare/explorer-v0.4.2...explorer-v0.4.3
 [explorer-0.4.2]: https://github.com/dcorp80/z80cpu-lab/compare/explorer-v0.4.1...explorer-v0.4.2
 [explorer-0.4.1]: https://github.com/dcorp80/z80cpu-lab/compare/explorer-v0.4.0...explorer-v0.4.1
 [explorer-0.4.0]: https://github.com/dcorp80/z80cpu-lab/compare/explorer-v0.3.1...explorer-v0.4.0
