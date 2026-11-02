@@ -13,16 +13,16 @@ node packages/z80cpu-cli/dist/repl.js <path>
 
 ## Commands
 
-| Input            | Effect |
-|------------------|--------|
-| `<enter>`        | Step until the next trace fires (one instruction, or one wasted prefix M1). Prints the trace line followed by the full register snapshot. |
-| `<integer N>`    | Fast-forward `N` half-cycles with tracing OFF. The last ~96 HC re-enable tracing so you see context where you stopped. |
-| `b <addr>`       | Set a PC breakpoint at `<addr>` (hex). Replaces any existing breakpoint. |
-| `b <lo> <hi>`    | Set a PC range breakpoint, inclusive on both ends. |
-| `b`              | Show the current breakpoint. |
-| `b -`            | Clear the breakpoint. |
-| `c`              | Continue: free-run (tracing off) until the breakpoint fires. Requires a breakpoint to be set. |
-| `exit` / Ctrl-D  | Quit. |
+| Input           | Effect                                                                                                                                    |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `<enter>`       | Step until the next trace fires (one instruction, or one wasted prefix M1). Prints the trace line followed by the full register snapshot. |
+| `<integer N>`   | Fast-forward `N` half-cycles with tracing OFF. The last ~96 HC re-enable tracing so you see context where you stopped.                    |
+| `b <addr>`      | Set a PC breakpoint at `<addr>` (hex). Replaces any existing breakpoint.                                                                  |
+| `b <lo> <hi>`   | Set a PC range breakpoint, inclusive on both ends.                                                                                        |
+| `b`             | Show the current breakpoint.                                                                                                              |
+| `b -`           | Clear the breakpoint.                                                                                                                     |
+| `c`             | Continue: free-run (tracing off) until the breakpoint fires. Requires a breakpoint to be set.                                             |
+| `exit` / Ctrl-D | Quit.                                                                                                                                     |
 
 Hex address forms: bare (`1234`), `0x` prefix (`0x1234`), or `$` prefix
 (`$1234`). All in the 16-bit range $0000..$FFFF.
@@ -35,7 +35,7 @@ address inside the range — i.e. at the start of an M1 cycle with `PC ∈
 
 - `dbg.state().pc` shows the breakpoint address.
 - The instruction at that address has not yet executed (registers reflect
-  the *previous* instruction's completion).
+  the _previous_ instruction's completion).
 - The next `<enter>` step executes the instruction and prints its trace.
 
 The breakpoint is sticky: hitting it does not disarm it. If the program

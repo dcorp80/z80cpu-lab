@@ -52,6 +52,7 @@ export default defineConfig(({ command }) => ({
           name: "unit",
           environment: "happy-dom",
           globals: false,
+          pool: "vmThreads",
           include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
           exclude: ["src/**/*.browser.test.ts", "src/**/*.browser.test.tsx"],
         },

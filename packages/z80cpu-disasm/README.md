@@ -11,29 +11,29 @@ or any other source — but has no runtime dependency on the emulator.
 ```ts
 import { disasm } from "@dcorp80/z80cpu-disasm";
 
-disasm([0x3E, 0x42]);
+disasm([0x3e, 0x42]);
 // → { text: "LD A,42h", length: 2 }
 
-disasm([0xDD, 0x21, 0x34, 0x12]);
+disasm([0xdd, 0x21, 0x34, 0x12]);
 // → { text: "LD IX,1234h", length: 4, abs: 0x1234 }
 
-disasm([0xCB, 0x47]);
+disasm([0xcb, 0x47]);
 // → { text: "BIT 0,A", length: 2 }
 
-disasm([0xDD]);
+disasm([0xdd]);
 // → { text: "DDh", length: 1 }   // lone prefix surfaces per STYLE.orphanPrefix
 ```
 
 `disasm` consumes as many bytes as the instruction requires and returns:
 
-| Field | Meaning |
-|---|---|
-| `text` | mnemonic + operand string |
-| `length` | bytes consumed (1..4) |
-| `undocumented?` | `true` if the encoding is documented as illegal/undocumented |
-| `rel?` | signed JR/DJNZ displacement (added to PC after the instruction) |
-| `abs?` | absolute 16-bit address for CALL nn / JP nn / LD (nn),... |
-| `indexD?` | signed (IX+d)/(IY+d) byte for indexed addressing |
+| Field           | Meaning                                                         |
+| --------------- | --------------------------------------------------------------- |
+| `text`          | mnemonic + operand string                                       |
+| `length`        | bytes consumed (1..4)                                           |
+| `undocumented?` | `true` if the encoding is documented as illegal/undocumented    |
+| `rel?`          | signed JR/DJNZ displacement (added to PC after the instruction) |
+| `abs?`          | absolute 16-bit address for CALL nn / JP nn / LD (nn),...       |
+| `indexD?`       | signed (IX+d)/(IY+d) byte for indexed addressing                |
 
 Empty input returns `{ text: "", length: 0 }`.
 

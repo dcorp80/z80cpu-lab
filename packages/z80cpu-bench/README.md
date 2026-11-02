@@ -37,10 +37,10 @@ which keeps it text-diffable in git. Re-run after any edit to `mixer.asm`.
 
 ## Tunables
 
-| Env var | Default | Effect |
-|---|---|---|
-| `MIXER_ITER_COUNT` | `100` | Outer-loop iterations of the mixer program (1..255). Lower = faster run, less JIT warm-up. |
-| `MIXER_MAX_HC` | `10_000_000` | Safety budget — bench fails if the sentinel write hasn't fired within this many half-cycles. Raise for very large iter counts. |
+| Env var            | Default      | Effect                                                                                                                         |
+| ------------------ | ------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| `MIXER_ITER_COUNT` | `100`        | Outer-loop iterations of the mixer program (1..255). Lower = faster run, less JIT warm-up.                                     |
+| `MIXER_MAX_HC`     | `10_000_000` | Safety budget — bench fails if the sentinel write hasn't fired within this many half-cycles. Raise for very large iter counts. |
 
 ## Mixer program
 

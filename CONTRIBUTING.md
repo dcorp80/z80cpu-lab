@@ -62,7 +62,7 @@ bench's `deepStrictEqual` fails, you've introduced a side effect on the CPU
 
 ## The trace timing footgun
 
-The `onInstructionComplete` callback fires at `m1_t3_1` of the *next*
+The `onInstructionComplete` callback fires at `m1_t3_1` of the _next_
 instruction's M1 — not at the end of the instruction being reported. This
 is forced by the Z80 committing deferred A/F writes at the next M1's T2_1.
 
@@ -80,8 +80,8 @@ Read it before changing the capture switch in `z80dbg.ts`.
 - 2-space indentation (`.ts`), enforced by Biome.
 - Double-quoted strings, organized imports — also enforced by Biome.
   `npm run lint:fix` will sort things out.
-- No comments explaining *what* the code does — names should already say
-  that. Comment only the *why* of non-obvious choices.
+- No comments explaining _what_ the code does — names should already say
+  that. Comment only the _why_ of non-obvious choices.
 - No unnecessary abstractions or "future-proofing." A bug fix doesn't need
   surrounding cleanup; three similar lines is better than a premature helper.
 - `strictNullChecks: false` is repo-wide — don't switch it on per-file.

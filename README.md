@@ -17,20 +17,20 @@ all live. Foldable, reorderable, persists across reloads.
 → Source and details: [`apps/z80cpu-explorer/`](apps/z80cpu-explorer/).
 
 → Guided tours:
-   - [Mandelbrot example](apps/z80cpu-explorer/examples/mandelbrot/README.md) — load a binary, single-step, set HC and PC breakpoints, watch the picture fill in, and service an NMI against the halted CPU.
-   - [RAXOFT z80test example](apps/z80cpu-explorer/examples/z80test/README.md) — load the upstream Z80 conformance suite against a minimal ZX ROM shim, configure split-direction IO with a seeded read, then let ~2.24B half-cycles sweep by and watch the effective clock climb as you switch off capture and tracing.
-   - [Rule 30 example](apps/z80cpu-explorer/examples/rule30/README.md) — pace a 1-D cellular automaton off the explorer's INT generator: two cooperative tasks (IM 1 ISR + main producer) on a single Z80 with a race-free row-boundary throttle, then break inside the INT-acknowledge cycle to see IFF1/IFF2 clear and the injected vector byte on the data bus.
+- [Mandelbrot example](apps/z80cpu-explorer/examples/mandelbrot/README.md) — load a binary, single-step, set HC and PC breakpoints, watch the picture fill in, and service an NMI against the halted CPU.
+- [RAXOFT z80test example](apps/z80cpu-explorer/examples/z80test/README.md) — load the upstream Z80 conformance suite against a minimal ZX ROM shim, configure split-direction IO with a seeded read, then let ~2.24B half-cycles sweep by and watch the effective clock climb as you switch off capture and tracing.
+- [Rule 30 example](apps/z80cpu-explorer/examples/rule30/README.md) — pace a 1-D cellular automaton off the explorer's INT generator: two cooperative tasks (IM 1 ISR + main producer) on a single Z80 with a race-free row-boundary throttle, then break inside the INT-acknowledge cycle to see IFF1/IFF2 clear and the injected vector byte on the data bus.
 
 → Release notes: [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Packages
 
-| Package | What it does |
-|---|---|
-| [`@dcorp80/z80cpu-debug`](packages/z80cpu-debug) | Wraps `Z80Cpu` as a pure observer. Surfaces each completed instruction as an `InstructionTrace` (bytes, M1 type, half-cycles, next-PC), plus PC-range breakpoints and half-cycle stepping. The core of the lab. |
-| [`@dcorp80/z80cpu-disasm`](packages/z80cpu-disasm) | Stateless, dependency-free Z80 disassembler. Consumes byte windows (e.g. from a debug trace) and returns mnemonic + operand metadata. All output styling lives in one `STYLE` object. |
-| [`@dcorp80/z80cpu-cli`](packages/z80cpu-cli) | `z80cpu-repl` — interactive shell that loads a program at `$0000` and lets you step, fast-forward, and break by PC range, with disassembled trace output and a full register snapshot. |
-| [`@dcorp80/z80cpu-bench`](packages/z80cpu-bench) | Overhead benchmark: runs the same Z80 program three ways (plain CPU, dbg-on, dbg-off) and asserts identical final state across all three. Reports the slowdown the debug wrapper adds. |
+| Package                                            | What it does                                                                                                                                                                                                    |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`@dcorp80/z80cpu-debug`](packages/z80cpu-debug)   | Wraps `Z80Cpu` as a pure observer. Surfaces each completed instruction as an `InstructionTrace` (bytes, M1 type, half-cycles, next-PC), plus PC-range breakpoints and half-cycle stepping. The core of the lab. |
+| [`@dcorp80/z80cpu-disasm`](packages/z80cpu-disasm) | Stateless, dependency-free Z80 disassembler. Consumes byte windows (e.g. from a debug trace) and returns mnemonic + operand metadata. All output styling lives in one `STYLE` object.                           |
+| [`@dcorp80/z80cpu-cli`](packages/z80cpu-cli)       | `z80cpu-repl` — interactive shell that loads a program at `$0000` and lets you step, fast-forward, and break by PC range, with disassembled trace output and a full register snapshot.                          |
+| [`@dcorp80/z80cpu-bench`](packages/z80cpu-bench)   | Overhead benchmark: runs the same Z80 program three ways (plain CPU, dbg-on, dbg-off) and asserts identical final state across all three. Reports the slowdown the debug wrapper adds.                          |
 
 ## Requirements
 
@@ -83,8 +83,10 @@ const cpu = new Z80Cpu();
 const dbg = new Z80DebugContext(cpu);
 
 dbg.onInstructionComplete = (t) => {
-  const bytes = t.bytes.slice(0, t.length)
-    .map(b => b.toString(16).padStart(2, "0")).join(" ");
+  const bytes = t.bytes
+    .slice(0, t.length)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join(" ");
   console.log(`${t.startAddr.toString(16)}: ${bytes}  ${t.hc >> 1}T`);
 };
 

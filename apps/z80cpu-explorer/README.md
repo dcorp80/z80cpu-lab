@@ -16,17 +16,17 @@ IO grids, and a hardware-pin waveform — side by side and live.
 
 A single page split into foldable, reorderable sections:
 
-| Section | What it shows |
-|---|---|
-| **App-shell** | App name, version, Cold-boot button; Split-RD/WR-IO toggle. |
-| **Program** | Load one or more files into memory at chosen addresses; autoload on boot. |
-| **Breakpoints** | PC-range and HC-count breakpoints; Run / Pause; effective emulated MHz. |
-| **CPU state** | Live register file, flags as bits, IFF1/IFF2, IM, shadow set. |
-| **Memory** | 64K hex grid with watch address, ASCII column, in-place editing. |
-| **Instruction trace** | Disassembled history of every completed instruction; next-at-PC preview; step / step-N. |
-| **IO** | 64K port grid (or 256-port 8-bit view); split RD/WR planes optional. |
-| **Hardware trace** | Half-cycle-resolution oscilloscope of bus pins (nM1, nMREQ, nRD, nWR, …) plus the address/data buses; assert input pins (nINT, nNMI, nRESET, …) by clicking. |
-| **Interrupts** | INT-acknowledge vector byte. |
+| Section               | What it shows                                                                                                                                                |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **App-shell**         | App name, version, Cold-boot button; Split-RD/WR-IO toggle.                                                                                                  |
+| **Program**           | Load one or more files into memory at chosen addresses; autoload on boot.                                                                                    |
+| **Breakpoints**       | PC-range and HC-count breakpoints; Run / Pause; effective emulated MHz.                                                                                      |
+| **CPU state**         | Live register file, flags as bits, IFF1/IFF2, IM, shadow set.                                                                                                |
+| **Memory**            | 64K hex grid with watch address, ASCII column, in-place editing.                                                                                             |
+| **Instruction trace** | Disassembled history of every completed instruction; next-at-PC preview; step / step-N.                                                                      |
+| **IO**                | 64K port grid (or 256-port 8-bit view); split RD/WR planes optional.                                                                                         |
+| **Hardware trace**    | Half-cycle-resolution oscilloscope of bus pins (nM1, nMREQ, nRD, nWR, …) plus the address/data buses; assert input pins (nINT, nNMI, nRESET, …) by clicking. |
+| **Interrupts**        | INT-acknowledge vector byte.                                                                                                                                 |
 
 ## Quick start
 

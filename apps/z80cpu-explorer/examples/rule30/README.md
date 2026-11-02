@@ -7,7 +7,7 @@
 The classic Wolfram **Rule 30** 1-D cellular automaton, organized as **two cooperative tasks on a single Z80** scheduled by the explorer's **INT generator**:
 
 - **ISR (consumer, IM 1)** — every interrupt emits one cell of the currently-displayed row into the memory-mapped screen at `4000h+`. At end-of-row it sets `ROW_DONE = 1` to signal main. Crucially, **while `ROW_DONE = 1` the ISR returns early** (no emit, no cursor advance) — the row boundary stays frozen until main has swapped the buffer pointers.
-- **Main (producer)** — computes the next generation into the *non-displayed* buffer, `HALT`s until `ROW_DONE = 1`, then swaps `DISPLAY_PTR <-> COMPUTE_PTR` (direct cross-store, no `EX DE, HL`) and clears `ROW_DONE` to let the ISR resume.
+- **Main (producer)** — computes the next generation into the _non-displayed_ buffer, `HALT`s until `ROW_DONE = 1`, then swaps `DISPLAY_PTR <-> COMPUTE_PTR` (direct cross-store, no `EX DE, HL`) and clears `ROW_DONE` to let the ISR resume.
 
 The ROW_DONE-gated throttle makes the swap race-free without any `DI`/`EI` tricks: while `ROW_DONE = 1` the ISR doesn't touch the pointers, so main can update both in any order with zero risk of a half-state read. When `ROW_DONE` is finally cleared, the next ISR reads the freshly-swapped `DISPLAY_PTR` and resumes the new row from cell 0.
 

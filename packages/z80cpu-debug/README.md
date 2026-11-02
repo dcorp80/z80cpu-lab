@@ -24,8 +24,13 @@ const cpu = new Z80Cpu();
 const dbg = new Z80DebugContext(cpu);
 
 dbg.onInstructionComplete = (t) => {
-    const bytes = t.bytes.slice(0, t.length).map((b) => b.toString(16).padStart(2, "0")).join(" ");
-    console.log(`${t.startAddr.toString(16)}: ${bytes}  ${t.hc >> 1}T  next=${t.nextPc.toString(16)}`);
+  const bytes = t.bytes
+    .slice(0, t.length)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join(" ");
+  console.log(
+    `${t.startAddr.toString(16)}: ${bytes}  ${t.hc >> 1}T  next=${t.nextPc.toString(16)}`,
+  );
 };
 
 // Drive dbg.clockEdge() instead of cpu.clockEdge()
@@ -84,12 +89,12 @@ from `@dcorp80/z80cpu`) `CpuState`, `DecodedFlags`, `decodeFlags`.
 
 ```ts
 class InstructionTrace {
-    startAddr: number;         // PC at the M1 that started this instruction
-    bytes: number[];           // length-prefixed opcode + operand bytes
-    length: number;
-    m1Type: M1Type;            // 'normal' | 'nmi' | 'int' | 'halt' | 'special_reset'
-    hc: number;                // half-cycles end-to-end; T-states = hc >> 1
-    nextPc: number;            // logical "where the CPU went next"
+  startAddr: number; // PC at the M1 that started this instruction
+  bytes: number[]; // length-prefixed opcode + operand bytes
+  length: number;
+  m1Type: M1Type; // 'normal' | 'nmi' | 'int' | 'halt' | 'special_reset'
+  hc: number; // half-cycles end-to-end; T-states = hc >> 1
+  nextPc: number; // logical "where the CPU went next"
 }
 ```
 
@@ -98,27 +103,27 @@ T-count is `t.hc >> 1`.
 
 ## Timing — when does the callback fire?
 
-The trace callback fires at **`m1_t3_1` of the *next* instruction's M1**.
+The trace callback fires at **`m1_t3_1` of the _next_ instruction's M1**.
 This is unavoidable: the Z80 commits deferred A/F register writes at the
 next M1's T2_1, so any earlier reporting would expose stale A/F values.
 
 By the time the callback runs, the CPU has already executed several steps
 of the next M1:
 
-| Step                | Effect                                                |
-| ------------------- | ----------------------------------------------------- |
-| `m1_t1_0` (next M1) | Asserts `/M1`, drives bus.addr = PC = next-instr addr |
-| `m1_t1_1`           | **`PC ← PC + 1`** (PC is incremented mid-fetch)       |
+| Step                | Effect                                                   |
+| ------------------- | -------------------------------------------------------- |
+| `m1_t1_0` (next M1) | Asserts `/M1`, drives bus.addr = PC = next-instr addr    |
+| `m1_t1_1`           | **`PC ← PC + 1`** (PC is incremented mid-fetch)          |
 | `m1_t2_0/1`         | Refresh phase; **deferred A/F from prev landed at T2_1** |
-| `m1_t3_0`           | Internal trace bookkeeping (prev swapped, curr seeded) |
-| `m1_t3_1`           | **callback fires**                                    |
+| `m1_t3_0`           | Internal trace bookkeeping (prev swapped, curr seeded)   |
+| `m1_t3_1`           | **callback fires**                                       |
 
 Two consequences for what consumers see:
 
-**`trace.startAddr`** — the PC at *this* trace's own M1 t1_0, i.e. the address
+**`trace.startAddr`** — the PC at _this_ trace's own M1 t1_0, i.e. the address
 where this instruction was fetched. Always correct.
 
-**`trace.nextPc`** — the PC at the *next* M1's t1_0, captured *before* the
+**`trace.nextPc`** — the PC at the _next_ M1's t1_0, captured _before_ the
 T1_1 increment. This is the logical "where the CPU goes next" — covers
 sequential flow, jumps, calls, rets, RST, and NMI/INT redirects.
 On `dbg.curr` (in-flight reads) `nextPc` is pre-seeded to `startAddr` and
@@ -127,7 +132,7 @@ holds that until the next M1's T1_0 overwrites it; on the trace handed to
 
 **`dbg.state().pc`** — reads `cpu.regs.pc` live. At callback time the next
 M1's T1_1 has already incremented it, so for the just-completed instruction
-`state().pc === trace.nextPc + 1`. This is the *real* mid-fetch CPU state —
+`state().pc === trace.nextPc + 1`. This is the _real_ mid-fetch CPU state —
 matches what you'd see on the silicon — not a logical-end-of-instruction
 view. Use `trace.nextPc` when you want "PC after this instruction"; use
 `state().pc` when you want the actual register file.

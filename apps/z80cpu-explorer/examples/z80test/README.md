@@ -10,11 +10,11 @@
 - ROM shim source: [print_zx.asm](print_zx.asm)
 - Binaries (download both — loaded in step 2):
   - [print_zx.bin](print_zx.bin) → `0000h`
-  - [z80full.bin](z80full.bin)   → `8000h`
+  - [z80full.bin](z80full.bin) → `8000h`
 
 ## Step-by-step
 
-1. **Start cold** *(optional, but recommended)*
+1. **Start cold** _(optional, but recommended)_
    - Reload the page or press the "Cold Start" button to clear any prior session.
 
 2. **Load both program files**
@@ -58,7 +58,7 @@
      ![z80test_4.png](screenshots/z80test_4.png)
      </details>
 
-5. **Reset** *(skip if you cold-started)*
+5. **Reset** _(skip if you cold-started)_
    - Go to the "Hardware trace" section.
    - Tick the `nRESET` checkbox to assert the RESET line, click "Step HC" three times, then untick `nRESET`.
    - This holds RESET low long enough to be accepted as a normal reset (not a Special Reset).

@@ -59,7 +59,7 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
  * `BIT n,(HL)` / block ops, or you're writing Z80 test ROMs / an
  * emulator. No runtime UI toggle — edit here and reload.
  */
-export const SHOW_WZ = false;
+export const SHOW_WZ = true;
 
 // ── Bus ───────────────────────────────────────────────────────────
 
